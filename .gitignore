@@ -18,6 +18,12 @@ venv/
 *.sqlite
 *.sqlite3
 
+# Scratch / debug files
+_debug_*
+_check_*
+test_e2e_api.py
+test_qa_*
+
 # IDE
 .idea/
 .vscode/
