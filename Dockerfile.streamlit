@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install Python deps (requirements-web.txt has FastAPI deps; streamlit is extra)
+COPY requirements-web.txt .
+COPY requirements-dash.txt .
+RUN pip install --no-cache-dir -r requirements-web.txt -r requirements-dash.txt
+
+# Copy application code
+COPY backend/ backend/
+COPY dashboard/ dashboard/
+COPY mirai_core/ mirai_core/
+COPY scripts/ scripts/
+
+# Streamlit will auto-discover the dashboard/app.py entry point
+EXPOSE 8501
+
+# Health check: streamlit serves on port 8501
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -f http://localhost:8501 || exit 1
+
+ENTRYPOINT ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]

@@ -1,0 +1,298 @@
+"""
+SMC (Smart Money Concepts) analysis.
+
+Detects:
+- Order Blocks (3-candle method)
+- Fair Value Gaps (3-candle imbalance)
+- Trend Lines (swing high/low connections)
+- RSI Divergences (price vs RSI)
+- Liquidity Grabs (sweep of swing low/high + recovery)
+- Retest Confirmation
+- Touch Points counting
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+from scipy.signal import find_peaks
+
+from mirai_core import config
+from mirai_core.indicators import wilder_rsi
+
+
+def _find_swing_highs(
+    series: pd.Series,
+    distance: int = config.SWING_DISTANCE,
+    prominence_factor: float = config.SWING_PROMINENCE,
+) -> np.ndarray:
+    """Find swing high points using scipy find_peaks."""
+    if len(series) < distance * 2 + 1:
+        return np.array([], dtype=int)
+    prom = series.std() * prominence_factor
+    peaks, _ = find_peaks(series.values, distance=distance, prominence=prom)
+    return peaks
+
+
+def _find_swing_lows(
+    series: pd.Series,
+    distance: int = config.SWING_DISTANCE,
+    prominence_factor: float = config.SWING_PROMINENCE,
+) -> np.ndarray:
+    """Find swing low points (peaks on inverted series)."""
+    return _find_swing_highs(-series, distance, prominence_factor)
+
+
+def find_order_blocks(
+    df: pd.DataFrame,
+    lookback: int = config.SMC_LOOKBACK,
+) -> list[dict[str, object]]:
+    """Detect Order Blocks using the 3-candle method.
+
+    Returns list of dicts with keys: type, zone (low, high), index.
+    """
+    data = df.tail(lookback)
+    obs: list[dict[str, object]] = []
+    for i in range(1, len(data) - 1):
+        base = data.iloc[i - 1]
+        impulse = data.iloc[i]
+        cont = data.iloc[i + 1]
+        impulse_body = impulse["Close"] - impulse["Open"]
+        base_range = base["High"] - base["Low"]
+        if base_range <= 0:
+            continue
+        if impulse_body > 0 and abs(impulse_body) > base_range * 0.8:
+            if cont["Close"] > impulse["Close"]:
+                obs.append(
+                    {
+                        "type": "Bullish",
+                        "zone": (base["Low"], base["High"]),
+                        "index": data.index[i - 1],
+                    }
+                )
+        elif impulse_body < 0 and abs(impulse_body) > base_range * 0.8:
+            if cont["Close"] < impulse["Close"]:
+                obs.append(
+                    {
+                        "type": "Bearish",
+                        "zone": (base["Low"], base["High"]),
+                        "index": data.index[i - 1],
+                    }
+                )
+    return obs[-5:]  # last 5
+
+
+def find_fvgs(
+    df: pd.DataFrame,
+    lookback: int = config.SMC_LOOKBACK,
+) -> list[dict[str, object]]:
+    """Detect Fair Value Gaps (3-candle imbalance).
+
+    Returns list of dicts with keys: type, zone (low, high), index.
+    """
+    data = df.tail(lookback)
+    fvgs: list[dict[str, object]] = []
+    for i in range(1, len(data) - 1):
+        prev = data.iloc[i - 1]
+        nxt = data.iloc[i + 1]
+        if prev["High"] < nxt["Low"]:  # Bullish FVG
+            fvgs.append(
+                {
+                    "type": "Bullish",
+                    "zone": (prev["High"], nxt["Low"]),
+                    "index": data.index[i],
+                }
+            )
+        elif prev["Low"] > nxt["High"]:  # Bearish FVG
+            fvgs.append(
+                {
+                    "type": "Bearish",
+                    "zone": (nxt["High"], prev["Low"]),
+                    "index": data.index[i],
+                }
+            )
+    return fvgs[-5:]
+
+
+def detect_rsi_divergences(
+    close: pd.Series,
+    rsi_period: int = config.RSI_PERIOD,
+) -> list[dict[str, object]]:
+    """Detect RSI divergences: bearish (price HH, RSI LH) and bullish (price LL, RSI HL).
+
+    Returns list of dicts with keys: type, description.
+    """
+    rsi = wilder_rsi(close, rsi_period)
+    price_highs = _find_swing_highs(close)
+    price_lows = _find_swing_lows(close)
+    rsi_highs = _find_swing_highs(rsi)
+    rsi_lows = _find_swing_lows(rsi)
+
+    divergences: list[dict[str, object]] = []
+
+    # Bearish divergence: price makes higher high but RSI makes lower high
+    if len(price_highs) >= 2 and len(rsi_highs) >= 2:
+        ph = close.iloc[price_highs[-2:]]
+        rh = rsi.iloc[rsi_highs[-2:]]
+        if (
+            ph.iloc[1] > ph.iloc[0]
+            and rh.iloc[1] < rh.iloc[0]
+        ):
+            divergences.append(
+                {
+                    "type": "Bearish",
+                    "description": (
+                        "Price HH but RSI LH — potential reversal down"
+                    ),
+                }
+            )
+
+    # Bullish divergence: price makes lower low but RSI makes higher low
+    if len(price_lows) >= 2 and len(rsi_lows) >= 2:
+        pl = close.iloc[price_lows[-2:]]
+        rl = rsi.iloc[rsi_lows[-2:]]
+        if (
+            pl.iloc[1] < pl.iloc[0]
+            and rl.iloc[1] > rl.iloc[0]
+        ):
+            divergences.append(
+                {
+                    "type": "Bullish",
+                    "description": (
+                        "Price LL but RSI HL — potential reversal up"
+                    ),
+                }
+            )
+
+    return divergences
+
+
+def find_liquidity_grabs(
+    df: pd.DataFrame,
+    lookback: int = config.SMC_LOOKBACK,
+    recovery_bars: int = config.LIQUIDITY_RECOVERY_BARS,
+) -> list[dict[str, object]]:
+    """Detect liquidity grabs (sweep of swing low/high + quick recovery).
+
+    Returns list of dicts with keys: type, price, sweep_index, description.
+    """
+    close = df["Close"].tail(lookback)
+    high = df["High"].tail(lookback)
+    low = df["Low"].tail(lookback)
+    swing_highs = _find_swing_highs(close)
+    swing_lows = _find_swing_lows(close)
+
+    grabs: list[dict[str, object]] = []
+
+    # Check liquidity grabs below swing lows
+    for sl in swing_lows:
+        sl_idx = len(close) - lookback + sl if sl < lookback else sl
+        if sl < len(close) - recovery_bars - 1:
+            sl_price = close.iloc[sl]
+            grab_slice = low.iloc[sl + 1 : sl + recovery_bars + 1]
+            if len(grab_slice) == 0:
+                continue
+            if grab_slice.min() < sl_price:
+                # Check recovery
+                after_grab = close.iloc[sl + 1 : sl + recovery_bars + 1]
+                if len(after_grab) and after_grab.max() > sl_price:
+                    grabs.append(
+                        {
+                            "type": "Bullish",
+                            "price": float(grab_slice.min()),
+                            "sweep_index": df.index[sl],
+                            "description": (
+                                f"Price swept swing low {sl_price:.2f} "
+                                f"then recovered — liquidity grab"
+                            ),
+                        }
+                    )
+
+    # Check liquidity grabs above swing highs
+    for sh in swing_highs:
+        if sh < len(close) - recovery_bars - 1:
+            sh_price = close.iloc[sh]
+            grab_slice = high.iloc[sh + 1 : sh + recovery_bars + 1]
+            if len(grab_slice) == 0:
+                continue
+            if grab_slice.max() > sh_price:
+                after_grab = close.iloc[sh + 1 : sh + recovery_bars + 1]
+                if len(after_grab) and after_grab.min() < sh_price:
+                    grabs.append(
+                        {
+                            "type": "Bearish",
+                            "price": float(grab_slice.max()),
+                            "sweep_index": df.index[sh],
+                            "description": (
+                                f"Price swept swing high {sh_price:.2f} "
+                                f"then reversed — liquidity grab"
+                            ),
+                        }
+                    )
+
+    return grabs
+
+
+def find_trend_lines(
+    df: pd.DataFrame,
+    lookback: int = config.SMC_LOOKBACK,
+) -> list[dict[str, object]]:
+    """Detect trend lines from last 2 swing highs (resistance) and swing lows (support).
+
+    Returns list of dicts with keys: type, slope, current_value, broken.
+    """
+    close = df["Close"].tail(lookback)
+    idx = np.arange(len(close))
+
+    # Resistance: connect last 2 swing highs
+    peaks = _find_swing_highs(close)
+    lines: list[dict[str, object]] = []
+    if len(peaks) >= 2:
+        p1, p2 = peaks[-2], peaks[-1]
+        y1, y2 = float(close.iloc[p1]), float(close.iloc[p2])
+        if p2 != p1:
+            res_slope = (y2 - y1) / (p2 - p1)
+            res_current = y2 + res_slope * (len(close) - 1 - p2)
+            lines.append(
+                {
+                    "type": "Resistance",
+                    "slope": round(res_slope, 4),
+                    "current_value": round(res_current, 2),
+                    "broken": bool(float(close.iloc[-1]) > res_current),
+                }
+            )
+
+    # Support: connect last 2 swing lows
+    troughs = _find_swing_lows(close)
+    if len(troughs) >= 2:
+        t1, t2 = troughs[-2], troughs[-1]
+        y1, y2 = float(close.iloc[t1]), float(close.iloc[t2])
+        if t2 != t1:
+            sup_slope = (y2 - y1) / (t2 - t1)
+            sup_current = y2 + sup_slope * (len(close) - 1 - t2)
+            lines.append(
+                {
+                    "type": "Support",
+                    "slope": round(sup_slope, 4),
+                    "current_value": round(sup_current, 2),
+                    "broken": bool(float(close.iloc[-1]) < sup_current),
+                }
+            )
+
+    return lines
+
+
+def analyze(
+    df: pd.DataFrame,
+) -> dict[str, object]:
+    """Run full SMC analysis on a DataFrame and return all detections.
+
+    Returns dict with keys: order_blocks, fvgs, divergences,
+    liquidity_grabs, trend_lines.
+    """
+    return {
+        "order_blocks": find_order_blocks(df),
+        "fvgs": find_fvgs(df),
+        "divergences": detect_rsi_divergences(df["Close"]),
+        "liquidity_grabs": find_liquidity_grabs(df),
+        "trend_lines": find_trend_lines(df),
+    }

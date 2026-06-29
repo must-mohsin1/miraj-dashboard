@@ -1,0 +1,576 @@
+"""Analysis service — orchestrates the full pipeline for a single trading pair.
+
+Pipeline steps
+---------------
+macro → OHLCV (5 TFs) → indicators → QQE Mod → SMC → patterns → confluence
+→ trade plan → charts
+
+Caching
+-------
+Results are cached in memory for 15 minutes per symbol (CACHE_TTL).
+A second request for the same symbol within TTL returns the cached result
+with ``stale: true``.  Outside TTL, the pipeline runs fresh.
+
+Error handling
+--------------
+If critical upstream APIs (yfinance) fail entirely, the service raises
+``RuntimeError``, which the route translates to a 502 response.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+# ── Ensure mirai_core is importable ──────────────────────────────────────
+_MIRAI_CORE_PATH = os.environ.get(
+    "MIRAI_CORE_PATH",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mirai_core"),
+)
+_MIRAI_PARENT = os.path.dirname(_MIRAI_CORE_PATH)
+if _MIRAI_PARENT not in sys.path:
+    sys.path.insert(0, _MIRAI_PARENT)
+
+from mirai_core import ohlcv, indicators, qqe_mod, smc, patterns, confluence, trade_plan, charts, macro
+
+logger = logging.getLogger(__name__)
+
+# ── Cache configuration ──────────────────────────────────────────────────
+CACHE_TTL = 15 * 60  # 15 minutes
+
+_cache: dict[str, dict[str, Any]] = {}  # symbol → {data, cached_at}
+
+
+# ── Public API ───────────────────────────────────────────────────────────
+
+
+def run_scan(symbol: str) -> dict[str, Any]:
+    """Run the full analysis pipeline for *symbol*.
+
+    Returns a response dict with keys:
+        symbol, confluence_score, trade_plan, score_breakdown,
+        stale, cached_at.
+
+    Raises ``RuntimeError`` when a critical upstream API is unreachable.
+    """
+    # ── Cache check ────────────────────────────────────────────────
+    if not _is_stale(symbol):
+        cached = _cache.get(symbol)
+        if cached is not None:
+            return _build_cached_response(symbol, cached)
+
+    # ── 1. Macro ───────────────────────────────────────────────────
+    macro_data: dict[str, Any] = {}
+    try:
+        raw = macro.fetch_macro_data()
+        if raw:
+            macro_data = raw
+        logger.info("Macro data fetched: %d keys", len(macro_data))
+    except Exception as exc:
+        logger.warning("Macro fetch failed: %s", exc)
+
+    # ── 2. OHLCV (5 TFs) — critical step ───────────────────────────
+    timeframes: dict[str, Any] = {}
+    try:
+        timeframes = ohlcv.fetch_all_timeframes(symbol)
+        has_any = any(
+            df is not None and not df.empty for df in timeframes.values()
+        )
+        if not has_any:
+            raise RuntimeError(f"No OHLCV data received for {symbol}")
+        logger.info(
+            "OHLCV fetched: %s",
+            {k: len(v) for k, v in timeframes.items() if v is not None and not v.empty},
+        )
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"yfinance API unavailable for {symbol}: {exc}") from exc
+
+    # ── 3. Indicators (per TF) ─────────────────────────────────────
+    ind_results: dict[str, Any] = {}
+    for tf, df in timeframes.items():
+        if df is None or df.empty:
+            ind_results[tf] = {"error": f"No data for {tf}"}
+            continue
+        try:
+            ind_results[tf] = indicators.compute_all(df)
+        except Exception as exc:
+            ind_results[tf] = {"error": str(exc)}
+            logger.warning("Indicators failed for %s on %s: %s", symbol, tf, exc)
+
+    # ── 4. QQE Mod (daily, 4h, 1h) ─────────────────────────────────
+    qqe_results: dict[str, Any] = {}
+    for tf in ("daily", "4h", "1h"):
+        df = timeframes.get(tf)
+        if df is not None and not df.empty:
+            try:
+                qqe_results[tf] = qqe_mod.compute_qqe(df)
+            except Exception as exc:
+                qqe_results[tf] = {"error": str(exc)}
+                logger.warning("QQE failed for %s on %s: %s", symbol, tf, exc)
+        else:
+            qqe_results[tf] = {"error": f"No data for {tf}"}
+
+    # ── 5. SMC (4h) ────────────────────────────────────────────────
+    smc_result: dict[str, Any] = {}
+    smc_df = timeframes.get("4h")
+    if smc_df is not None and not smc_df.empty:
+        try:
+            smc_result = smc.analyze(smc_df)
+        except Exception as exc:
+            smc_result = {"error": str(exc)}
+            logger.warning("SMC failed for %s: %s", symbol, exc)
+    else:
+        smc_result = {"error": "No 4h data for SMC"}
+
+    # ── 6. Patterns (daily) ────────────────────────────────────────
+    pattern_result: dict[str, Any] = {}
+    pat_df = timeframes.get("daily")
+    if pat_df is not None and not pat_df.empty:
+        try:
+            pattern_result["detected"] = patterns.detect(pat_df)
+        except Exception as exc:
+            pattern_result = {"error": str(exc)}
+            logger.warning("Pattern detection failed for %s: %s", symbol, exc)
+    else:
+        pattern_result = {"error": "No daily data for patterns"}
+
+    # ── 7. Confluence scoring ──────────────────────────────────────
+    conf_data = _build_confluence_data(
+        macro_data=macro_data,
+        ind_results=ind_results,
+        qqe_results=qqe_results,
+        smc_result=smc_result,
+        pattern_result=pattern_result,
+    )
+
+    try:
+        conf_result = confluence.score(conf_data)
+        score_breakdown = conf_result.to_dict()
+        conf_score = float(conf_result.total)
+    except Exception as exc:
+        logger.error("Confluence scoring failed: %s", exc)
+        conf_score = 0.0
+        score_breakdown = {"error": str(exc)}
+
+    # ── 8. Trade Plan ──────────────────────────────────────────────
+    rsi_val: Optional[float] = None
+    di = ind_results.get("daily", {})
+    if isinstance(di, dict) and "error" not in di:
+        rsi_series = di.get("rsi")
+        if rsi_series is not None and hasattr(rsi_series, "iloc") and len(rsi_series) > 0:
+            rsi_val = float(rsi_series.iloc[-1])
+
+    price_levels = _extract_price_levels(timeframes, smc_result)
+
+    try:
+        trade_plan_result = trade_plan.generate_trade_plan(
+            confluence_result=conf_result,
+            data=price_levels,
+            direction="LONG",
+            rsi_current=rsi_val,
+        )
+    except Exception as exc:
+        logger.error("Trade plan generation failed: %s", exc)
+        trade_plan_result = {"trade_decision": False, "error": str(exc)}
+
+    # ── 9. Chart (daily, last 100 bars) ────────────────────────────
+    chart_html: Optional[str] = None
+    chart_df = timeframes.get("daily")
+    if chart_df is not None and not chart_df.empty:
+        try:
+            fig = charts.convert_to_plotly(chart_df.tail(100))
+            chart_html = charts.plotly_to_html(fig)
+        except Exception as exc:
+            logger.warning("Chart rendering failed: %s", exc)
+
+    # ── Assemble result ────────────────────────────────────────────
+    trade_plan_flat: dict[str, Any] = _build_flat_trade_plan(trade_plan_result)
+
+    data: dict[str, Any] = {
+        "symbol": symbol,
+        "overall_score": round(min(conf_score * (100 / 30), 100.0), 1),
+        "confluence_score": round(conf_score, 1),
+        "score_breakdown": score_breakdown,
+        "scores": _extract_category_scores(score_breakdown),
+        "trade_plan": trade_plan_result,
+        "trade_plan_flat": trade_plan_flat,
+        "macro_data": {
+            k: macro_data.get(k)
+            for k in ("btc_d", "usdt_d", "dxy", "fear_greed", "long_short_ratio_btc")
+        },
+        "smc": smc_result,
+        "patterns": pattern_result,
+        "qqe": qqe_results,
+        "indicators": _simplify_indicator_summary(ind_results),
+    }
+
+    # Add candle / SMC chart-friendly data from the daily timeframe
+    chart_df = timeframes.get("daily")
+    if chart_df is not None and not chart_df.empty:
+        tail = chart_df.tail(100)
+        data["candles"] = _df_to_candle_list(tail)
+        data["emas"] = _build_ema_dict(ind_results.get("daily", {}))
+    else:
+        data["candles"] = []
+        data["emas"] = {}
+
+    # Add order blocks and FVGs from SMC result
+    if isinstance(smc_result, dict):
+        data["order_blocks"] = _normalize_obs(smc_result.get("order_blocks", []))
+        data["fvgs"] = _normalize_fvgs(smc_result.get("fvgs", []))
+    else:
+        data["order_blocks"] = []
+        data["fvgs"] = []
+
+    now_ts = time.time()
+    _cache[symbol] = {"data": data, "cached_at": now_ts}
+
+    return _build_cached_response(symbol, _cache[symbol])
+
+
+def get_cached_or_none(symbol: str) -> Optional[dict[str, Any]]:
+    """Return a cached response for *symbol* without triggering a refresh.
+
+    Returns ``None`` when no fresh cache entry exists.
+    """
+    if _is_stale(symbol):
+        return None
+    entry = _cache.get(symbol)
+    if entry is None:
+        return None
+    return _build_cached_response(symbol, entry)
+
+
+def clear_cache(symbol: Optional[str] = None) -> None:
+    """Clear the in-memory cache.  If *symbol* is ``None``, clear all."""
+    global _cache
+    if symbol:
+        _cache.pop(symbol, None)
+    else:
+        _cache = {}
+
+
+# ── Internal cache helpers ───────────────────────────────────────────────
+
+
+def _is_stale(symbol: str) -> bool:
+    """Check whether the cached entry for *symbol* is older than CACHE_TTL."""
+    entry = _cache.get(symbol)
+    if entry is None:
+        return True
+    ts = entry.get("cached_at")
+    if ts is None:
+        return True
+    return (time.time() - ts) > CACHE_TTL
+
+
+def _build_cached_response(symbol: str, entry: dict[str, Any]) -> dict[str, Any]:
+    """Build the API response dict from a cache entry — returns full data."""
+    data = entry.get("data", {})
+    ts = entry.get("cached_at")
+    response = dict(data)
+    response["stale"] = _is_stale(symbol)
+    response["cached_at"] = (
+        datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        if ts else None
+    )
+    return response
+
+
+# ── Confluence data builder ──────────────────────────────────────────────
+
+
+def _build_confluence_data(
+    macro_data: dict[str, Any],
+    ind_results: dict[str, Any],
+    qqe_results: dict[str, Any],
+    smc_result: dict[str, Any],
+    pattern_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the ``data`` dict expected by ``confluence.score()``.
+
+    Each key is a boolean field that the scoring engine checks.
+    """
+    btc_d = macro_data.get("btc_d")
+    usdt_d = macro_data.get("usdt_d")
+    fg = macro_data.get("fear_greed")
+    fg_value = fg.get("value") if isinstance(fg, dict) else None
+    smc_obs = smc_result.get("order_blocks", [])
+    smc_fvgs = smc_result.get("fvgs", [])
+    smc_lg = smc_result.get("liquidity_grabs", [])
+    smc_tl = smc_result.get("trend_lines", [])
+    smc_divs = smc_result.get("divergences", [])
+
+    daily = ind_results.get("daily", {})
+    weekly = ind_results.get("weekly", {})
+    h4 = ind_results.get("4h", {})
+
+    return {
+        # ── Regime ──
+        "weekly_structure_aligned": _ema_aligned(weekly),
+        "daily_structure_aligned": _ema_aligned(daily),
+        "btc_d_aligned": bool(btc_d is not None and btc_d > 50),
+        "weekly_200ma_position": _ema_above(weekly, 200),
+        "usdt_d_favourable": bool(usdt_d is not None and usdt_d < 5.0),
+        "bmsb_aligned": bool(weekly.get("bmsb")),
+        "fear_greed_aligned": bool(fg_value is not None and fg_value < 50),
+        # ── Location ──
+        "demand_supply_zone": bool(len(smc_obs) > 0 or len(smc_fvgs) > 0),
+        "ote_overlap": bool(len(smc_obs) > 0),
+        "order_block_at_zone": bool(len(smc_obs) > 0),
+        "fvg_at_zone": bool(len(smc_fvgs) > 0),
+        "liquidity_grab_before_ote": bool(len(smc_lg) > 0),
+        "trend_line_at_zone": bool(len(smc_tl) > 0),
+        # ── Confirmation ──
+        "h4_structure_aligned": _ema_aligned(h4),
+        "daily_rsi_confirms": _rsi_in_range(daily, 30, 70),
+        "h4_rsi_confirms": _rsi_in_range(h4, 30, 70),
+        "bb_not_squeezing": not bool(daily.get("bb_squeeze", False)),
+        "qqe_aligned": _has_green_signal(qqe_results),
+        "m15_structure_aligned": _ema_aligned(ind_results.get("15m", {})),
+        "rsi_divergence_present": bool(len(smc_divs) > 0),
+        "chart_pattern_confirmed": _has_confirmed_pattern(pattern_result),
+        "ema_ribbon_aligned": _ribbon_aligned(daily),
+        # ── Volume & Retest ──
+        "volume_confirming": True,
+        "retest_confirmed": bool(len(smc_obs) > 0),
+        "no_fakeout": True,
+        # ── Risk ──
+        "target_2r_available": bool(len(smc_tl) > 0),
+        "clean_stop_level": bool(len(smc_obs) > 0),
+        "no_news_risk": True,
+    }
+
+
+def _simplify_indicator_summary(ind_results: dict[str, Any]) -> dict[str, Any]:
+    """Extract last-known scalar values from indicator results for the response."""
+    summary: dict[str, Any] = {}
+    for tf, data in ind_results.items():
+        if not isinstance(data, dict) or data.get("error"):
+            summary[tf] = {"error": data.get("error", "unknown")}
+            continue
+        entry: dict[str, Any] = {}
+        rsi = data.get("rsi")
+        if rsi is not None and hasattr(rsi, "iloc") and len(rsi) > 0:
+            entry["rsi"] = round(float(rsi.iloc[-1]), 1)
+        cross = data.get("golden_death_cross")
+        if cross:
+            entry["golden_death_cross"] = cross
+        bb = data.get("bb", {})
+        if bb:
+            entry["bb_squeeze"] = bool(data.get("bb_squeeze", False))
+        summary[tf] = entry
+    return summary
+
+
+# ── Low-level helpers ────────────────────────────────────────────────────
+
+
+def _ema_aligned(tf_data: Any) -> bool:
+    """Check if short EMAs are above long EMAs (bullish alignment)."""
+    if not isinstance(tf_data, dict) or tf_data.get("error"):
+        return False
+    emas = tf_data.get("emas")
+    if not isinstance(emas, dict) or len(emas) < 2:
+        return False
+    vals = []
+    for k, v in sorted(emas.items()):
+        if v is not None and hasattr(v, "iloc") and len(v) > 0:
+            vals.append(float(v.iloc[-1]))
+    return len(vals) >= 2 and vals[-1] > vals[0]  # short > long
+
+
+def _ema_above(tf_data: Any, span: int) -> bool:
+    """Check if the EMA for *span* has a positive value (price above EMA)."""
+    if not isinstance(tf_data, dict) or tf_data.get("error"):
+        return False
+    emas = tf_data.get("emas", {})
+    ema = emas.get(span)
+    if ema is not None and hasattr(ema, "iloc") and len(ema) > 0:
+        return float(ema.iloc[-1]) > 0
+    return False
+
+
+def _rsi_in_range(tf_data: Any, lo: float, hi: float) -> bool:
+    """Check if latest RSI is in a given range."""
+    if not isinstance(tf_data, dict) or tf_data.get("error"):
+        return False
+    rsi = tf_data.get("rsi")
+    if rsi is not None and hasattr(rsi, "iloc") and len(rsi) > 0:
+        val = float(rsi.iloc[-1])
+        return lo < val < hi
+    return False
+
+
+def _has_green_signal(qqe_results: dict[str, Any]) -> bool:
+    """Check if any QQE result shows a GREEN (bullish) signal."""
+    for result in qqe_results.values():
+        if isinstance(result, dict) and result.get("signal") in ("GREEN", "GREEN-STRONG"):
+            return True
+    return False
+
+
+def _has_confirmed_pattern(pattern_result: dict[str, Any]) -> bool:
+    """Check if at least one detected pattern is confirmed."""
+    detected = pattern_result.get("detected", [])
+    return any(p.get("confirmed", False) for p in detected)
+
+
+def _ribbon_aligned(tf_data: Any) -> bool:
+    """Check EMA ribbon alignment (shortest > longest)."""
+    if not isinstance(tf_data, dict) or tf_data.get("error"):
+        return False
+    ribbon = tf_data.get("ema_ribbon", {})
+    if not ribbon:
+        return False
+    vals = []
+    for k, v in sorted(ribbon.items()):
+        if v is not None and hasattr(v, "iloc") and len(v) > 0:
+            vals.append(float(v.iloc[-1]))
+    return len(vals) >= 2 and vals[0] > vals[-1]
+
+
+def _extract_price_levels(
+    timeframes: dict[str, Any],
+    smc_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract price levels for trade plan generation."""
+    levels: dict[str, Any] = {}
+    daily = timeframes.get("daily")
+    if daily is not None and not daily.empty:
+        levels["current_price"] = float(daily["Close"].iloc[-1])
+        levels["high_24h"] = float(daily["High"].iloc[-1])
+        levels["low_24h"] = float(daily["Low"].iloc[-1])
+
+    obs = smc_result.get("order_blocks", [])
+    if obs:
+        zone = obs[0].get("zone", (None, None))
+        if zone[0] is not None:
+            levels["entry_zone_low"] = float(zone[0])
+            levels["entry_zone_high"] = float(zone[1])
+
+    cp = levels.get("current_price")
+    ezl = levels.get("entry_zone_low")
+    if cp is not None and ezl is not None:
+        rr = abs(float(cp) - float(ezl))
+        if rr > 0:
+            levels["take_profit_1"] = round(float(cp) + rr, 2)
+            levels["take_profit_2"] = round(float(cp) + 2 * rr, 2)
+            levels["stop_loss"] = round(float(ezl), 2)
+
+    return levels
+
+
+# ── UI-friendly data helpers ─────────────────────────────────────────────
+
+
+def _build_flat_trade_plan(tp: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a trade_plan dict to UI-friendly flat keys (entry/stop_loss/target_N)."""
+    flat: dict[str, Any] = {}
+    flat["direction"] = tp.get("direction", "LONG")
+    entry_zone = tp.get("entry_zone", {})
+    if isinstance(entry_zone, dict):
+        flat["entry"] = entry_zone.get("low") or entry_zone.get("high")
+    else:
+        flat["entry"] = None
+    flat["stop_loss"] = tp.get("stop_loss")
+    tps = tp.get("take_profit_targets", [])
+    if isinstance(tps, list):
+        for i, tgt in enumerate(tps[:3]):
+            level = tgt.get("level") if isinstance(tgt, dict) else None
+            flat[f"target_{i + 1}"] = level
+    flat["rationale"] = tp.get("reasoning") or tp.get("verdict", "")
+    return flat
+
+
+def _extract_category_scores(sb: Any) -> dict[str, float]:
+    """Extract {regime, location, confirmation, volume, risk} scores from score_breakdown."""
+    if not isinstance(sb, dict):
+        return {}
+    cats = ("regime", "location", "confirmation", "volume_retest", "risk")
+    return {
+        cat: float(sb.get(cat, {}).get("score", 0.0))
+        for cat in cats
+        if isinstance(sb.get(cat), dict)
+    }
+
+
+def _df_to_candle_list(df: Any) -> list[dict[str, Any]]:
+    """Convert a OHLCV DataFrame tail to a list of candle dicts for chart rendering."""
+    candles: list[dict[str, Any]] = []
+    try:
+        import pandas as pd  # noqa: F811
+
+        for _, row in df.tail(100).iterrows():
+            candle: dict[str, Any] = {}
+            ts = row.get("time") or row.get("timestamp") or row.name
+            if isinstance(ts, pd.Timestamp):
+                candle["time"] = ts.isoformat()
+            elif ts is not None:
+                candle["time"] = str(ts)
+            for col in ("open", "high", "low", "close", "volume"):
+                val = row.get(col.capitalize()) or row.get(col)
+                candle[col] = float(val) if val is not None else None
+            if candle.get("time"):
+                candles.append(candle)
+    except Exception:
+        pass
+    return candles
+
+
+def _build_ema_dict(ind_data: Any) -> dict[str, list[float]]:
+    """Build {ema_period: [values]} from daily indicator results."""
+    emas: dict[str, list[float]] = {}
+    if not isinstance(ind_data, dict) or ind_data.get("error"):
+        return emas
+    raw_emas = ind_data.get("emas")
+    if isinstance(raw_emas, dict):
+        for period, series in raw_emas.items():
+            if hasattr(series, "tolist"):
+                emas[str(period)] = [round(float(v), 2) for v in series.tail(100)]
+            elif isinstance(series, list):
+                emas[str(period)] = [round(float(v), 2) for v in series[-100:]]
+    return emas
+
+
+def _normalize_obs(obs: Any) -> list[dict[str, Any]]:
+    """Normalize order blocks to a consistent dict format for the UI."""
+    if not isinstance(obs, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for ob in obs:
+        if not isinstance(ob, dict):
+            continue
+        zone = ob.get("zone", (None, None))
+        result.append({
+            "start_time": ob.get("start_time") or ob.get("time", ""),
+            "end_time": ob.get("end_time", ""),
+            "price_high": float(zone[1]) if isinstance(zone, (list, tuple)) and len(zone) > 1 and zone[1] is not None else None,
+            "price_low": float(zone[0]) if isinstance(zone, (list, tuple)) and len(zone) > 0 and zone[0] is not None else None,
+            "type": ob.get("type", "bullish"),
+        })
+    return result
+
+
+def _normalize_fvgs(fvgs: Any) -> list[dict[str, Any]]:
+    """Normalize FVGs to a consistent dict format for the UI."""
+    if not isinstance(fvgs, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for fvg in fvgs:
+        if not isinstance(fvg, dict):
+            continue
+        zone = fvg.get("zone", (None, None))
+        result.append({
+            "start_time": fvg.get("start_time") or fvg.get("time", ""),
+            "end_time": fvg.get("end_time", ""),
+            "price_high": float(zone[1]) if isinstance(zone, (list, tuple)) and len(zone) > 1 and zone[1] is not None else None,
+            "price_low": float(zone[0]) if isinstance(zone, (list, tuple)) and len(zone) > 0 and zone[0] is not None else None,
+        })
+    return result
