@@ -67,9 +67,39 @@ class WatchlistPairResponse(BaseModel):
     id: int
     user_id: int
     pair: str
+    sort_order: int = 0
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class WatchlistReorderRequest(BaseModel):
+    pair_ids: list[int] = Field(..., min_length=1, description="Ordered list of pair database IDs")
+
+
+class WatchlistPairWithScore(BaseModel):
+    """Watchlist pair enriched with the latest scan score and status."""
+
+    id: int
+    user_id: int
+    pair: str
+    sort_order: int = 0
+    created_at: datetime
+    score: Optional[float] = Field(None, ge=0, le=100)
+    status: str = "Active"
+
+    model_config = {"from_attributes": True}
+
+
+class WatchlistListResponse(BaseModel):
+    """Paginated wrapper for GET /api/v1/watchlist."""
+
+    total: int
+    pairs: list[WatchlistPairWithScore]
+
+
+class WatchlistRemoveResponse(BaseModel):
+    detail: str = "Pair removed"
 
 
 # ── Pair Settings ───────────────────────────────────────────────────────────

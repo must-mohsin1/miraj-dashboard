@@ -4,6 +4,26 @@ A crypto trading analysis platform with a FastAPI backend and Streamlit dashboar
 Runs the full analysis pipeline: macro data → OHLCV → indicators → QQE Mod → SMC
 → patterns → confluence scoring → trade plan → charts.
 
+## Features
+
+### Phase 1 — Core Analysis
+- Macro data dashboard (real-time economic indicators)
+- Single-pair confluence analysis (technicals + patterns + SMC)
+- Trade plan generation (entry, stop-loss, take-profit levels)
+- Interactive chart visualization with mplfinance
+
+### Phase 2 — Watchlist & Automation
+- **Watchlist management** — Add, reorder, and delete watched crypto pairs with persistent storage
+- **Batch scanning** — Run full analysis on all watchlist pairs simultaneously with rate limiting
+- **Scheduled scans** — APScheduler runs analysis every 4 hours automatically on startup, tracking each cycle in `scan_runs`
+- **Analysis history** — Paginated, filterable history (by symbol, date, min_score) with delete and markdown export
+- **Settings page** — Manage watchlist pairs, configure alert thresholds, and view account details
+
+### Phase 3 — Alerts & Sync _(coming soon)_
+- Telegram and Discord alert delivery for high-confidence setups
+- Daily digest summaries via Telegram
+- Obsidian vault sync for analysis reports and charts
+
 ## Quick Start
 
 ### 1. Clone and configure

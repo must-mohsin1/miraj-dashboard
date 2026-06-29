@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from backend.auth import get_current_user
 from backend.database import get_session
-from backend.models import Analysis, User
+from backend.models import Analysis, User, WatchlistPair
 
 from backend.services.analysis_service import get_cached_or_none, run_scan
 
@@ -120,10 +120,15 @@ async def scan_symbol(
 
     # ── Persist to analyses table ──────────────────────────────────
     try:
+        # Extract score from full result for the indexable column
+        score_val: float | None = (
+            result.get("overall_score") or result.get("confluence_score")
+        )
         analysis = Analysis(
             user_id=current_user.id,
             pair=symbol,
             analysis_type="scan",
+            score=score_val,
             parameters=json.dumps({"symbol": symbol}),
             result=json.dumps({
                 "confluence_score": result.get("confluence_score"),
@@ -137,3 +142,6 @@ async def scan_symbol(
         # Non-fatal — result is still returned to the caller
 
     return result
+
+
+# ── Batch scan route is defined in routes/watchlist.py ──────────────────

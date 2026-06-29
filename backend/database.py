@@ -24,7 +24,11 @@ def get_db_path() -> str:
 def set_db_path(path: str) -> None:
     """Override the database file path (useful for tests)."""
     global _DB_PATH
+    global _engine
+    global _session_factory
     _DB_PATH = path
+    _engine = None
+    _session_factory = None
 
 
 def _make_engine(db_path: str):
