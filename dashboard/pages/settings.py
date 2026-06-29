@@ -25,6 +25,8 @@ from dashboard.utils.api_client import (
 )
 from dashboard.utils.session import get_auth_token, get_user_email, is_authenticated, logout
 
+import html
+
 # ---------------------------------------------------------------------------
 # Auth guard
 # ---------------------------------------------------------------------------
@@ -364,7 +366,7 @@ if pairs:
             st.markdown(f"<span style='color:rgba(255,255,255,0.4); font-size:0.85rem;'>{idx + 1}</span>", unsafe_allow_html=True)
 
         with cols[1]:
-            st.markdown(f"<span class='wl-pair-name'>{pair_name}</span>", unsafe_allow_html=True)
+            st.markdown(f"<span class='wl-pair-name'>{html.escape(pair_name)}</span>", unsafe_allow_html=True)
 
         with cols[2]:
             if score is not None:
@@ -374,7 +376,7 @@ if pairs:
                 st.markdown("<span style='color:rgba(255,255,255,0.25);'>—</span>", unsafe_allow_html=True)
 
         with cols[3]:
-            st.markdown(f"<span class='wl-status active'>● {status}</span>", unsafe_allow_html=True)
+            st.markdown(f"<span class='wl-status active'>● {html.escape(status)}</span>", unsafe_allow_html=True)
 
         with cols[4]:
             btn_up = st.button(

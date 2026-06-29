@@ -20,6 +20,42 @@ class User(Base):
     analyses = relationship("Analysis", back_populates="user", cascade="all, delete-orphan")
     watchlist_pairs = relationship("WatchlistPair", back_populates="user", cascade="all, delete-orphan")
     pair_settings = relationship("PairSetting", back_populates="user", cascade="all, delete-orphan")
+    alert_channels = relationship("AlertChannel", back_populates="user", cascade="all, delete-orphan")
+    alert_histories = relationship("AlertHistory", back_populates="user", cascade="all, delete-orphan")
+
+
+class AlertChannel(Base):
+    """Per-user Telegram / Discord alert channel configuration."""
+
+    __tablename__ = "alert_channels"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    channel_type = Column(String(20), nullable=False)  # "telegram" or "discord"
+    config = Column(Text, nullable=True)                # JSON: {"chat_id": "123"} or {"webhook_url": "https://..."}
+    enabled = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="alert_channels")
+
+
+class AlertHistory(Base):
+    """Log of every sent (or failed) alert for dedup and audit."""
+
+    __tablename__ = "alert_histories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    pair = Column(String(20), nullable=False, index=True)
+    channel = Column(String(20), nullable=False)   # "telegram" or "discord"
+    score = Column(Float, nullable=True)
+    direction = Column(String(10), nullable=True)  # LONG / SHORT
+    message = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="sent")  # sent, failed
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="alert_histories")
 
 
 class Analysis(Base):

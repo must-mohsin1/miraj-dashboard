@@ -25,6 +25,7 @@ from sqlalchemy import select
 from backend.auth import get_current_user
 from backend.database import get_session
 from backend.models import Analysis, User, WatchlistPair
+from backend.obsidian import get_vault_path, is_sync_enabled, sync_scan_result
 
 from backend.services.analysis_service import get_cached_or_none, run_scan
 
@@ -140,6 +141,42 @@ async def scan_symbol(
     except Exception as exc:
         logger.warning("Failed to persist analysis result: %s", exc)
         # Non-fatal — result is still returned to the caller
+
+    # ── Sync to Obsidian vault (best-effort) ──────────────────────────
+    try:
+        vault_path = await get_vault_path(session, current_user.id)
+        if vault_path:
+            enabled = await is_sync_enabled(session, current_user.id, symbol)
+            if enabled:
+                await asyncio.to_thread(
+                    sync_scan_result,
+                    current_user.id, symbol, result, vault_path,
+                )
+    except Exception as sync_exc:
+        logger.warning(
+            "Obsidian sync failed for %s (user %d): %s",
+            symbol, current_user.id, sync_exc,
+        )
+
+    # ── Alert manager (best-effort) ──────────────────────────────────
+    try:
+        from backend.alerts.manager import process_scan_results
+
+        # Wrap the single scan result into the per-user dict that
+        # process_scan_results expects.  The route already normalises
+        # the symbol earlier.
+        results_by_user = {current_user.id: [{
+            "symbol": symbol,
+            "confluence_score": result.get("confluence_score", 0),
+            "overall_score": result.get("overall_score"),
+            "trade_plan": result.get("trade_plan", {}),
+        }]}
+        await process_scan_results(session, results_by_user)
+    except Exception as alert_exc:
+        logger.warning(
+            "Alert check failed for %s (user %d): %s",
+            symbol, current_user.id, alert_exc,
+        )
 
     return result
 

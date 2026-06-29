@@ -19,10 +19,15 @@ Runs the full analysis pipeline: macro data → OHLCV → indicators → QQE Mod
 - **Analysis history** — Paginated, filterable history (by symbol, date, min_score) with delete and markdown export
 - **Settings page** — Manage watchlist pairs, configure alert thresholds, and view account details
 
-### Phase 3 — Alerts & Sync _(coming soon)_
-- Telegram and Discord alert delivery for high-confidence setups
-- Daily digest summaries via Telegram
-- Obsidian vault sync for analysis reports and charts
+### Phase 3 — Alerts & Sync
+- **Telegram alerts** — Receive real-time trade alerts via Telegram bot when confluence scores exceed per-pair thresholds, with MarkdownV2-formatted messages
+- **Discord alerts** — Rich embedded alert delivery via Discord webhooks with customisable webhook URL validation
+- **Alert manager** — Configurable per-pair thresholds (`alert_threshold`), per-pair mute toggle (`alert_enabled`), cooldown dedup (4h default per symbol), and multi-channel routing
+- **Alert channels** — Manage Telegram (chat_id) and Discord (webhook_url) channels via Settings API; each channel can be individually enabled/disabled
+- **Alert history** — Every send attempt (success or failure) is logged in `alert_histories` for audit and dedup
+- **Daily digest** — Scheduled Telegram summary (configurable time, default 20:00 UTC) of all pairs scanned that day, sorted by confluence score with high-confluence and actionable counts
+- **Obsidian vault sync** — Automatic export of analysis reports as markdown files and mplfinance chart PNGs to an Obsidian vault, toggleable per pair
+- **Settings API** — CRUD endpoints for alert channels and per-pair settings (`alert_threshold`, `alert_enabled`)
 
 ## Quick Start
 
@@ -66,10 +71,21 @@ docker compose up --build
 │   ├── database.py             # SQLAlchemy async engine + sessions
 │   ├── models.py               # SQLAlchemy ORM models
 │   ├── schemas.py              # Pydantic request/response schemas
+│   ├── alerts/                 # Phase 3 — alert delivery system
+│   │   ├── __init__.py         # AlertManager public API
+│   │   ├── manager.py          # Threshold filtering, dedup, channel routing
+│   │   ├── telegram.py         # Telegram Bot API client + message formatter
+│   │   ├── discord.py          # Discord webhook sender + embed builder
+│   │   └── digest.py           # Daily digest builder + Telegram client
+│   ├── obsidian.py             # Phase 3 — Obsidian vault sync service
+│   ├── scheduler.py            # APScheduler: 4-hour scans + daily digest
 │   ├── routes/
 │   │   ├── auth.py             # /api/v1/auth (register, login)
 │   │   ├── macro.py            # /api/v1/macro
-│   │   └── scan.py             # /api/v1/scan/{symbol}
+│   │   ├── scan.py             # /api/v1/scan/{symbol} — single + batch
+│   │   ├── watchlist.py        # /api/v1/watchlist CRUD + batch scan
+│   │   ├── history.py          # /api/v1/history (paginated, export)
+│   │   └── settings.py         # /api/v1/settings (pair settings + alert channels)
 │   └── services/
 │       ├── macro_service.py    # Macro data fetching + caching
 │       └── analysis_service.py # Full pipeline orchestration
@@ -114,26 +130,44 @@ docker compose up --build
 
 ## API Endpoints
 
-| Method | Path                  | Auth     | Description               |
-|--------|-----------------------|----------|---------------------------|
-| POST   | /api/v1/auth/register | No       | Create account            |
-| POST   | /api/v1/auth/login    | No       | Sign in, get JWT token    |
-| GET    | /api/v1/macro         | JWT      | Macro market data         |
-| POST   | /api/v1/scan/{symbol} | JWT      | Run full analysis         |
-| GET    | /api/v1/scan/{symbol} | JWT      | Get cached analysis       |
-| GET    | /api/v1/protected     | JWT      | Verify auth status        |
-| GET    | /health               | No       | Health check              |
+| Method | Path                              | Auth     | Description                          |
+|--------|-----------------------------------|----------|--------------------------------------|
+| POST   | /api/v1/auth/register             | No       | Create account                       |
+| POST   | /api/v1/auth/login                | No       | Sign in, get JWT token               |
+| GET    | /api/v1/macro                     | JWT      | Macro market data                    |
+| POST   | /api/v1/scan/{symbol}             | JWT      | Run full analysis                    |
+| GET    | /api/v1/scan/{symbol}             | JWT      | Get cached analysis                  |
+| POST   | /api/v1/scan/batch                | JWT      | Batch scan watchlist pairs           |
+| GET    | /api/v1/watchlist                 | JWT      | List watchlist pairs                 |
+| POST   | /api/v1/watchlist                 | JWT      | Add pair to watchlist                |
+| DELETE | /api/v1/watchlist/{pair_id}       | JWT      | Remove pair from watchlist           |
+| PUT    | /api/v1/watchlist/reorder         | JWT      | Reorder watchlist pairs              |
+| GET    | /api/v1/history                   | JWT      | Paginated analysis history           |
+| DELETE | /api/v1/history/{id}              | JWT      | Delete analysis record               |
+| GET    | /api/v1/history/export            | JWT      | Export history as markdown           |
+| GET    | /api/v1/settings/pairs            | JWT      | List per-pair alert settings         |
+| PUT    | /api/v1/settings/pairs/{pair}     | JWT      | Update pair alert settings (upsert)  |
+| GET    | /api/v1/settings/channels         | JWT      | List alert channels                  |
+| POST   | /api/v1/settings/channels         | JWT      | Create alert channel (Telegram/Discord)|
+| PUT    | /api/v1/settings/channels/{id}    | JWT      | Update alert channel config          |
+| DELETE | /api/v1/settings/channels/{id}    | JWT      | Delete alert channel                 |
+| GET    | /api/v1/protected                 | JWT      | Verify auth status                   |
+| GET    | /health                           | No       | Health check                         |
 
 ## Environment Variables
 
-| Variable              | Required | Default | Description                    |
-|-----------------------|----------|---------|--------------------------------|
+| Variable              | Required | Default | Description                               |
+|-----------------------|----------|---------|-------------------------------------------|
 | `DATABASE_URL`        | No       | `sqlite+aiosqlite:///./miraj.db` | Database connection string |
-| `JWT_SECRET_KEY`      | **Yes**  | —       | JWT signing secret (generate!) |
-| `JWT_EXPIRE_MINUTES`  | No       | 60      | Token expiry in minutes        |
-| `TELEGRAM_BOT_TOKEN`  | No       | —       | Telegram bot token (optional)  |
-| `OBSIDIAN_VAULT_PATH` | No       | —       | Obsidian vault path (optional) |
-| `FRED_API_KEY`        | No       | —       | FRED API key (macro data)      |
+| `JWT_SECRET_KEY`      | **Yes**  | —       | JWT signing secret (generate!)            |
+| `JWT_EXPIRE_MINUTES`  | No       | 60      | Token expiry in minutes                   |
+| `TELEGRAM_BOT_TOKEN`  | No       | —       | Telegram bot token (alerts + digest)      |
+| `DISCORD_WEBHOOK_URL` | No       | —       | Default Discord webhook URL               |
+| `OBSIDIAN_VAULT_PATH` | No       | —       | Path to Obsidian vault for sync           |
+| `DIGEST_HOUR`         | No       | 20      | Daily digest hour (UTC, 0-23)             |
+| `DIGEST_MINUTE`       | No       | 0       | Daily digest minute (UTC, 0-59)           |
+| `FRED_API_KEY`        | No       | —       | FRED API key for macro data               |
+| `MIRAI_CORE_PATH`     | No       | —       | Path to mirai_core package                |
 
 ## Development
 
