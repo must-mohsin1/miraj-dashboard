@@ -37,3 +37,4 @@ test_qa_*
 # OS
 .DS_Store
 Thumbs.db
+*.db-journal
