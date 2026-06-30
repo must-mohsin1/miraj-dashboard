@@ -146,6 +146,9 @@ nav = st.navigation(
             st.Page("pages/scanner.py", title="Scanner", icon="🔍"),
             st.Page("pages/analysis.py", title="Analysis", icon="📋"),
         ],
+        "Portfolio": [
+            st.Page("pages/portfolio.py", title="Portfolio", icon="💼"),
+        ],
         "History & Settings": [
             st.Page("pages/history.py", title="History", icon="📜"),
             st.Page("pages/settings.py", title="Settings", icon="⚙️"),

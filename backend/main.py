@@ -7,6 +7,14 @@ from fastapi import Depends, FastAPI
 
 from backend.auth import get_current_user
 from backend.database import Base, get_engine
+# Import portfolio models so Base.metadata.create_all() creates their tables.
+from backend.models import (  # noqa: F401 — imported for side effect (table registration)
+    ExchangeKey,
+    PortfolioBalance,
+    PortfolioPosition,
+    PortfolioSnapshot,
+    PortfolioTrade,
+)
 from backend.routes import (
     auth_router,
     history_router,
