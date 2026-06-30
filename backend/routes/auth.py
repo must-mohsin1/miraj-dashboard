@@ -1,10 +1,11 @@
 """Authentication routes — register, login, and a protected health-check."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
     create_access_token,
     get_current_user,
     hash_password,
@@ -54,8 +55,12 @@ async def register(body: UserRegisterRequest, session: AsyncSession = Depends(ge
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: UserLoginRequest, session: AsyncSession = Depends(get_session)) -> dict:
-    """Authenticate and return a JWT access token."""
+async def login(
+    body: UserLoginRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Authenticate and return a JWT access token with a session cookie."""
     result = await session.execute(
         select(User).where(User.username == body.username)
     )
@@ -67,6 +72,15 @@ async def login(body: UserLoginRequest, session: AsyncSession = Depends(get_sess
         )
 
     token = create_access_token(data={"sub": str(user.id)})
+    # Set HTTP-only cookie so the browser persists the session across bare URL loads
+    response.set_cookie(
+        key="auth_session",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
     return {"access_token": token, "token_type": "bearer"}
 
 

@@ -49,6 +49,19 @@ class QueryParamProxy(dict):
 _QUERY_PARAMS = QueryParamProxy()
 
 
+class CookieProxy(dict):
+    """Mocks st.context.cookies as a dict-like object.
+
+    Supports get, set by key, and deletion (with KeyError on missing key).
+    """
+
+    def clear(self):
+        dict.clear(self)
+
+
+_COOKIES = CookieProxy()
+
+
 def _noop(*args, **kwargs):
     pass
 
@@ -77,8 +90,9 @@ streamlit_mock.text_input = _noop
 streamlit_mock.divider = _noop
 streamlit_mock.expander = _noop
 
-# Wire query_params as a PropertyMock so st.query_params[key] = val works
+# Wire query_params and context.cookies as PropertyMocks
 type(streamlit_mock).query_params = PropertyMock(return_value=_QUERY_PARAMS)
+type(streamlit_mock).context = PropertyMock(return_value=MagicMock(cookies=_COOKIES))
 
 # Apply mock before any session imports
 import sys
@@ -97,6 +111,7 @@ import dashboard.utils.session as session
 def _reset_state():
     _SESSION_STATE.clear()
     _QUERY_PARAMS.clear()
+    _COOKIES.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +172,42 @@ class TestInitSessionState:
         session.init_session_state()
         assert _SESSION_STATE["auth_token"] == "stale-jwt"
 
+    # ---- Cookie restore tests ----
+
+    def test_restores_from_cookie_on_bare_url(self):
+        """Cookie restores the session when there are no query params (bare URL)."""
+        _reset_state()
+        _COOKIES["auth_session"] = "cookie-jwt"
+
+        session.init_session_state()
+
+        assert _SESSION_STATE["auth_token"] == "cookie-jwt"
+
+    def test_cookie_takes_priority_over_query_params(self):
+        """When both cookie and query params exist, cookie wins."""
+        _reset_state()
+        _COOKIES["auth_session"] = "cookie-jwt"
+        _QUERY_PARAMS["token"] = "param-jwt"
+        _QUERY_PARAMS["email"] = "param@test.com"
+
+        session.init_session_state()
+
+        # Cookie should be used, not query params
+        assert _SESSION_STATE["auth_token"] == "cookie-jwt"
+        # Email should also be None because query params skipped
+        assert _SESSION_STATE.get("user_email") is None
+
+    def test_does_not_restore_from_cookie_when_logged_out(self):
+        """_just_logged_out flag prevents cookie restore."""
+        _reset_state()
+        _SESSION_STATE["_just_logged_out"] = True
+        _COOKIES["auth_session"] = "stale-cookie-jwt"
+
+        session.init_session_state()
+
+        assert _SESSION_STATE.get("auth_token") is None
+        assert _SESSION_STATE["_just_logged_out"] is False
+
 
 class TestSetAuthToken:
     def test_sets_session_state(self):
@@ -176,6 +227,15 @@ class TestSetAuthToken:
 
         assert _QUERY_PARAMS.get("token") == "token-val"
         assert _QUERY_PARAMS.get("email") == "e@t.com"
+
+    def test_sets_cookie(self):
+        """set_auth_token also persists the token as an HTTP cookie."""
+        _reset_state()
+        session.init_session_state()
+
+        session.set_auth_token("token-val", email="e@t.com")
+
+        assert _COOKIES.get("auth_session") == "token-val"
 
     def test_email_optional(self):
         _reset_state()
@@ -218,18 +278,27 @@ class TestLogout:
         assert "token" not in _QUERY_PARAMS
         assert "email" not in _QUERY_PARAMS
 
+    def test_clears_cookie(self):
+        """Logout clears the HTTP cookie."""
+        assert "auth_session" in _COOKIES
+
+        session.logout()
+
+        assert "auth_session" not in _COOKIES
+
     def test_logout_then_init_does_not_restore(self):
         """End-to-end: logout + rerun should not restore stale auth."""
         # Populate query params (they were set by set_auth_token)
         _QUERY_PARAMS["token"] = "stale-jwt"
         _QUERY_PARAMS["email"] = "old@test.com"
+        _COOKIES["auth_session"] = "stale-cookie-jwt"
 
         session.logout()
 
         # Simulate the next script run's init
         session.init_session_state()
 
-        # Despite stale query params, auth should remain None
+        # Despite stale query params and cookie, auth should remain None
         assert _SESSION_STATE.get("auth_token") is None
         assert _SESSION_STATE.get("user_email") is None
 
@@ -244,6 +313,7 @@ class TestLogout:
         assert _SESSION_STATE["user_email"] == "new@test.com"
         assert _QUERY_PARAMS.get("token") == "new-token"
         assert _QUERY_PARAMS.get("email") == "new@test.com"
+        assert _COOKIES.get("auth_session") == "new-token"
 
 
 class TestIsAuthenticated:

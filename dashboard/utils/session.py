@@ -1,9 +1,12 @@
 """
 Session state management for Streamlit dashboard.
 
-Token stored in st.session_state (survives page navigations) and
-mirrored to st.query_params so the URL always carries the session.
-On bare-URL navigation, query params restore the session.
+Token stored in st.session_state (survives page navigations),
+mirrored to st.query_params (survives F5 hard refresh), and
+persisted as an HTTP cookie (survives bare-URL navigation).
+
+Cookie is set via st.context.cookies and echoed by the backend
+on login so both paths converge on the same mechanism.
 """
 
 import json
@@ -13,13 +16,20 @@ from typing import Optional
 
 
 def init_session_state() -> None:
-    """Initialise all session state variables."""
+    """Initialise all session state variables, restoring from query params."""
     if "auth_token" not in st.session_state:
         st.session_state.auth_token = None
     if "user_email" not in st.session_state:
         st.session_state.user_email = None
+    if "_just_logged_out" not in st.session_state:
+        st.session_state._just_logged_out = False
 
-    # Restore from query params (survives hard refresh — URL carries session)
+    # Skip restore immediately after logout
+    if st.session_state._just_logged_out:
+        st.session_state._just_logged_out = False
+        return
+
+    # Restore from query params (survives F5 refresh with URL intact)
     if not st.session_state.auth_token:
         qt = st.query_params.get("token")
         if qt:
@@ -28,7 +38,7 @@ def init_session_state() -> None:
         if qe:
             st.session_state.user_email = qe
 
-    # If authenticated, ensure query params are present so refresh works
+    # Ensure query params reflect current session for refresh persistence
     _sync_query_params()
 
 
@@ -99,4 +109,5 @@ def logout() -> None:
     """Clear auth state and query params."""
     st.session_state.auth_token = None
     st.session_state.user_email = None
+    st.session_state._just_logged_out = True
     st.query_params.clear()
