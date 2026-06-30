@@ -142,6 +142,64 @@ def _load_existing(symbol: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Trade plan sub-component (defined before use)
+# ---------------------------------------------------------------------------
+
+
+def _render_trade_plan(
+    direction: str,
+    entry: float,
+    stop: Optional[float],
+    targets: list[float],
+    raw: dict[str, Any],
+) -> None:
+    """Render the trade plan section with entry/stop/targets."""
+    is_long = direction.upper() == "LONG"
+
+    badge = "🟢 **LONG**" if is_long else "🔴 **SHORT**"
+    st.markdown(f"**Direction:** {badge}")
+
+    st.markdown(f"**Entry:** {_format_price(entry)}")
+
+    if stop is not None:
+        stop_dist = abs(entry - stop) / entry * 100
+        st.markdown(
+            f"**Stop Loss:** {_format_price(stop)} "
+            f"<span style='color:#ef4444'>({stop_dist:.2f}%)</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("**Stop Loss:** —")
+
+    if targets:
+        st.markdown("**Targets:**")
+        for i, tgt in enumerate(targets, 1):
+            rr = (
+                _format_risk_reward(entry, tgt, stop, direction)
+                if stop is not None and stop != entry
+                else "—"
+            )
+            progress_pct = abs(tgt - entry) / abs(stop - entry) * 100 if stop and stop != entry else 0
+            st.markdown(
+                f"&nbsp;&nbsp;**T{i}:** {_format_price(tgt)} &nbsp;"
+                f"<span style='color:#22c55e'>(R:R {rr})</span>",
+                unsafe_allow_html=True,
+            )
+            st.progress(min(progress_pct / 100, 1.0), text=f"Target {i}")
+    else:
+        st.markdown("**Targets:** —")
+
+    rationale = raw.get("rationale") or raw.get("notes")
+    if rationale:
+        st.markdown("---")
+        st.markdown(f"**Rationale:** {rationale}")
+
+    notes = raw.get("notes")
+    if notes and notes != rationale:
+        st.caption(notes)
+
+
+# ---------------------------------------------------------------------------
 # Page UI
 # ---------------------------------------------------------------------------
 
@@ -157,7 +215,7 @@ col_sym, col_btn = st.columns([3, 1])
 with col_sym:
     symbol_input = st.text_input(
         "Trading Pair",
-        value=st.session_state.get(_SYMBOL_KEY, "BTC-USD"),
+        value=st.session_state.get(_SYMBOL_KEY) or "BTC-USD",
         placeholder="e.g. BTC-USD, ETH-USD",
         key="symbol_input",
         help="Enter a crypto trading pair symbol.",
@@ -173,7 +231,7 @@ with col_btn:
         disabled=bool(st.session_state.get(_LOADING_KEY)),
     )
 
-if run_clicked and symbol_input.strip():
+if run_clicked and symbol_input and symbol_input.strip():
     _run_analysis(symbol_input.strip())
 
 # --- Auto-load from query param (only on first load) ---
@@ -283,61 +341,3 @@ if result is not None:
         )
     else:
         st.caption("Candle data not available for chart rendering.")
-
-
-# ---------------------------------------------------------------------------
-# Trade plan sub-component
-# ---------------------------------------------------------------------------
-
-
-def _render_trade_plan(
-    direction: str,
-    entry: float,
-    stop: Optional[float],
-    targets: list[float],
-    raw: dict[str, Any],
-) -> None:
-    """Render the trade plan section with entry/stop/targets."""
-    is_long = direction.upper() == "LONG"
-
-    badge = "🟢 **LONG**" if is_long else "🔴 **SHORT**"
-    st.markdown(f"**Direction:** {badge}")
-
-    st.markdown(f"**Entry:** {_format_price(entry)}")
-
-    if stop is not None:
-        stop_dist = abs(entry - stop) / entry * 100
-        st.markdown(
-            f"**Stop Loss:** {_format_price(stop)} "
-            f"<span style='color:#ef4444'>({stop_dist:.2f}%)</span>",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown("**Stop Loss:** —")
-
-    if targets:
-        st.markdown("**Targets:**")
-        for i, tgt in enumerate(targets, 1):
-            rr = (
-                _format_risk_reward(entry, tgt, stop, direction)
-                if stop is not None and stop != entry
-                else "—"
-            )
-            progress_pct = abs(tgt - entry) / abs(stop - entry) * 100 if stop and stop != entry else 0
-            st.markdown(
-                f"&nbsp;&nbsp;**T{i}:** {_format_price(tgt)} &nbsp;"
-                f"<span style='color:#22c55e'>(R:R {rr})</span>",
-                unsafe_allow_html=True,
-            )
-            st.progress(min(progress_pct / 100, 1.0), text=f"Target {i}")
-    else:
-        st.markdown("**Targets:** —")
-
-    rationale = raw.get("rationale") or raw.get("notes")
-    if rationale:
-        st.markdown("---")
-        st.markdown(f"**Rationale:** {rationale}")
-
-    notes = raw.get("notes")
-    if notes and notes != rationale:
-        st.caption(notes)

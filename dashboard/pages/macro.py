@@ -45,8 +45,9 @@ with st.spinner("Loading macro data…"):
     result = get_macro(token)
 
 if result.get("success"):
-    data = result.get("data", {})
-    # The backend wraps macro payload; extract from nested response if needed
+    outer = result.get("data", {})
+    # The backend wraps the real payload in a nested "data" key alongside cached_at/stale/errors
+    data = outer.get("data", {}) if isinstance(outer, dict) else {}
     payload = data if isinstance(data, dict) else {}
     if payload:
         render_macro_cards(payload)

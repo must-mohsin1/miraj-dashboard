@@ -185,16 +185,16 @@ def _build_fvgs(fvgs: list[dict[str, Any]]) -> list[go.Scatter]:
         traces.append(
             go.Scatter(
                 x=[
-                    fvg["start_time"],
-                    fvg["end_time"],
-                    fvg["end_time"],
-                    fvg["start_time"],
-                ],
-                y=[
-                    fvg["gap_low"],
-                    fvg["gap_low"],
-                    fvg["gap_high"],
-                    fvg["gap_high"],
+                    fvg.get("start_time", ""),
+                    fvg.get("end_time", ""),
+                    fvg.get("end_time", ""),
+                    fvg.get("start_time", ""),
+                    ],
+                    y=[
+                    fvg.get("price_low", 0),
+                    fvg.get("price_low", 0),
+                    fvg.get("price_high", 0),
+                    fvg.get("price_high", 0),
                 ],
                 fill="toself",
                 fillcolor=_FVG_COLOR,
@@ -204,7 +204,7 @@ def _build_fvgs(fvgs: list[dict[str, Any]]) -> list[go.Scatter]:
                 legendgroup="fvg",
                 showlegend=i == 0,
                 hovertext=(
-                    f"FVG<br>${fvg['gap_low']:,.2f} \u2013 ${fvg['gap_high']:,.2f}"
+                    f"FVG<br>${fvg.get('price_low', 0):,.2f} – ${fvg.get('price_high', 0):,.2f}"
                 ),
                 hoverinfo="text",
             )

@@ -20,7 +20,7 @@ if _parent_dir not in sys.path:
 
 import streamlit as st
 
-from dashboard.utils.api_client import login as api_login, register as api_register
+from dashboard.utils.api_client import login as api_login, register as api_register, set_base_url
 from dashboard.utils.session import (
     get_user_email,
     init_session_state,
@@ -40,6 +40,11 @@ st.set_page_config(
 )
 
 init_session_state()
+
+# Use API_BASE_URL from environment if set (Docker), otherwise default localhost
+_api_base = os.environ.get("API_BASE_URL", "")
+if _api_base:
+    set_base_url(_api_base)
 
 # ---------------------------------------------------------------------------
 # Login / Register page (unauthenticated)

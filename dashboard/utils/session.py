@@ -2,8 +2,8 @@
 Session state management for Streamlit dashboard.
 
 Handles JWT token storage, expiry checking, and logout.
-Token is stored in st.session_state so it persists across page navigations
-within the Streamlit multipage app.
+Token is stored in st.session_state (survives page navigations) and
+restored from query params on full page refresh.
 """
 
 import json
@@ -13,11 +13,20 @@ from typing import Optional
 
 
 def init_session_state() -> None:
-    """Initialise all session state variables on first run."""
+    """Initialise all session state variables on first run, restoring from query params if available."""
     if "auth_token" not in st.session_state:
         st.session_state.auth_token = None
     if "user_email" not in st.session_state:
         st.session_state.user_email = None
+
+    # Restore from query params if available (survives hard refresh)
+    if not st.session_state.auth_token:
+        qt = st.query_params.get("token")
+        if qt:
+            st.session_state.auth_token = qt
+        qe = st.query_params.get("email")
+        if qe:
+            st.session_state.user_email = qe
 
 
 def _decode_jwt_payload(token: str) -> Optional[dict]:
@@ -72,6 +81,11 @@ def set_auth_token(token: str, email: Optional[str] = None) -> None:
     if email:
         st.session_state.user_email = email
 
+    # Set query params to token+email so they survive a hard refresh
+    st.query_params["token"] = token
+    if email:
+        st.query_params["email"] = email
+
 
 def get_auth_token() -> Optional[str]:
     """Return the current JWT, or ``None`` if not authenticated."""
@@ -87,3 +101,5 @@ def logout() -> None:
     """Clear auth state — effectively logs the user out."""
     st.session_state.auth_token = None
     st.session_state.user_email = None
+    # Clear query params
+    st.query_params.clear()
