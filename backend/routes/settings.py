@@ -52,7 +52,7 @@ def _parse_settings_json(raw: str | None) -> dict[str, Any]:
 class AlertChannelCreateRequest(BaseModel):
     """Request body for creating a new alert channel."""
 
-    channel_type: str = Field(..., pattern="^(telegram|discord)$")
+    channel_type: str = Field(..., pattern="^(telegram|discord|email)$")
     config: dict[str, Any]
     enabled: bool = True
 

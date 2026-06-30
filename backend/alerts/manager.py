@@ -19,6 +19,7 @@ Typical usage (inside the scheduled scan)::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -28,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import AlertChannel, AlertHistory, PairSetting, User
+from backend.alerts.email import build_email_body, send_email
 from backend.alerts.telegram import format_alert_message, send_alert
 from backend.alerts.discord import build_embed, send_webhook
 
@@ -198,6 +200,20 @@ async def _process_single_result(
         )
         return None
 
+    # ── Per-pair notification channel filter ─────────────────────────
+    notification_channels = pair_settings.get("notification_channels")
+    if isinstance(notification_channels, list) and notification_channels:
+        # Only deliver to channels whose type is in the user's explicit list
+        filtered = [ch for ch in channels if ch.channel_type in notification_channels]
+        if not filtered:
+            logger.debug(
+                "Pair %s for user %d specifies channels=%s but none match enabled channels; "
+                "falling back to all channels",
+                symbol, user_id, notification_channels,
+            )
+        else:
+            channels = filtered
+
     # ── Deliver to each enabled channel ─────────────────────────────
     channels_sent: list[str] = []
     for ch in channels:
@@ -207,10 +223,12 @@ async def _process_single_result(
             config = {}
 
         success = False
+        message_log = ""
         if ch.channel_type == "telegram":
             chat_id = config.get("chat_id")
             if chat_id:
                 success = await send_alert(str(chat_id), tg_text)
+                message_log = tg_text
             else:
                 logger.warning(
                     "Telegram channel %d (user %d) is missing chat_id in config; skipping",
@@ -220,9 +238,31 @@ async def _process_single_result(
             webhook_url = config.get("webhook_url")
             if webhook_url:
                 success = await send_webhook(str(webhook_url), dc_embed)
+                message_log = str(dc_embed)
             else:
                 logger.warning(
                     "Discord channel %d (user %d) is missing webhook_url in config; skipping",
+                    ch.id, user_id,
+                )
+        elif ch.channel_type == "email":
+            email_to = config.get("email_to")
+            if email_to:
+                email_body = build_email_body(
+                    symbol=symbol, score=score, direction=direction,
+                    entry=entry, stop_loss=stop_loss, target=target,
+                    rationale=rationale,
+                )
+                # send_email is synchronous — run in executor
+                success = await asyncio.to_thread(
+                    send_email,
+                    to_address=email_to,
+                    subject=f"Trade Alert: {symbol} ({direction.upper()}, {score}/100)",
+                    body=email_body,
+                )
+                message_log = email_body
+            else:
+                logger.warning(
+                    "Email channel %d (user %d) is missing email_to in config; skipping",
                     ch.id, user_id,
                 )
         else:
@@ -237,7 +277,7 @@ async def _process_single_result(
             channel=ch.channel_type,
             score=score,
             direction=direction,
-            message=tg_text if ch.channel_type == "telegram" else str(dc_embed),
+            message=message_log,
             status=alert_status,
         )
         session.add(log_entry)

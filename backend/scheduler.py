@@ -208,11 +208,36 @@ async def run_scheduled_scan() -> None:
             logger.exception("Scheduled scan: unexpected failure (scan_run=%d)", scan_run_id)
 
 
+# ── Price alert check job ──────────────────────────────────────────────────
+
+
+async def _check_price_alerts_job() -> None:
+    """APScheduler job callback — check all active price alerts.
+
+    Fetches current prices for all symbols with active alerts, triggers
+    those whose level has been hit, and sends notifications via the user's
+    enabled alert channels.
+    """
+    logger.info("Price alert check: starting")
+    factory = get_session_factory()
+    async with factory() as session:
+        try:
+            from backend.services.price_alert_service import check_price_alerts
+            outcomes = await check_price_alerts(session)
+            triggered = [o for o in outcomes if o.get("status") == "triggered"]
+            logger.info(
+                "Price alert check: %d triggered out of %d checked",
+                len(triggered), len(outcomes),
+            )
+        except Exception as exc:
+            logger.exception("Price alert check failed: %s", exc)
+
+
 # ── Lifecycle helpers ──────────────────────────────────────────────────────
 
 
 def setup_scheduler(app) -> AsyncIOScheduler:
-    """Configure the scheduler, attach the 4-hour scan and daily digest jobs.
+    """Configure the scheduler, attach the 4-hour scan, price alert checks, and daily digest jobs.
 
     Call once at application startup (inside the lifespan context).
     """
@@ -222,6 +247,13 @@ def setup_scheduler(app) -> AsyncIOScheduler:
         trigger=CronTrigger(hour="*/4"),  # every 4 hours
         id="watchlist_scan",
         name="Watchlist scan (every 4h)",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _check_price_alerts_job,
+        trigger=CronTrigger(minute="*/15"),  # every 15 minutes
+        id="price_alert_check",
+        name="Price alert check (every 15m)",
         replace_existing=True,
     )
     # Register the daily digest job

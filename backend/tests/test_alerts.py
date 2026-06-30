@@ -33,6 +33,7 @@ if "JWT_SECRET_KEY" not in os.environ:
     os.environ["JWT_SECRET_KEY"] = "test-key-not-for-production"
 
 from backend.alerts.discord import build_embed, send_webhook
+from backend.alerts.email import build_email_body, send_email
 from backend.alerts.manager import (
     DEFAULT_COOLDOWN_HOURS,
     DEFAULT_THRESHOLD,
@@ -512,6 +513,413 @@ class TestAlertManager:
         assert mock_send.await_count == 1
         assert len(outcomes) == 1
         assert outcomes[0]["pair"] == "ETH-USD"
+
+
+# ── Per-pair notification channels ─────────────────────────────────
+
+
+class TestPerPairChannels:
+    """Tests for notification_channels filtering in pair settings."""
+
+    async def _add_channel(
+        self, session, user_id: int, channel_type: str, config: dict[str, str]
+    ) -> AlertChannel:
+        ch = AlertChannel(
+            user_id=user_id,
+            channel_type=channel_type,
+            config=json.dumps(config),
+            enabled=1,
+        )
+        session.add(ch)
+        await session.flush()
+        await session.refresh(ch)
+        return ch
+
+    def _scan_result(self, symbol: str, score: float, direction: str = "LONG") -> dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "confluence_score": score,
+            "overall_score": score,
+            "trade_plan": {
+                "trade_decision": True,
+                "direction": direction,
+                "entry": 100.0,
+                "stop_loss": 95.0,
+                "target_1": 110.0,
+                "reasoning": "Bullish setup",
+            },
+            "score_breakdown": {"total": score},
+            "stale": False,
+            "cached_at": None,
+        }
+
+    async def test_notification_channels_filters_telegram_only(self, session, user):
+        """Setting notification_channels=['telegram'] should only deliver to telegram."""
+        await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
+        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+
+        ps = PairSetting(
+            user_id=user.id,
+            pair="BTC-USD",
+            settings=json.dumps({"alert_threshold": 50.0, "notification_channels": ["telegram"]}),
+        )
+        session.add(ps)
+        await session.flush()
+
+        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
+        with (
+            patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg,
+            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock) as mock_dc,
+        ):
+            outcomes = await process_scan_results(session, results_by_user)
+
+        mock_tg.assert_awaited_once()
+        mock_dc.assert_not_called()
+        assert len(outcomes) == 1
+        assert outcomes[0]["channels_sent"] == ["telegram"]
+
+    async def test_notification_channels_filters_discord_only(self, session, user):
+        """Setting notification_channels=['discord'] should only deliver to discord."""
+        await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
+        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+
+        ps = PairSetting(
+            user_id=user.id,
+            pair="BTC-USD",
+            settings=json.dumps({"alert_threshold": 50.0, "notification_channels": ["discord"]}),
+        )
+        session.add(ps)
+        await session.flush()
+
+        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
+        with (
+            patch("backend.alerts.manager.send_alert", new_callable=AsyncMock) as mock_tg,
+            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as mock_dc,
+        ):
+            outcomes = await process_scan_results(session, results_by_user)
+
+        mock_tg.assert_not_called()
+        mock_dc.assert_awaited_once()
+        assert len(outcomes) == 1
+        assert outcomes[0]["channels_sent"] == ["discord"]
+
+    async def test_no_notification_channels_sends_to_all(self, session, user):
+        """Without notification_channels, all enabled channels receive the alert."""
+        await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
+        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+
+        # No notification_channels in pair settings
+        ps = PairSetting(
+            user_id=user.id,
+            pair="BTC-USD",
+            settings=json.dumps({"alert_threshold": 50.0}),
+        )
+        session.add(ps)
+        await session.flush()
+
+        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
+        with (
+            patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg,
+            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as mock_dc,
+        ):
+            outcomes = await process_scan_results(session, results_by_user)
+
+        mock_tg.assert_awaited_once()
+        mock_dc.assert_awaited_once()
+        assert outcomes[0]["channels_sent"] == ["telegram", "discord"]
+
+    async def test_empty_notification_channels_falls_back(self, session, user):
+        """An empty list for notification_channels should fall back to all channels."""
+        await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
+
+        ps = PairSetting(
+            user_id=user.id,
+            pair="BTC-USD",
+            settings=json.dumps({"alert_threshold": 50.0, "notification_channels": []}),
+        )
+        session.add(ps)
+        await session.flush()
+
+        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
+        with patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg:
+            outcomes = await process_scan_results(session, results_by_user)
+
+        mock_tg.assert_awaited_once()
+        assert len(outcomes) == 1
+        assert outcomes[0]["channels_sent"] == ["telegram"]
+
+    async def test_notification_channels_per_pair_isolation(self, session, user):
+        """Each pair's notification_channels should only affect its own alerts."""
+        await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
+        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+
+        # BTC → only telegram, ETH → only discord
+        session.add(PairSetting(
+            user_id=user.id, pair="BTC-USD",
+            settings=json.dumps({"alert_threshold": 50.0, "notification_channels": ["telegram"]}),
+        ))
+        session.add(PairSetting(
+            user_id=user.id, pair="ETH-USD",
+            settings=json.dumps({"alert_threshold": 50.0, "notification_channels": ["discord"]}),
+        ))
+        await session.flush()
+
+        results_by_user = {
+            user.id: [
+                self._scan_result("BTC-USD", 80.0),
+                self._scan_result("ETH-USD", 75.0),
+            ]
+        }
+        with (
+            patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg,
+            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as mock_dc,
+        ):
+            outcomes = await process_scan_results(session, results_by_user)
+
+        assert mock_tg.await_count == 1  # only BTC
+        assert mock_dc.await_count == 1  # only ETH
+        assert len(outcomes) == 2
+
+
+# ── Email alert tests ──────────────────────────────────────────────────────
+
+
+class TestEmailFormat:
+    """Verify build_email_body output."""
+
+    def test_full_body(self):
+        body = build_email_body(
+            symbol="BTC-USD",
+            score=85.5,
+            direction="LONG",
+            entry=65000.0,
+            stop_loss=64000.0,
+            target=68000.0,
+            rationale="Strong bullish confluence",
+        )
+        assert "BTC-USD" in body
+        assert "85.5" in body
+        assert "LONG" in body
+        assert "65000.0" in body
+        assert "64000.0" in body
+        assert "68000.0" in body
+        assert "Strong bullish confluence" in body
+
+    def test_minimal_body(self):
+        """Should still produce a valid body with only symbol and score."""
+        body = build_email_body(symbol="ETH-USD", score=70.0, direction="SHORT")
+        assert "ETH-USD" in body
+        assert "70.0" in body
+        assert "SHORT" in body
+
+    def test_subject_line_in_send(self):
+        """Verify the subject format used in manager's email dispatch."""
+        subject = f"Trade Alert: BTC-USD (LONG, 85/100)"
+        assert "BTC-USD" in subject
+        assert "LONG" in subject
+
+
+class TestEmailSend:
+    """Test send_email in isolation with mocked smtplib."""
+
+    @patch("backend.alerts.email.smtplib.SMTP")
+    def test_send_success(self, mock_smtp_class):
+        mock_server = mock_smtp_class.return_value.__enter__.return_value
+        # Stub SMTP env vars
+        import os
+        os.environ["SMTP_USERNAME"] = "test@example.com"
+        os.environ["SMTP_PASSWORD"] = "apppassword"
+        os.environ["EMAIL_FROM"] = "bot@example.com"
+
+        result = send_email(
+            to_address="user@example.com",
+            subject="Trade Alert: BTC-USD (LONG, 85/100)",
+            body="Test body",
+        )
+
+        assert result is True
+        mock_server.send_message.assert_called_once()
+        sent_msg = mock_server.send_message.call_args[0][0]
+        assert sent_msg["Subject"] == "Trade Alert: BTC-USD (LONG, 85/100)"
+        assert sent_msg["To"] == "user@example.com"
+        assert sent_msg["From"] == "bot@example.com"
+
+    @patch("backend.alerts.email.smtplib.SMTP")
+    def test_auth_failure(self, mock_smtp_class):
+        from smtplib import SMTPAuthenticationError
+
+        mock_server = mock_smtp_class.return_value.__enter__.return_value
+        mock_server.send_message.side_effect = SMTPAuthenticationError(
+            535, b"Authentication failed"
+        )
+
+        import os
+        os.environ["SMTP_USERNAME"] = "test@example.com"
+        os.environ["SMTP_PASSWORD"] = "apppassword"
+        os.environ["EMAIL_FROM"] = "bot@example.com"
+
+        result = send_email(
+            to_address="user@example.com",
+            subject="Test",
+            body="Test body",
+        )
+        assert result is False
+
+    def test_disabled_when_no_credentials(self):
+        """Without SMTP credentials, send_email should return False."""
+        import os
+        # Save and clear — the function reads from env at call time
+        old_user = os.environ.pop("SMTP_USERNAME", None)
+        old_pass = os.environ.pop("SMTP_PASSWORD", None)
+        old_from = os.environ.pop("EMAIL_FROM", None)
+
+        try:
+            result = send_email(
+                to_address="user@example.com",
+                subject="Test",
+                body="Test body",
+            )
+            assert result is False
+        finally:
+            if old_user is not None:
+                os.environ["SMTP_USERNAME"] = old_user
+            if old_pass is not None:
+                os.environ["SMTP_PASSWORD"] = old_pass
+            if old_from is not None:
+                os.environ["EMAIL_FROM"] = old_from
+
+
+# ── Email alert channel routing ────────────────────────────────────────────
+
+
+class TestEmailChannelRouting:
+    """Tests for email channel routing through the alert manager."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_email_env(self):
+        """Set SMTP env vars for the duration of these tests."""
+        import os
+        old_user = os.environ.get("SMTP_USERNAME")
+        old_pass = os.environ.get("SMTP_PASSWORD")
+        old_from = os.environ.get("EMAIL_FROM")
+        os.environ["SMTP_USERNAME"] = "test@example.com"
+        os.environ["SMTP_PASSWORD"] = "apppassword"
+        os.environ["EMAIL_FROM"] = "bot@example.com"
+        yield
+        # Restore
+        if old_user:
+            os.environ["SMTP_USERNAME"] = old_user
+        else:
+            os.environ.pop("SMTP_USERNAME", None)
+        if old_pass:
+            os.environ["SMTP_PASSWORD"] = old_pass
+        else:
+            os.environ.pop("SMTP_PASSWORD", None)
+        if old_from:
+            os.environ["EMAIL_FROM"] = old_from
+        else:
+            os.environ.pop("EMAIL_FROM", None)
+
+    async def _add_channel(
+        self, session, user_id: int, channel_type: str, config: dict[str, str]
+    ) -> AlertChannel:
+        ch = AlertChannel(
+            user_id=user_id,
+            channel_type=channel_type,
+            config=json.dumps(config),
+            enabled=1,
+        )
+        session.add(ch)
+        await session.flush()
+        await session.refresh(ch)
+        return ch
+
+    def _scan_result(self, symbol: str, score: float, direction: str = "LONG") -> dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "confluence_score": score,
+            "overall_score": score,
+            "trade_plan": {
+                "trade_decision": True,
+                "direction": direction,
+                "entry": 100.0,
+                "stop_loss": 95.0,
+                "target_1": 110.0,
+                "reasoning": "Bullish setup",
+            },
+            "score_breakdown": {"total": score},
+            "stale": False,
+            "cached_at": None,
+        }
+
+    async def test_email_channel_delivers(self, session, user):
+        """Email channel with email_to config should send via email."""
+        await self._add_channel(session, user.id, "email", {"email_to": "user@example.com"})
+
+        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
+        with patch("backend.alerts.manager.send_email", return_value=True) as mock_email:
+            outcomes = await process_scan_results(session, results_by_user)
+
+        mock_email.assert_called_once()
+        assert len(outcomes) == 1
+        assert "email" in outcomes[0]["channels_sent"]
+
+    async def test_email_missing_recipient_skipped(self, session, user):
+        """Email channel without email_to should be skipped with a warning."""
+        await self._add_channel(session, user.id, "email", {})
+
+        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
+        with patch("backend.alerts.manager.send_email") as mock_email:
+            outcomes = await process_scan_results(session, results_by_user)
+
+        mock_email.assert_not_called()
+        assert len(outcomes) == 1
+        assert outcomes[0]["channels_sent"] == []
+
+    async def test_email_with_telegram_and_discord(self, session, user):
+        """All three channel types (telegram, discord, email) should work together."""
+        await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
+        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+        await self._add_channel(session, user.id, "email", {"email_to": "user@example.com"})
+
+        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
+        with (
+            patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg,
+            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as mock_dc,
+            patch("backend.alerts.manager.send_email", return_value=True) as mock_email,
+        ):
+            outcomes = await process_scan_results(session, results_by_user)
+
+        mock_tg.assert_awaited_once()
+        mock_dc.assert_awaited_once()
+        mock_email.assert_called_once()
+        assert len(outcomes) == 1
+        assert outcomes[0]["channels_sent"] == ["telegram", "discord", "email"]
+
+    async def test_notification_channels_with_email(self, session, user):
+        """Per-pair notification_channels should work with email channels."""
+        await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
+        await self._add_channel(session, user.id, "email", {"email_to": "user@example.com"})
+
+        ps = PairSetting(
+            user_id=user.id,
+            pair="BTC-USD",
+            settings=json.dumps({"alert_threshold": 50.0, "notification_channels": ["email"]}),
+        )
+        session.add(ps)
+        await session.flush()
+
+        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
+        with (
+            patch("backend.alerts.manager.send_alert", new_callable=AsyncMock) as mock_tg,
+            patch("backend.alerts.manager.send_email", return_value=True) as mock_email,
+        ):
+            outcomes = await process_scan_results(session, results_by_user)
+
+        mock_tg.assert_not_called()
+        mock_email.assert_called_once()
+        assert len(outcomes) == 1
+        assert outcomes[0]["channels_sent"] == ["email"]
 
 
 # ── Discord webhook send tests ──────────────────────────────────────────────

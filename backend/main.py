@@ -11,6 +11,7 @@ from backend.routes import (
     auth_router,
     history_router,
     macro_router,
+    price_alerts_router,
     results_router,
     scan_router,
     settings_router,
@@ -80,6 +81,7 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(history_router)
 app.include_router(macro_router)
+app.include_router(price_alerts_router)
 app.include_router(results_router)
 app.include_router(settings_router)
 app.include_router(watchlist_router)
