@@ -166,6 +166,27 @@ def _score_color(score: float | None) -> str:
     return "#ef4444"
 
 
+def _confirm_delete(pending_id: int) -> None:
+    """Execute a confirmed delete for the given history entry id, then re-fetch."""
+    token = get_auth_token()
+    if not token:
+        st.error("Session expired. Please sign in again.")
+        st.session_state[_DELETE_KEY] = None
+        st.rerun()
+        return
+
+    result = delete_analysis(pending_id, token)
+    if result.get("success"):
+        st.session_state[_DELETE_KEY] = None
+        selected = st.session_state.get(_SELECTED_KEY, [])
+        st.session_state[_SELECTED_KEY] = [i for i in selected if i != pending_id]
+        _fetch()
+    else:
+        st.error(result.get("error", "Delete failed."))
+        st.session_state[_DELETE_KEY] = None
+    st.rerun()
+
+
 # ---------------------------------------------------------------------------
 # Page UI
 # ---------------------------------------------------------------------------
@@ -407,41 +428,17 @@ for i, row in enumerate(rows):
 
     # Actions
     with cols[6]:
-        act = st.columns([1, 1])
-        with act[0]:
+        act_cols = st.columns([1, 1])
+        with act_cols[0]:
             if st.button("👁 View", key=f"view_{row_id}", use_container_width=True):
                 # Set query param BEFORE navigating
                 st.query_params["symbol"] = row["symbol"]
                 st.switch_page("pages/analysis.py")
 
-        with act[1]:
-            if is_pending:
-                # Confirm / Cancel inline
-                confirm_c = st.columns([1, 1])
-                with confirm_c[0]:
-                    if st.button("✓", key=f"cfm_{row_id}", use_container_width=True):
-                        token = get_auth_token()
-                        if token:
-                            del_result = delete_analysis(row_id, token)
-                            if del_result.get("success"):
-                                st.session_state[_DELETE_KEY] = None
-                                st.session_state[_SELECTED_KEY] = [
-                                    i for i in selected_ids if i != row_id
-                                ]
-                                _fetch()
-                                st.rerun()
-                            else:
-                                st.error(del_result.get("error", "Delete failed."))
-                        st.session_state[_DELETE_KEY] = None
-                        st.rerun()
-                with confirm_c[1]:
-                    if st.button("✗", key=f"cnl_{row_id}", use_container_width=True):
-                        st.session_state[_DELETE_KEY] = None
-                        st.rerun()
-            else:
-                if st.button("🗑", key=f"del_{row_id}", use_container_width=True):
-                    st.session_state[_DELETE_KEY] = row_id
-                    st.rerun()
+        with act_cols[1]:
+            if st.button("🗑 Delete", key=f"del_{row_id}", use_container_width=True):
+                st.session_state[_DELETE_KEY] = row_id
+                st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -510,3 +507,33 @@ if pages_total > 1:
             st.rerun()
 else:
     st.caption(f"Page 1 of 1 — {total} total analyses")
+
+# ── Delete confirmation dialog ──────────────────────────────────────────────
+
+pending_delete_id = st.session_state.get(_DELETE_KEY)
+if pending_delete_id is not None and rows:
+    target_row = next((r for r in rows if r["id"] == pending_delete_id), None)
+    symbol_name = target_row["symbol"] if target_row else "this analysis"
+
+    with st.container(border=True):
+        st.warning(
+            f"🗑 Delete analysis for **{symbol_name}**? "
+            "This action cannot be undone."
+        )
+        col_yes, col_no = st.columns([1, 1])
+        with col_yes:
+            if st.button(
+                "Yes, delete",
+                type="primary",
+                key="confirm_del_yes",
+                use_container_width=True,
+            ):
+                _confirm_delete(pending_delete_id)
+        with col_no:
+            if st.button(
+                "Cancel",
+                key="confirm_del_no",
+                use_container_width=True,
+            ):
+                st.session_state[_DELETE_KEY] = None
+                st.rerun()

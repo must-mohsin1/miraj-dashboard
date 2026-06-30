@@ -123,7 +123,13 @@ async def _fetch_usdt_dominance() -> tuple[Optional[float], Optional[str]]:
 
 
 async def _fetch_dxy() -> tuple[Optional[float], Optional[str]]:
-    """DXY (US Dollar Index) from FRED API or fallback web scrape."""
+    """DXY (US Dollar Index) from FRED API or fallback web scrape.
+
+    Requires ``FRED_API_KEY`` environment variable.  When the key is set
+    and the FRED API responds, the value from series ``DTWEXBGS`` is
+    returned.  If the key is not set, a clear message is returned as the
+    error so the dashboard can show actionable guidance instead of ``—``.
+    """
     api_key = os.environ.get("FRED_API_KEY")
     if api_key:
         data = await _fetch_json(
@@ -144,12 +150,10 @@ async def _fetch_dxy() -> tuple[Optional[float], Optional[str]]:
                 return None, "DXY value is '.' (not yet available)"
             except (KeyError, IndexError, ValueError) as exc:
                 return None, f"Unexpected FRED response: {exc}"
-        # FRED responded but with an error — fall through to fallback
+        # FRED API key was set but the request failed
+        return None, "FRED API error — could not fetch DXY data"
 
-    # Fallback: investing.com or a free DXY tracking site
-    # For now we note the missing config; further integrations can add a
-    # web-scrape parser here.
-    return None, "FRED API key not configured (set FRED_API_KEY env var)"
+    return None, "Set FRED_API_KEY for DXY data"
 
 
 async def _fetch_fear_greed() -> (
@@ -317,10 +321,14 @@ def build_response() -> dict[str, Any]:
     stale = is_stale()
     errors: list[dict[str, str]] = []
 
+    dxy_val = _cache["dxy"]["value"]
+    dxy_err = _cache["dxy"]["error"]
+
     data = {
         "btc_dominance": _cache["btc_dominance"]["value"],
         "usdt_dominance": _cache["usdt_dominance"]["value"],
-        "dxy": _cache["dxy"]["value"],
+        "dxy": dxy_val,
+        "dxy_error": dxy_err if dxy_val is None else None,
         "fear_greed_index": _cache["fear_greed_index"]["value"],
         "fear_greed_label": _cache["fear_greed_label"]["value"],
         "binance_ls_ratio": _cache["binance_ls_ratio"]["value"],

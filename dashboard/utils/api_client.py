@@ -167,6 +167,27 @@ def get_analysis(symbol: str, token: str) -> dict:
     return {"success": False, "error": str(detail)}
 
 
+def export_analysis(symbol: str, fmt: str, token: str) -> requests.Response | dict:
+    """Download the analysis for *symbol* as a CSV or PDF file.
+
+    ``fmt`` must be ``"csv"`` or ``"pdf"``.
+
+    Returns the raw ``requests.Response`` on success (status 200), or a
+    fallback dict ``{\"success\": False, \"error\": ...}`` on failure.
+    """
+    r = _request("POST", f"/api/v1/scan/{symbol}/export?format={fmt}", token=token, timeout=120)
+    if "_resp" not in r:
+        return r
+    resp = r["_resp"]
+    if resp.status_code == 200:
+        return resp
+    try:
+        detail = resp.json().get("detail", "Export failed")
+    except Exception:
+        detail = resp.text or "Export failed"
+    return {"success": False, "error": str(detail)}
+
+
 def scan_batch(token: str) -> dict:
     """
     POST /api/v1/scan/batch

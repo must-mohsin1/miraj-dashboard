@@ -153,9 +153,10 @@ def render_macro_cards(data: dict[str, Any]) -> None:
         )
     with col3:
         dxy = data.get("dxy")
+        dxy_error = data.get("dxy_error")
         _render_metric_card(
             "DXY Index",
-            f"{dxy:.2f}" if dxy is not None else "—",
+            f"{dxy:.2f}" if dxy is not None else (dxy_error or "—"),
             _COLORS["dxy"],
         )
 

@@ -435,8 +435,10 @@ confirm_pair_name = st.session_state.get(_CONFIRM_PAIR_KEY, "")
 
 if confirm_pair is not None:
     with st.container(border=True):
-        st.markdown(f"**Remove {confirm_pair_name}?**")
-        st.caption("This will remove the pair from your watchlist. This action cannot be undone.")
+        st.warning(
+            f"**Remove {confirm_pair_name}?** "
+            "This will remove the pair from your watchlist. This action cannot be undone."
+        )
 
         col_yes, col_no = st.columns([1, 1])
         with col_yes:

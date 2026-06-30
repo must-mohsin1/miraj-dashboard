@@ -41,13 +41,16 @@ _BATCH_KEY = "scanner_batch_data"    # raw dict from batch scan endpoint
 _PAIRS_KEY = "scanner_pairs"         # list of symbol strings
 _LOADING_KEY = "scanner_loading"
 _ERROR_KEY = "scanner_error"
-_RESCAN_KEY = "scanner_rescan_symbol"  # single-pair rescan in progress
+_RESCAN_KEY = "scanner_rescan_symbol"   # single-pair rescan in progress
+_AUTO_KEY = "scanner_auto_triggered"    # auto-triggered initial scan done
 
 
 def _init_state() -> None:
     for key in (_BATCH_KEY, _PAIRS_KEY, _LOADING_KEY, _ERROR_KEY, _RESCAN_KEY):
         if key not in st.session_state:
             st.session_state[key] = None
+    if _AUTO_KEY not in st.session_state:
+        st.session_state[_AUTO_KEY] = False
 
 
 _init_state()
@@ -189,6 +192,29 @@ if not pairs:
         if st.button("⚙️ Go to Watchlist Settings", type="secondary"):
             st.switch_page("pages/settings.py")
     st.stop()
+
+# ---------------------------------------------------------------------------
+# Auto-trigger initial batch scan
+# ---------------------------------------------------------------------------
+# When pairs exist but no batch results yet (e.g. after seeding pairs in
+# Settings), fire one automatic batch scan so the user sees analysis data
+# immediately instead of empty placeholder rows.
+if (
+    st.session_state.get(_BATCH_KEY) is None
+    and not st.session_state.get(_LOADING_KEY)
+    and not st.session_state.get(_AUTO_KEY)
+):
+    st.session_state[_AUTO_KEY] = True
+    st.session_state[_LOADING_KEY] = True
+    with st.spinner("Running initial analysis on watchlist pairs…"):
+        result = scan_batch(token)
+    if result.get("success"):
+        st.session_state[_BATCH_KEY] = result.get("data", {})
+        st.session_state[_ERROR_KEY] = None
+    else:
+        st.session_state[_ERROR_KEY] = result.get("error", "Initial scan failed.")
+        st.session_state[_BATCH_KEY] = None
+    st.session_state[_LOADING_KEY] = False
 
 # ---------------------------------------------------------------------------
 # Error banner

@@ -19,7 +19,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -29,6 +30,7 @@ from backend.models import Analysis, User, WatchlistPair
 from backend.obsidian import get_vault_path, is_sync_enabled, sync_scan_result
 
 from backend.services.analysis_service import get_cached_or_none, run_scan, validate_symbol
+from backend.services.export_service import generate_csv, generate_pdf
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["scan"])
@@ -190,6 +192,71 @@ async def scan_symbol(
         )
 
     return result
+
+
+@router.post(
+    "/scan/{symbol}/export",
+    responses={
+        400: {"model": ScanErrorResponse, "description": "Invalid symbol or format"},
+        502: {"model": ScanErrorResponse},
+    },
+)
+async def export_analysis(
+    symbol: str,
+    format: str = Query("csv", pattern="^(csv|pdf)$"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Any:
+    """Export the current analysis for *symbol* as CSV or PDF.
+
+    The pipeline is triggered (or cached result returned) exactly like
+    ``scan_symbol``, then the result is serialised into the requested
+    format and returned as a file download.
+    """
+    symbol = symbol.strip().upper()
+
+    # Validate symbol first
+    if not validate_symbol(symbol):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid symbol: '{symbol}' is not a valid trading pair on Yahoo Finance",
+        )
+
+    # Run (or fetch cached) analysis
+    try:
+        result = await asyncio.to_thread(run_scan, symbol)
+    except RuntimeError as exc:
+        logger.error("Export pipeline failed for %s: %s", symbol, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error during export for %s", symbol)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Analysis service error: {exc}",
+        ) from exc
+
+    # Serialise to requested format
+    if format == "csv":
+        csv_content = generate_csv(result)
+        return StreamingResponse(
+            iter([csv_content]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="{symbol}_analysis.csv"',
+            },
+        )
+    else:  # pdf
+        pdf_bytes = generate_pdf(result)
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{symbol}_analysis.pdf"',
+            },
+        )
 
 
 # ── Batch scan route is defined in routes/watchlist.py ──────────────────

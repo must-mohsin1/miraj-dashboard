@@ -59,6 +59,7 @@ from dashboard.pages.scanner import (
     _direction_icon,
     _extract_rows,
     _format_time,
+    _AUTO_KEY,
     _BATCH_KEY,
     _LOADING_KEY,
     _ERROR_KEY,
@@ -316,6 +317,31 @@ if rows:
     check("direction correct", rows[0]["direction"] == "LONG")
     check("analysis_time from cached_at", rows[0]["analysis_time"] == "2026-06-29 14:00 UTC")
     check("error None", rows[0]["error"] is None)
+
+# =========================================================================
+# Session state — _AUTO_KEY initialisation
+# =========================================================================
+
+print("\n=== Session state: _AUTO_KEY initialisation ===")
+
+# Clear and init fresh
+_st_session_state.clear()
+_init_state()
+
+check("_AUTO_KEY starts as False",
+      _st_session_state.get(_AUTO_KEY) is False)
+
+# _AUTO_KEY persists and is NOT reset by a second init
+_prev_auto = _st_session_state.get(_AUTO_KEY)
+_init_state()  # idempotent — should not overwrite
+check("_AUTO_KEY survives second init (idempotent)",
+      _st_session_state.get(_AUTO_KEY) is _prev_auto)
+
+# Other keys still start as None
+check("_BATCH_KEY starts as None",
+      _st_session_state.get(_BATCH_KEY) is None)
+check("_LOADING_KEY starts as None",
+      _st_session_state.get(_LOADING_KEY) is None)
 
 # =========================================================================
 # Summary

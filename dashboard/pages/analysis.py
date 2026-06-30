@@ -25,7 +25,7 @@ import streamlit as st
 
 from dashboard.components.chart_viewer import render_chart
 from dashboard.components.score_chart import render_score_chart
-from dashboard.utils.api_client import get_analysis, scan_symbol
+from dashboard.utils.api_client import export_analysis, get_analysis, scan_symbol
 from dashboard.utils.session import get_auth_token, is_authenticated
 
 # ---------------------------------------------------------------------------
@@ -343,3 +343,49 @@ if result is not None:
         )
     else:
         st.caption("Candle data not available for chart rendering.")
+
+    # --- Export buttons (CSV / PDF) ---
+    st.markdown("---")
+    st.subheader("📥 Export Report")
+    col_csv, col_pdf = st.columns(2)
+
+    token = get_auth_token()
+    with col_csv:
+        csv_btn = st.button("📄 Download CSV", type="secondary", use_container_width=True)
+        if csv_btn and token:
+            with st.spinner("Generating CSV…"):
+                resp = export_analysis(sym, "csv", token)
+            if isinstance(resp, dict) and not resp.get("success", True):
+                st.error(f"CSV export failed: {resp.get('error', 'Unknown error')}")
+            elif hasattr(resp, "content"):
+                st.download_button(
+                    label="📄 Save CSV",
+                    data=resp.content,
+                    file_name=f"{sym}_analysis.csv",
+                    mime="text/csv",
+                    key="csv_download",
+                    type="primary",
+                    use_container_width=True,
+                )
+            else:
+                st.error("CSV export returned an unexpected response.")
+
+    with col_pdf:
+        pdf_btn = st.button("📕 Download PDF", type="secondary", use_container_width=True)
+        if pdf_btn and token:
+            with st.spinner("Generating PDF…"):
+                resp = export_analysis(sym, "pdf", token)
+            if isinstance(resp, dict) and not resp.get("success", True):
+                st.error(f"PDF export failed: {resp.get('error', 'Unknown error')}")
+            elif hasattr(resp, "content"):
+                st.download_button(
+                    label="📕 Save PDF",
+                    data=resp.content,
+                    file_name=f"{sym}_analysis.pdf",
+                    mime="application/pdf",
+                    key="pdf_download",
+                    type="primary",
+                    use_container_width=True,
+                )
+            else:
+                st.error("PDF export returned an unexpected response.")
