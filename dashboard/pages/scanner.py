@@ -432,9 +432,8 @@ if rows:
         col_idx = i % len(link_cols)
         with link_cols[col_idx]:
             st.page_link(
-                "pages/analysis.py",
+                f"pages/analysis.py?symbol={sym}",
                 label=f"{sym}",
-                params={"symbol": sym},
             )
 
 # ---------------------------------------------------------------------------
