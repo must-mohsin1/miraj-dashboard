@@ -126,6 +126,35 @@ def bull_market_support_band(
     return {"sma20": sma20, "ema21": ema21}
 
 
+def compute_atr(
+    df: pd.DataFrame,
+    period: int = config.ATR_PERIOD,
+) -> pd.Series:
+    """Compute Average True Range (ATR) for volatility-based stop placement.
+
+    Uses Wilder's smoothing (exponential MA with alpha=1/period), matching the
+    approach used by ``wilder_rsi``.
+
+    Returns a Series aligned to ``df``.  The last value is the most recent ATR.
+    """
+    high = df["High"]
+    low = df["Low"]
+    close = df["Close"]
+    prev_close = close.shift(1)
+
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    atr = tr.ewm(alpha=1.0 / period, min_periods=period).mean()
+    return atr
+
+
 def compute_all(
     df: pd.DataFrame,
 ) -> dict[str, object]:

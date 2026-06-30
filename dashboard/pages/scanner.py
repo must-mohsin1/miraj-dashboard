@@ -139,6 +139,7 @@ def _extract_rows(batch_data: dict) -> list[dict[str, Any]]:
             "analysis_time": _format_time(
                 item.get("analysis_time")
                 or tp.get("analysis_time")
+                or item.get("cached_at")  # backend returns cached_at, not analysis_time
             ),
             "error": None,
         })
@@ -243,7 +244,10 @@ if scan_all_clicked:
         st.session_state[_ERROR_KEY] = result.get("error", "Batch scan failed.")
         st.session_state[_BATCH_KEY] = None
     st.session_state[_LOADING_KEY] = False
-    st.rerun()
+    # Refresh local vars so the table renders with the new data on this
+    # execution rather than requiring a second script re-run.
+    batch_data = st.session_state.get(_BATCH_KEY)
+    is_loading = False
 
 # ---------------------------------------------------------------------------
 # Handle per-pair rescan (triggered by the "Rescan" button below the table)

@@ -79,3 +79,8 @@ RSI_ENTRY_ALLOCATIONS = (0.20, 0.20, 0.60)
 RSI_SHORT_ENTRY_L1 = 80
 RSI_SHORT_ENTRY_L2 = 92
 RSI_SHORT_ENTRY_L3 = 95
+
+# ── Risk management ────────────────────────────────────────────────────────
+ATR_PERIOD = 14                    # lookback for ATR calculation
+ATR_STOP_MULTIPLIER = 1.5         # stop = entry ± (ATR * multiplier)
+RISK_PERCENT = 0.005              # fallback: 0.5 % when ATR unavailable

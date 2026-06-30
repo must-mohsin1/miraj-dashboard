@@ -81,12 +81,13 @@ def _format_risk_reward(
     entry: float, target: float, stop: float, direction: str
 ) -> str:
     """Calculate and format risk:reward ratio."""
-    if entry == stop:
+    risk_distance = abs(entry - stop)
+    if risk_distance < 0.001:
         return "—"
     if direction.upper() == "LONG":
-        r_multiple = (target - entry) / (entry - stop)
+        r_multiple = (target - entry) / risk_distance
     else:
-        r_multiple = (entry - target) / (stop - entry)
+        r_multiple = (entry - target) / risk_distance
     return f"1:{r_multiple:.1f}"
 
 
@@ -172,14 +173,15 @@ def _render_trade_plan(
         st.markdown("**Stop Loss:** —")
 
     if targets:
+        risk_dist = abs(entry - stop) if stop is not None else 0.0
         st.markdown("**Targets:**")
         for i, tgt in enumerate(targets, 1):
             rr = (
                 _format_risk_reward(entry, tgt, stop, direction)
-                if stop is not None and stop != entry
+                if stop is not None and risk_dist > 0.001
                 else "—"
             )
-            progress_pct = abs(tgt - entry) / abs(stop - entry) * 100 if stop and stop != entry else 0
+            progress_pct = abs(tgt - entry) / risk_dist * 100 if risk_dist > 0 else 0
             st.markdown(
                 f"&nbsp;&nbsp;**T{i}:** {_format_price(tgt)} &nbsp;"
                 f"<span style='color:#22c55e'>(R:R {rr})</span>",

@@ -2,54 +2,12 @@
 Chart Viewer — interactive Plotly candlestick chart component.
 
 Renders a full-featured candlestick chart with:
-- OHLC candles with volume
-- EMA overlay (configurable periods)
-- Order blocks (bullish / bearish) as coloured rectangles
+- OHLC candles (top panel, 70% height)
+- Volume bars (bottom panel, 30% height)
+- EMA overlay on price panel
+- Order blocks (bullish/bearish) as coloured regions
 - Fair Value Gaps (FVGs) as highlighted regions
 - Range slider for zoom + date navigation
-
-Data shapes expected
---------------------
-``candles``::
-
-    [
-        {"time": "2024-01-01", "open": 42000, "high": 42500,
-         "low": 41800, "close": 42300, "volume": 1.2e9},
-        ...
-    ]
-
-``emas``::
-
-    {
-        "ema_9": [{"time": "2024-01-01", "value": 42150}, ...],
-        "ema_21": [{"time": "2024-01-01", "value": 41980}, ...],
-        "ema_50": [{"time": "2024-01-01", "value": 41500}, ...],
-    }
-
-``order_blocks``::
-
-    [
-        {
-            "start_time": "2024-01-03",
-            "end_time": "2024-01-05",
-            "price_high": 42500,
-            "price_low": 42000,
-            "type": "bullish",        # or "bearish"
-        },
-        ...
-    ]
-
-``fvgs``::
-
-    [
-        {
-            "start_time": "2024-01-07",
-            "end_time": "2024-01-08",
-            "gap_high": 43000,
-            "gap_low": 42700,
-        },
-        ...
-    ]
 """
 
 from __future__ import annotations
@@ -57,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 # ---------------------------------------------------------------------------
@@ -64,31 +23,26 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 
 _OB_COLORS = {
-    "bullish": "rgba(34, 197, 94, 0.15)",
-    "bearish": "rgba(239, 68, 68, 0.15)",
+    "bullish": "rgba(34, 197, 94, 0.12)",
+    "bearish": "rgba(239, 68, 68, 0.12)",
 }
 
 _OB_BORDER = {
-    "bullish": "rgba(34, 197, 94, 0.5)",
-    "bearish": "rgba(239, 68, 68, 0.5)",
+    "bullish": "rgba(34, 197, 94, 0.45)",
+    "bearish": "rgba(239, 68, 68, 0.45)",
 }
 
-_FVG_COLOR = "rgba(250, 204, 21, 0.12)"
-_FVG_BORDER = "rgba(250, 204, 21, 0.4)"
+_FVG_COLOR = "rgba(250, 204, 21, 0.10)"
+_FVG_BORDER = "rgba(250, 204, 21, 0.35)"
 
 _EMA_COLORS: dict[str, str] = {
-    "ema_9": "#60a5fa",    # blue-400
-    "ema_21": "#f59e0b",   # amber-500
-    "ema_50": "#a78bfa",   # violet-400
+    "ema_9": "#60a5fa",
+    "ema_21": "#f59e0b",
+    "ema_50": "#a78bfa",
 }
 
-
-def _candle_colour(bearish: bool = False) -> str:
-    return "#ef4444" if bearish else "#22c55e"
-
-
 # ---------------------------------------------------------------------------
-# Chart builder
+# Trace builders
 # ---------------------------------------------------------------------------
 
 
@@ -116,15 +70,18 @@ def _build_candlestick(candles: list[dict[str, Any]]) -> go.Candlestick:
 
 def _build_volume(candles: list[dict[str, Any]]) -> go.Bar:
     colours = [
-        _candle_colour(bearish=c["close"] < c["open"]) for c in candles
+        "rgba(34, 197, 94, 0.5)" if c["close"] >= c["open"] else "rgba(239, 68, 68, 0.5)"
+        for c in candles
     ]
     return go.Bar(
         x=[c["time"] for c in candles],
         y=[c["volume"] for c in candles],
         name="Volume",
-        marker=dict(color=colours, line=dict(width=0)),
-        yaxis="y2",
-        hovertemplate="Volume: %{y:,.0f}<extra></extra>",
+        marker=dict(
+            color=colours,
+            line=dict(width=0),
+        ),
+        hovertemplate="Vol: %{y:,.0f}<extra></extra>",
         showlegend=False,
     )
 
@@ -136,23 +93,22 @@ def _build_emas(emas: dict[str, list[dict[str, Any]]]) -> list[go.Scatter]:
         if not series:
             continue
         colour = _EMA_COLORS.get(period, "#94a3b8")
+        label = period.replace("ema_", "EMA ").upper()
         traces.append(
             go.Scatter(
                 x=[s["time"] for s in series],
                 y=[s["value"] for s in series],
                 mode="lines",
-                name=period.upper(),
-                line=dict(color=colour, width=1.2),
-                hovertemplate=f"{period.upper()}: %{{y:$,.2f}}<extra></extra>",
+                name=label,
+                line=dict(color=colour, width=1.5),
+                hovertemplate=f"{label}: %{{y:$,.2f}}<extra></extra>",
+                legendgroup="emas",
             )
         )
     return traces
 
 
-def _build_order_blocks(
-    order_blocks: list[dict[str, Any]],
-) -> list[go.Scatter]:
-    """Render order blocks as filled rectangles via scatter traces."""
+def _build_order_blocks(order_blocks: list[dict[str, Any]]) -> list[go.Scatter]:
     traces: list[go.Scatter] = []
     for i, ob in enumerate(order_blocks):
         ob_type = ob.get("type", "bullish")
@@ -171,7 +127,9 @@ def _build_order_blocks(
                 name=label,
                 legendgroup=f"ob_{i}",
                 showlegend=i == 0,
-                hovertext=f"{label}<br>${ob['price_low']:,.2f} \u2013 ${ob['price_high']:,.2f}",
+                hovertext=(
+                    f"{label}<br>${ob['price_low']:,.2f} – ${ob['price_high']:,.2f}"
+                ),
                 hoverinfo="text",
             )
         )
@@ -179,7 +137,6 @@ def _build_order_blocks(
 
 
 def _build_fvgs(fvgs: list[dict[str, Any]]) -> list[go.Scatter]:
-    """Render FVGs as semi-transparent filled regions."""
     traces: list[go.Scatter] = []
     for i, fvg in enumerate(fvgs):
         traces.append(
@@ -189,8 +146,8 @@ def _build_fvgs(fvgs: list[dict[str, Any]]) -> list[go.Scatter]:
                     fvg.get("end_time", ""),
                     fvg.get("end_time", ""),
                     fvg.get("start_time", ""),
-                    ],
-                    y=[
+                ],
+                y=[
                     fvg.get("price_low", 0),
                     fvg.get("price_low", 0),
                     fvg.get("price_high", 0),
@@ -225,99 +182,120 @@ def render_chart(
     symbol: str = "",
     key: str = "chart_viewer",
 ) -> None:
-    """
-    Render an interactive Plotly candlestick chart with optional overlays.
-
-    Parameters
-    ----------
-    candles:
-        OHLCV data array (required).
-    emas:
-        Dict of EMA period to array of {time, value}.
-    order_blocks:
-        Array of order-block regions (rectangles).
-    fvgs:
-        Array of FVG regions (highlighted gaps).
-    symbol:
-        Trading pair label for the chart title.
-    key:
-        Streamlit widget key for isolation.
-    """
+    """Render an interactive Plotly candlestick chart with volume subplot."""
     if not candles:
         st.info("No candle data available to render.")
         return
 
-    fig = go.Figure()
+    # ── Subplot grid: price (70%) + volume (30%), shared x-axis ────────
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.72, 0.28],
+        subplot_titles=("", ""),
+    )
 
-    # --- Candles ---
-    candlestick = _build_candlestick(candles)
-    fig.add_trace(candlestick)
+    # ── Price panel (row 1) ────────────────────────────────────────────
+    fig.add_trace(_build_candlestick(candles), row=1, col=1)
 
-    # --- Volume ---
-    volume = _build_volume(candles)
-    fig.add_trace(volume)
-
-    # --- EMAs ---
     if emas:
         for trace in _build_emas(emas):
-            fig.add_trace(trace)
+            fig.add_trace(trace, row=1, col=1)
 
-    # --- Order Blocks ---
     if order_blocks:
         for trace in _build_order_blocks(order_blocks):
-            fig.add_trace(trace)
+            fig.add_trace(trace, row=1, col=1)
 
-    # --- FVGs ---
     if fvgs:
         for trace in _build_fvgs(fvgs):
-            fig.add_trace(trace)
+            fig.add_trace(trace, row=1, col=1)
 
-    # ------------------------------------------------------------------
-    # Layout
-    # ------------------------------------------------------------------
-    title = f"Candlestick Chart \u2014 {symbol}" if symbol else "Candlestick Chart"
+    # ── Volume panel (row 2) ───────────────────────────────────────────
+    fig.add_trace(_build_volume(candles), row=2, col=1)
+
+    # ── Layout ─────────────────────────────────────────────────────────
+    title = f"{symbol}" if symbol else "Candlestick Chart"
 
     fig.update_layout(
-        title=dict(text=title, font=dict(size=16, color="#f1f5f9"), x=0),
-        # Price axis
-        yaxis=dict(
-            title="Price (USD)",
-            side="right",
-            gridcolor="#334155",
-            zeroline=False,
-            tickformat="$,.0f",
-        ),
-        # Volume axis
-        yaxis2=dict(
-            title="Volume",
-            overlaying="y",
-            side="left",
-            position=0,
-            showgrid=False,
-            zeroline=False,
-            visible=False,
-        ),
-        xaxis=dict(
-            rangeslider=dict(visible=True, thickness=0.08),
-            type="date",
-            gridcolor="#334155",
-            zeroline=False,
+        title=dict(
+            text=title,
+            font=dict(size=15, color="#e2e8f0"),
+            x=0.02,
+            xanchor="left",
         ),
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#94a3b8"),
-        margin=dict(l=20, r=80, t=40, b=20),
-        height=550,
+        plot_bgcolor="rgba(15, 23, 42, 0.3)",
+        font=dict(color="#94a3b8", size=11),
+        margin=dict(l=10, r=20, t=40, b=10),
+        height=600,
         hovermode="x unified",
+        hoverlabel=dict(
+            bgcolor="#1e293b",
+            font=dict(size=12, color="#e2e8f0"),
+            bordercolor="#334155",
+        ),
         legend=dict(
             orientation="h",
-            y=1.02,
+            y=1.04,
             x=0,
             xanchor="left",
-            font=dict(size=11),
-            bgcolor="rgba(15, 23, 42, 0.8)",
+            font=dict(size=10),
+            bgcolor="rgba(15, 23, 42, 0.7)",
+            bordercolor="#334155",
+            borderwidth=1,
         ),
-        dragmode="zoom",
+        dragmode="pan",
+    )
+
+    # ── Price y-axis (row 1) ───────────────────────────────────────────
+    fig.update_yaxes(
+        title_text="Price",
+        side="right",
+        gridcolor="#1e293b",
+        zeroline=False,
+        tickformat="$,.0f",
+        tickfont=dict(color="#94a3b8", size=10),
+        row=1, col=1,
+    )
+
+    # ── Volume y-axis (row 2) ──────────────────────────────────────────
+    fig.update_yaxes(
+        title_text="Volume",
+        side="right",
+        gridcolor="#1e293b",
+        zeroline=False,
+        tickformat=".2s",
+        tickfont=dict(color="#64748b", size=9),
+        title_font=dict(color="#64748b", size=10),
+        row=2, col=1,
+    )
+
+    # ── Shared x-axis ──────────────────────────────────────────────────
+    fig.update_xaxes(
+        rangeslider=dict(visible=False),
+        gridcolor="#1e293b",
+        zeroline=False,
+        tickfont=dict(color="#94a3b8", size=10),
+        row=1, col=1,
+    )
+    fig.update_xaxes(
+        rangeslider=dict(visible=True, thickness=0.06, bgcolor="#1e293b"),
+        gridcolor="#1e293b",
+        zeroline=False,
+        tickfont=dict(color="#64748b", size=9),
+        row=2, col=1,
+    )
+
+    # ── Modebar ────────────────────────────────────────────────────────
+    fig.update_layout(
+        modebar=dict(
+            bgcolor="rgba(15, 23, 42, 0.5)",
+            color="#64748b",
+            activecolor="#94a3b8",
+            orientation="h",
+        ),
     )
 
     st.plotly_chart(fig, use_container_width=True, key=key)

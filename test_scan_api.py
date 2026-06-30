@@ -38,6 +38,7 @@ from backend.services.analysis_service import (
     clear_cache,
     get_cached_or_none,
     run_scan,
+    validate_symbol,
     _is_stale,
     _build_confluence_data,
     _simplify_indicator_summary,
@@ -415,6 +416,56 @@ def test_run_scan_yfinance_failure():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Symbol validation tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _make_valid_df() -> pd.DataFrame:
+    """Return a minimal non-empty DataFrame as yfinance would return."""
+    idx = pd.date_range(start="2026-06-28", periods=1, freq="D")
+    return pd.DataFrame(
+        {"Open": [100.0], "High": [105.0], "Low": [99.0], "Close": [102.0], "Volume": [10000]},
+        index=idx,
+    )
+
+
+def test_validate_symbol_valid():
+    """Known valid symbol should return True."""
+    with patch("backend.services.analysis_service.yf.download",
+               return_value=_make_valid_df()):
+        result = validate_symbol("BTC-USD")
+    assert result is True, f"Expected True for valid symbol, got {result}"
+
+    global P, F
+    P += 1
+    print("  PASS test_validate_symbol_valid")
+
+
+def test_validate_symbol_invalid():
+    """Bogus symbol should return False (empty DataFrame)."""
+    with patch("backend.services.analysis_service.yf.download",
+               return_value=pd.DataFrame()):
+        result = validate_symbol("INVALID-USD")
+    assert result is False, f"Expected False for invalid symbol, got {result}"
+
+    global P, F
+    P += 1
+    print("  PASS test_validate_symbol_invalid")
+
+
+def test_validate_symbol_exception():
+    """When yfinance raises, validate_symbol should return False."""
+    with patch("backend.services.analysis_service.yf.download",
+               side_effect=Exception("network error")):
+        result = validate_symbol("BROKEN")
+    assert result is False, f"Expected False on exception, got {result}"
+
+    global P, F
+    P += 1
+    print("  PASS test_validate_symbol_exception")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Endpoint test
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -499,6 +550,13 @@ async def main():
     test_run_scan_success()
     test_run_scan_caching()
     test_run_scan_yfinance_failure()
+    print()
+
+    # ── Symbol validation tests ────────────────────────────────────
+    print("--- Symbol validation ---")
+    test_validate_symbol_valid()
+    test_validate_symbol_invalid()
+    test_validate_symbol_exception()
     print()
 
     # ── Endpoint integration (needs server) ────────────────────────

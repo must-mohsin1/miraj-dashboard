@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import sys
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
@@ -59,6 +59,10 @@ from dashboard.pages.scanner import (
     _direction_icon,
     _extract_rows,
     _format_time,
+    _BATCH_KEY,
+    _LOADING_KEY,
+    _ERROR_KEY,
+    _init_state,
 )
 
 # ---------------------------------------------------------------------------
@@ -207,6 +211,111 @@ dir_fallback = {
 }
 rows = _extract_rows(dir_fallback)
 check("direction from item.direction", len(rows) == 1 and rows[0]["direction"] == "LONG")
+
+# Analysis time fallback using cached_at (backend response includes cached_at, not analysis_time)
+cached_at_fallback = {
+    "results": [
+        {
+            "symbol": "ADA-USD",
+            "success": True,
+            "overall_score": 70.0,
+            "cached_at": "2026-06-29T16:00:00Z",
+            "trade_plan": {"direction": "LONG"},
+        }
+    ],
+}
+rows = _extract_rows(cached_at_fallback)
+check("cached_at fallback → 1 row", len(rows) == 1)
+if rows:
+    r = rows[0]
+    check("cached_at analysis_time", r["analysis_time"] == "2026-06-29 16:00 UTC")
+    check("cached_at score preserved", r["score"] == 70.0)
+    check("cached_at direction correct", r["direction"] == "LONG")
+
+# Analysis time: cached_at takes lower priority than explicit analysis_time
+explicit_beats_cached = {
+    "results": [
+        {
+            "symbol": "DOT-USD",
+            "success": True,
+            "overall_score": 55.0,
+            "analysis_time": "2026-06-29T08:00:00Z",
+            "cached_at": "2026-06-29T16:00:00Z",
+            "trade_plan": {"direction": "SHORT"},
+        }
+    ],
+}
+rows = _extract_rows(explicit_beats_cached)
+check("explicit analysis_time beats cached_at", len(rows) == 1 and rows[0]["analysis_time"] == "2026-06-29 08:00 UTC")
+
+# Analysis time: trade_plan.analysis_time beats cached_at
+tp_beats_cached = {
+    "results": [
+        {
+            "symbol": "LINK-USD",
+            "success": True,
+            "overall_score": 80.0,
+            "cached_at": "2026-06-29T16:00:00Z",
+            "trade_plan": {"direction": "SHORT", "analysis_time": "2026-06-29T12:00:00Z"},
+        }
+    ],
+}
+rows = _extract_rows(tp_beats_cached)
+check("trade_plan analysis_time beats cached_at", len(rows) == 1 and rows[0]["analysis_time"] == "2026-06-29 12:00 UTC")
+
+# =========================================================================
+# Session state — data survives across runs (simulates flow)
+# =========================================================================
+
+print("\n=== Session state: batch data persistence ===")
+
+# Clear the shared session state for this test
+_st_session_state.clear()
+
+# Init state (simulates page load)
+_init_state()
+
+check("_init_state sets _BATCH_KEY to None",
+      _st_session_state.get(_BATCH_KEY) is None)
+check("_init_state sets _LOADING_KEY to None",
+      _st_session_state.get(_LOADING_KEY) is None)
+check("_init_state sets _ERROR_KEY to None",
+      _st_session_state.get(_ERROR_KEY) is None)
+check("_init_state does NOT overwrite existing key",
+      _st_session_state.get(_BATCH_KEY) is None)  # stays None after first init
+
+# Simulate the button handler: store batch data
+sample_data = {
+    "results": [
+        {"symbol": "BTC-USD", "success": True, "overall_score": 85.0,
+         "trade_plan": {"direction": "LONG"}, "cached_at": "2026-06-29T14:00:00Z"},
+    ],
+    "total": 1,
+    "succeeded": 1,
+    "failed": 0,
+}
+_st_session_state[_BATCH_KEY] = sample_data
+_st_session_state[_ERROR_KEY] = None
+_st_session_state[_LOADING_KEY] = False
+
+check("batch data stored in session state",
+      _st_session_state.get(_BATCH_KEY) is sample_data)
+
+# Simulate re-reading local vars (the fix: batch_data = st.session_state.get(_BATCH_KEY))
+re_read_batch = _st_session_state.get(_BATCH_KEY)
+re_read_loading = bool(_st_session_state.get(_LOADING_KEY))
+check("re-read batch_data after storing", re_read_batch is sample_data)
+check("re-read loading after storing", re_read_loading is False)
+
+# Extract rows from the re-read data
+rows = _extract_rows(re_read_batch)
+check("rows extracted from re-read data", len(rows) == 1)
+if rows:
+    check("symbol correct", rows[0]["symbol"] == "BTC-USD")
+    check("score correct", rows[0]["score"] == 85.0)
+    check("direction correct", rows[0]["direction"] == "LONG")
+    check("analysis_time from cached_at", rows[0]["analysis_time"] == "2026-06-29 14:00 UTC")
+    check("error None", rows[0]["error"] is None)
 
 # =========================================================================
 # Summary

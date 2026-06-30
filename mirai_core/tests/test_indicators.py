@@ -93,6 +93,65 @@ class TestBullMarketSupportBand:
         assert "ema21" in band
 
 
+class TestATR:
+    """Average True Range computation."""
+
+    def test_atr_positive_values(self):
+        """ATR values are always positive (after warmup)."""
+        np.random.seed(42)
+        idx = pd.date_range("2024-01-01", periods=200, freq="D")
+        df = pd.DataFrame(
+            {
+                "Open": np.cumsum(np.random.randn(200)) + 100,
+                "High": np.cumsum(np.random.randn(200)) + 102,
+                "Low": np.cumsum(np.random.randn(200)) + 98,
+                "Close": np.cumsum(np.random.randn(200)) + 100,
+                "Volume": np.random.randint(1000, 10000, 200),
+            },
+            index=idx,
+        )
+        atr = indicators.compute_atr(df)
+        valid = atr.dropna()
+        assert len(valid) > 0
+        assert (valid > 0).all()
+
+    def test_atr_constant_range(self):
+        """ATR of constant-range data smooths to that range."""
+        np.random.seed(42)
+        idx = pd.date_range("2024-01-01", periods=100, freq="D")
+        # Every bar has High=102, Low=98 → true range always 4.0
+        df = pd.DataFrame(
+            {
+                "Open": 100.0,
+                "High": 102.0,
+                "Low": 98.0,
+                "Close": 100.0,
+                "Volume": 5000,
+            },
+            index=idx,
+        )
+        atr = indicators.compute_atr(df, period=14)
+        last = atr.dropna().iloc[-1]
+        # After warmup, ATR should converge close to 4.0
+        assert abs(last - 4.0) < 0.5
+
+    def test_atr_short_data_returns_nan(self):
+        """ATR returns NaN when data is shorter than period."""
+        idx = pd.date_range("2024-01-01", periods=5, freq="D")
+        df = pd.DataFrame(
+            {
+                "Open": 100.0,
+                "High": 102.0,
+                "Low": 98.0,
+                "Close": 100.0,
+                "Volume": 5000,
+            },
+            index=idx,
+        )
+        atr = indicators.compute_atr(df, period=14)
+        assert atr.isna().all()
+
+
 class TestComputeAll:
     """compute_all returns all indicators."""
 

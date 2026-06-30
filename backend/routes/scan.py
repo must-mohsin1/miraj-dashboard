@@ -7,6 +7,7 @@ POST /api/v1/scan/{symbol}
     Responses
     --------
     200 — analysis result with confluence score, trade plan, score breakdown.
+    400 — invalid symbol (not a valid Yahoo Finance ticker).
     502 — critical upstream API (yfinance / CoinGecko) failure.
 """
 
@@ -27,7 +28,7 @@ from backend.database import get_session
 from backend.models import Analysis, User, WatchlistPair
 from backend.obsidian import get_vault_path, is_sync_enabled, sync_scan_result
 
-from backend.services.analysis_service import get_cached_or_none, run_scan
+from backend.services.analysis_service import get_cached_or_none, run_scan, validate_symbol
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["scan"])
@@ -82,7 +83,10 @@ class ScanErrorResponse(BaseModel):
 @router.post(
     "/scan/{symbol}",
     response_model=ScanResponse,
-    responses={502: {"model": ScanErrorResponse}},
+    responses={
+        400: {"model": ScanErrorResponse, "description": "Invalid symbol"},
+        502: {"model": ScanErrorResponse},
+    },
 )
 async def scan_symbol(
     symbol: str,
@@ -96,6 +100,13 @@ async def scan_symbol(
     """
     # Normalise symbol (uppercase, strip whitespace)
     symbol = symbol.strip().upper()
+
+    # ── Validate symbol ────────────────────────────────────────────
+    if not validate_symbol(symbol):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid symbol: '{symbol}' is not a valid trading pair on Yahoo Finance",
+        )
 
     # ── Check for fresh cache ──────────────────────────────────────
     cached = get_cached_or_none(symbol)

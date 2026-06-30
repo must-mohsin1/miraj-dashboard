@@ -1,9 +1,9 @@
 """
 Session state management for Streamlit dashboard.
 
-Handles JWT token storage, expiry checking, and logout.
-Token is stored in st.session_state (survives page navigations) and
-restored from query params on full page refresh.
+Token stored in st.session_state (survives page navigations) and
+mirrored to st.query_params so the URL always carries the session.
+On bare-URL navigation, query params restore the session.
 """
 
 import json
@@ -13,19 +13,14 @@ from typing import Optional
 
 
 def init_session_state() -> None:
-    """Initialise all session state variables on first run, restoring from query params if available."""
+    """Initialise all session state variables."""
     if "auth_token" not in st.session_state:
         st.session_state.auth_token = None
     if "user_email" not in st.session_state:
         st.session_state.user_email = None
-    if "_just_logged_out" not in st.session_state:
-        st.session_state._just_logged_out = False
 
-    # Restore from query params if available (survives hard refresh).
-    # Skip this if the user explicitly logged out this cycle — the query
-    # params may not have been cleared synchronously by the time st.rerun()
-    # triggers the next script execution, so a stale token would be restored.
-    if not st.session_state.auth_token and not st.session_state._just_logged_out:
+    # Restore from query params (survives hard refresh — URL carries session)
+    if not st.session_state.auth_token:
         qt = st.query_params.get("token")
         if qt:
             st.session_state.auth_token = qt
@@ -33,82 +28,75 @@ def init_session_state() -> None:
         if qe:
             st.session_state.user_email = qe
 
-    # Clear the flag after this run so a subsequent hard-refresh or
-    # re-login still restores from query params as expected.
-    st.session_state._just_logged_out = False
+    # If authenticated, ensure query params are present so refresh works
+    _sync_query_params()
+
+
+def _sync_query_params() -> None:
+    """Ensure query params reflect current session state."""
+    token = st.session_state.get("auth_token")
+    if token:
+        current_token = st.query_params.get("token")
+        if current_token != token:
+            st.query_params["token"] = token
+        email = st.session_state.get("user_email")
+        if email:
+            current_email = st.query_params.get("email")
+            if current_email != email:
+                st.query_params["email"] = email
 
 
 def _decode_jwt_payload(token: str) -> Optional[dict]:
-    """
-    Decode the JWT payload *without* verifying the signature.
-
-    This is a client-side convenience for checking the ``exp`` claim.
-    The server is the single source of truth for token validity.
-    """
+    """Decode JWT payload without signature verification."""
     try:
         payload_b64 = token.split(".")[1]
-        # Restore padding stripped by URL-safe base64
         padding = 4 - len(payload_b64) % 4
         if padding != 4:
             payload_b64 += "=" * padding
         import base64
-
         return json.loads(base64.b64decode(payload_b64))
     except (IndexError, ValueError, json.JSONDecodeError):
         return None
 
 
 def is_authenticated() -> bool:
-    """
-    Return ``True`` if a valid (non-expired) JWT is in session state.
-
-    Quick client-side expiry check avoids waiting for a 401 on every
-    page load.  Actual auth enforcement still happens server-side.
-    """
+    """Return True if a valid (non-expired) JWT is in session state."""
     token = st.session_state.get("auth_token")
     if not token:
         return False
-
     payload = _decode_jwt_payload(token)
     if payload is None:
         return False
-
     exp = payload.get("exp", 0)
     if not isinstance(exp, (int, float)):
         return False
-
-    # Allow 30 s leeway for clock skew
     if exp < time.time() - 30:
         return False
-
     return True
 
 
 def set_auth_token(token: str, email: Optional[str] = None) -> None:
-    """Persist the JWT (and optionally the user email) to session state."""
+    """Persist JWT to session state and query params."""
     st.session_state.auth_token = token
     if email:
         st.session_state.user_email = email
-
-    # Set query params to token+email so they survive a hard refresh
     st.query_params["token"] = token
     if email:
         st.query_params["email"] = email
 
 
 def get_auth_token() -> Optional[str]:
-    """Return the current JWT, or ``None`` if not authenticated."""
+    """Return current JWT or None."""
     return st.session_state.get("auth_token")
 
 
 def get_user_email() -> Optional[str]:
-    """Return the logged-in user's email, or ``None``."""
+    """Return logged-in user's email or None."""
     return st.session_state.get("user_email")
 
 
 def logout() -> None:
-    """Clear auth state — effectively logs the user out."""
+    """Clear auth state and query params."""
     st.session_state.auth_token = None
     st.session_state.user_email = None
-    st.session_state._just_logged_out = True  # Prevent stale query param restore
     st.query_params.clear()

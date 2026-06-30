@@ -36,6 +36,7 @@ if _MIRAI_PARENT not in sys.path:
     sys.path.insert(0, _MIRAI_PARENT)
 
 from mirai_core import ohlcv, indicators, qqe_mod, smc, patterns, confluence, trade_plan, charts, macro
+import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,19 @@ _cache: dict[str, dict[str, Any]] = {}  # symbol → {data, cached_at}
 
 
 # ── Public API ───────────────────────────────────────────────────────────
+
+
+def validate_symbol(symbol: str) -> bool:
+    """Quick-check if *symbol* is a valid yfinance ticker.
+
+    Returns ``False`` for bogus / non-existent tickers within ~2-5s
+    instead of letting the full pipeline hang for 60s+.
+    """
+    try:
+        df = yf.download(symbol, period="1d", interval="1d", progress=False)
+        return df is not None and not df.empty
+    except Exception:
+        return False
 
 
 def run_scan(symbol: str) -> dict[str, Any]:
@@ -166,7 +180,7 @@ def run_scan(symbol: str) -> dict[str, Any]:
         if rsi_series is not None and hasattr(rsi_series, "iloc") and len(rsi_series) > 0:
             rsi_val = float(rsi_series.iloc[-1])
 
-    price_levels = _extract_price_levels(timeframes, smc_result)
+    price_levels = _extract_price_levels(timeframes, smc_result, direction="LONG")
 
     try:
         trade_plan_result = trade_plan.generate_trade_plan(
@@ -439,32 +453,103 @@ def _ribbon_aligned(tf_data: Any) -> bool:
 def _extract_price_levels(
     timeframes: dict[str, Any],
     smc_result: dict[str, Any],
+    direction: str = "LONG",
 ) -> dict[str, Any]:
-    """Extract price levels for trade plan generation."""
+    """Extract price levels for trade plan generation.
+
+    Computes entry zone from the first order block (if any), then derives
+    a volatility-based stop loss using ATR, and take-profit levels as
+    risk multiples.  Falls back to a percentage-based offset when ATR is
+    unavailable.
+    """
+    from mirai_core.config import ATR_STOP_MULTIPLIER, RISK_PERCENT
+
     levels: dict[str, Any] = {}
     daily = timeframes.get("daily")
     if daily is not None and not daily.empty:
-        levels["current_price"] = float(daily["Close"].iloc[-1])
-        levels["high_24h"] = float(daily["High"].iloc[-1])
-        levels["low_24h"] = float(daily["Low"].iloc[-1])
+        try:
+            levels["current_price"] = float(daily["Close"].iloc[-1])
+            levels["high_24h"] = float(daily["High"].iloc[-1])
+            levels["low_24h"] = float(daily["Low"].iloc[-1])
+        except (KeyError, IndexError, TypeError, ValueError):
+            pass
 
+    cp = levels.get("current_price")
+
+    # ── Entry zone from SMC order blocks ───────────────────────────
     obs = smc_result.get("order_blocks", [])
+    entry_zone_low: float | None = None
+    entry_zone_high: float | None = None
     if obs:
         zone = obs[0].get("zone", (None, None))
         if zone[0] is not None:
-            levels["entry_zone_low"] = float(zone[0])
-            levels["entry_zone_high"] = float(zone[1])
+            entry_zone_low = float(zone[0])
+            entry_zone_high = float(zone[1])
+            levels["entry_zone_low"] = entry_zone_low
+            levels["entry_zone_high"] = entry_zone_high
 
-    cp = levels.get("current_price")
-    ezl = levels.get("entry_zone_low")
-    if cp is not None and ezl is not None:
-        rr = abs(float(cp) - float(ezl))
-        if rr > 0:
-            levels["take_profit_1"] = round(float(cp) + rr, 2)
-            levels["take_profit_2"] = round(float(cp) + 2 * rr, 2)
-            levels["stop_loss"] = round(float(ezl), 2)
+    # ── Effective entry price ─────────────────────────────────────
+    entry_price: float | None
+    if entry_zone_low is not None:
+        entry_price = entry_zone_low
+    elif cp is not None:
+        entry_price = cp
+    else:
+        entry_price = None
+
+    if entry_price is None:
+        return levels
+
+    # ── ATR-based stop loss offset ────────────────────────────────
+    atr_val = _extract_atr(daily)
+    if atr_val is not None and atr_val > 0:
+        stop_offset = atr_val * ATR_STOP_MULTIPLIER
+    else:
+        stop_offset = cp * RISK_PERCENT if cp else entry_price * RISK_PERCENT
+
+    stop_offset = max(stop_offset, 0.01)  # minimum 1 cent offset
+
+    is_long = direction.upper() == "LONG"
+    if is_long:
+        stop_loss = entry_price - stop_offset
+    else:
+        stop_loss = entry_price + stop_offset
+
+    stop_loss = max(stop_loss, 0.01)  # positive price
+    levels["stop_loss"] = round(stop_loss, 2)
+
+    # ── Take-profit levels based on risk distance ─────────────────
+    risk_distance = abs(entry_price - stop_loss)
+    if risk_distance > 0.001:
+        if is_long:
+            levels["take_profit_1"] = round(entry_price + risk_distance, 2)
+            levels["take_profit_2"] = round(entry_price + 2.0 * risk_distance, 2)
+        else:
+            levels["take_profit_1"] = round(entry_price - risk_distance, 2)
+            levels["take_profit_2"] = round(entry_price - 2.0 * risk_distance, 2)
 
     return levels
+
+
+def _extract_atr(daily: Any) -> float | None:
+    """Compute the latest ATR value from a daily OHLCV DataFrame.
+
+    Returns the scalar ATR value, or ``None`` when the DataFrame is
+    too short to compute ATR or any required column is missing.
+    """
+    if daily is None:
+        return None
+    try:
+        required = {"High", "Low", "Close"}
+        if not required.issubset(daily.columns):
+            return None
+        atr_series = indicators.compute_atr(daily)
+        if atr_series is None or len(atr_series.dropna()) < 2:
+            return None
+        val = float(atr_series.iloc[-1])
+        return val if val > 0 else None
+    except Exception:
+        return None
 
 
 # ── UI-friendly data helpers ─────────────────────────────────────────────
