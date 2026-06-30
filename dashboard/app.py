@@ -134,10 +134,6 @@ if not is_authenticated():
 # Authenticated — sidebar navigation + logout
 # ---------------------------------------------------------------------------
 
-with st.sidebar:
-    st.markdown(f"Signed in as **{get_user_email() or '—'}**")
-    st.divider()
-
 # st.navigation replaces the auto-discovered page sidebar.
 # The homepage content lives in a dedicated home page.
 nav = st.navigation(
@@ -158,11 +154,14 @@ nav = st.navigation(
     position="sidebar",
 )
 
-# Logout button — rendered in the sidebar below the nav
+# Render navigation first, then add sidebar footer below it.
+# This ordering ensures the logout button's widget position is stable
+# and its event handler fires correctly on every page.
+nav.run()
+
 with st.sidebar:
+    st.markdown(f"Signed in as **{get_user_email() or '—'}**")
     st.divider()
     if st.button("🚪 Logout", use_container_width=True, type="secondary"):
         logout()
         st.rerun()
-
-nav.run()

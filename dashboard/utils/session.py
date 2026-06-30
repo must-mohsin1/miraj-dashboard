@@ -18,15 +18,24 @@ def init_session_state() -> None:
         st.session_state.auth_token = None
     if "user_email" not in st.session_state:
         st.session_state.user_email = None
+    if "_just_logged_out" not in st.session_state:
+        st.session_state._just_logged_out = False
 
-    # Restore from query params if available (survives hard refresh)
-    if not st.session_state.auth_token:
+    # Restore from query params if available (survives hard refresh).
+    # Skip this if the user explicitly logged out this cycle — the query
+    # params may not have been cleared synchronously by the time st.rerun()
+    # triggers the next script execution, so a stale token would be restored.
+    if not st.session_state.auth_token and not st.session_state._just_logged_out:
         qt = st.query_params.get("token")
         if qt:
             st.session_state.auth_token = qt
         qe = st.query_params.get("email")
         if qe:
             st.session_state.user_email = qe
+
+    # Clear the flag after this run so a subsequent hard-refresh or
+    # re-login still restores from query params as expected.
+    st.session_state._just_logged_out = False
 
 
 def _decode_jwt_payload(token: str) -> Optional[dict]:
@@ -101,5 +110,5 @@ def logout() -> None:
     """Clear auth state — effectively logs the user out."""
     st.session_state.auth_token = None
     st.session_state.user_email = None
-    # Clear query params
+    st.session_state._just_logged_out = True  # Prevent stale query param restore
     st.query_params.clear()
