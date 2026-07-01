@@ -415,15 +415,17 @@ def _fetch_positions(
         # PnL — ccxt returns null, use raw MEXC field
         pnl = float(pos.get("unrealizedPnl", 0) or pos.get("pnl", 0) or info.get("unRealizedPnl", 0) or 0)
 
-        # PnL percentage — ccxt returns null, use raw MEXC profitRatio
-        pnl_pct = float(pos.get("percentage", 0) or pos.get("pnl_percent", 0) or 0)
-        if pnl_pct == 0 and info.get("profitRatio"):
-            pnl_pct = float(info["profitRatio"]) * 100
-
+        # PnL percentage — compute from PnL / margin (ROI on position)
         leverage = float(pos.get("leverage", 1) or info.get("leverage", 1) or 1)
         liq_price = _safe_float(pos.get("liquidationPrice") or pos.get("liquidation_price") or info.get("liquidatePrice"))
         margin = float(pos.get("collateral", 0) or pos.get("margin", 0) or pos.get("initialMargin", 0) or info.get("oim", 0) or info.get("im", 0) or 0)
         side = pos.get("side", "long")
+
+        pnl_pct = 0.0
+        if pnl != 0 and margin > 0:
+            pnl_pct = (pnl / margin) * 100
+        elif info.get("profitRatio"):
+            pnl_pct = float(info["profitRatio"]) * 100
 
         # If mark_price is still 0, try fetching current ticker price
         if mark_price == 0 and entry_price > 0:
