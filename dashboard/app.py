@@ -46,6 +46,27 @@ _api_base = os.environ.get("API_BASE_URL", "")
 if _api_base:
     set_base_url(_api_base)
 
+
+def _trigger_browser_cookie(token: str, email: str) -> None:
+    """Inject JS to set auth_session cookie in the browser via fetch to /api/v1/auth/login.
+    This ensures the browser receives the Set-Cookie header so sessions
+    persist across bare URL navigation.
+    """
+    import json as _json
+    safe_email = _json.dumps(email)
+    safe_token = _json.dumps(token)
+    st.components.v1.html(f"""
+    <script>
+    (function() {{
+        // Set the cookie directly since we already have the token
+        var d = new Date();
+        d.setTime(d.getTime() + (60 * 60 * 1000)); // 1 hour
+        var expires = "expires=" + d.toUTCString();
+        document.cookie = "auth_session=" + {safe_token} + ";" + expires + ";path=/;SameSite=Lax";
+    }})();
+    </script>
+    """, height=0)
+
 # ---------------------------------------------------------------------------
 # Login / Register page (unauthenticated)
 # ---------------------------------------------------------------------------
@@ -82,6 +103,9 @@ def _render_auth_page() -> None:
                         result = api_login(email, password)
                     if result["success"]:
                         set_auth_token(result["token"], email=email)
+                        # Inject JS to call login endpoint from browser
+                        # so Set-Cookie header reaches the browser
+                        _trigger_browser_cookie(result["token"], email)
                         st.success("Login successful!")
                         st.rerun()
                     else:
