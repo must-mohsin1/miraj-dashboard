@@ -48,21 +48,8 @@ if _api_base:
 
 
 def _trigger_browser_cookie(token: str, email: str) -> None:
-    """Set auth_session cookie directly from JavaScript using the token.
-    Cookie is non-HttpOnly so JS can read it for session restore.
-    """
-    import json as _json
-    safe_token = _json.dumps(token)
-    st.html(f"""
-    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" onload="
-    (function() {{
-        var d = new Date();
-        d.setTime(d.getTime() + (60 * 60 * 1000));
-        var expires = 'expires=' + d.toUTCString();
-        document.cookie = 'auth_session=' + {safe_token} + ';' + expires + ';path=/;SameSite=Lax';
-    }})();
-    " />
-    """)
+    """No-op — cookie set via Caddy reverse_proxy + backend Set-Cookie header."""
+    pass
 
 # ---------------------------------------------------------------------------
 # Login / Register page (unauthenticated)
@@ -100,9 +87,25 @@ def _render_auth_page() -> None:
                         result = api_login(email, password)
                     if result["success"]:
                         set_auth_token(result["token"], email=email)
-                        # Inject JS to call login endpoint from browser
-                        # so Set-Cookie header reaches the browser
-                        _trigger_browser_cookie(result["token"], email)
+                        # Use JS fetch to login via browser so Set-Cookie header
+                        # reaches the browser. This sets auth_session cookie.
+                        import json as _json
+                        _email = _json.dumps(email)
+                        _password = _json.dumps(password)
+                        st.components.v1.html(f"""
+                        <iframe srcdoc='
+                        <script>
+                        fetch("/api/v1/auth/login", {{
+                            method: "POST",
+                            headers: {{"Content-Type": "application/json"}},
+                            body: JSON.stringify({{username: {_email}, password: {_password}}}),
+                            credentials: "include"
+                        }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
+                            window.parent.location.reload();
+                        }}).catch(function(e) {{}});
+                        </script>
+                        ' style="display:none" width="0" height="0"></iframe>
+                        """, height=0)
                         st.success("Login successful!")
                         st.rerun()
                     else:
