@@ -92,6 +92,7 @@ class BalanceItem(BaseModel):
     free: float
     locked: float
     total: float
+    usd_value: Optional[float] = None
 
 
 class PositionItem(BaseModel):
@@ -227,6 +228,7 @@ def _serialise_balance(row: PortfolioBalance) -> Dict[str, Any]:
         "free": row.free,
         "locked": row.locked,
         "total": row.total,
+        "usd_value": row.usd_value,
     }
 
 
@@ -614,6 +616,7 @@ async def _persist_portfolio_data(
             free=bal["free"],
             locked=bal["locked"],
             total=bal["total"],
+            usd_value=bal.get("usd_value"),
             updated_at=now,
         ))
 

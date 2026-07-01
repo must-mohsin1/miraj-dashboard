@@ -175,6 +175,7 @@ class PortfolioBalance(Base):
     free = Column(Float, nullable=False)
     locked = Column(Float, nullable=False)
     total = Column(Float, nullable=False)
+    usd_value = Column(Float, nullable=True)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="portfolio_balances")

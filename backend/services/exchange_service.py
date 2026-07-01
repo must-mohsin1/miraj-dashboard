@@ -172,6 +172,8 @@ def create_exchange_instance(
         "secret": api_secret,
         "enableRateLimit": True,
         "timeout": REQUEST_TIMEOUT_MS,
+        "recvWindow": 60000,
+        "adjustForTimeDifference": True,
     })
 
 
@@ -246,6 +248,8 @@ async def get_exchange(
         "secret": api_secret,
         "enableRateLimit": True,
         "timeout": REQUEST_TIMEOUT_MS,
+        "recvWindow": 60000,
+        "adjustForTimeDifference": True,
     })
 
 
@@ -302,28 +306,25 @@ def _fetch_balances(
 ) -> List[Dict[str, Any]]:
     """Fetch spot balances from the exchange, filtering out dust.
 
-    Dust assets (``free + locked < 1e-8``) are omitted before the result is
-    returned so that the DB is not bloated with zero-balance rows.
+    Also fetches ticker prices for USDT pairs to compute USD value.
     """
     try:
         raw = exchange.fetchBalance()
     except Exception as exc:
         raise _translate_ccxt_error(exc) from exc
 
+    # Parse balances
     result: List[Dict[str, Any]] = []
 
     for currency, data in raw.items():
         if not isinstance(data, dict) or "free" not in data:
-            # Skip non-balance entries: "info", "free", "used", "total" keys
-            # are top-level in the ccxt balance response (summary dicts, not
-            # per-currency balance dicts).
             continue
 
         free = float(data.get("free", 0) or 0)
         locked = float(data.get("used", 0) or 0)
         total = float(data.get("total", free + locked) or 0)
 
-        # Dust filter — skip assets with effectively zero balance
+        # Dust filter
         if free + locked < 1e-8:
             continue
 
@@ -334,9 +335,52 @@ def _fetch_balances(
             "free": free,
             "locked": locked,
             "total": total,
+            "usd_value": None,  # Will be filled below
         })
 
+    # Fetch ticker prices for USD valuation
+    if result:
+        _enrich_balance_usd_values(exchange, result)
+
     return result
+
+
+def _enrich_balance_usd_values(exchange: Any, balances: List[Dict[str, Any]]) -> None:
+    """Fetch ticker prices and set usd_value on each balance entry."""
+    # Build list of symbols to fetch
+    symbols = []
+    for bal in balances:
+        asset = bal["asset"].upper()
+        if asset in ("USDT", "USD", "USDC", "BUSD", "TUSD", "DAI"):
+            # Stablecoins: 1:1 USD
+            bal["usd_value"] = bal["total"]
+            continue
+        symbols.append(f"{asset}/USDT")
+
+    if not symbols:
+        return
+
+    # Fetch tickers in batch
+    try:
+        tickers = exchange.fetchTickers(symbols)
+    except Exception:
+        # Fallback: fetch one by one
+        tickers = {}
+        for sym in symbols:
+            try:
+                tickers[sym] = exchange.fetchTicker(sym)
+            except Exception:
+                continue
+
+    for bal in balances:
+        asset = bal["asset"].upper()
+        if asset in ("USDT", "USD", "USDC", "BUSD", "TUSD", "DAI"):
+            continue
+        symbol = f"{asset}/USDT"
+        ticker = tickers.get(symbol)
+        if ticker and ticker.get("last"):
+            price = float(ticker["last"])
+            bal["usd_value"] = bal["total"] * price
 
 
 def _fetch_positions(
@@ -360,19 +404,40 @@ def _fetch_positions(
 
     result: List[Dict[str, Any]] = []
     for pos in raw:
+        contracts = float(pos.get("contracts", 0) or pos.get("size", 0) or 0)
+        entry_price = float(pos.get("entryPrice", 0) or pos.get("entry_price", 0) or 0)
+        mark_price = float(pos.get("markPrice", 0) or pos.get("mark_price", 0) or 0)
+        pnl = float(pos.get("unrealizedPnl", 0) or pos.get("pnl", 0) or 0)
+        pnl_pct = float(pos.get("percentage", 0) or pos.get("pnl_percent", 0) or 0)
+        leverage = float(pos.get("leverage", 1) or 1)
+        liq_price = _safe_float(pos.get("liquidationPrice") or pos.get("liquidation_price"))
+        margin = float(pos.get("collateral", 0) or pos.get("margin", 0) or pos.get("initialMargin", 0) or 0)
+
+        # If mark_price is 0 but entry_price exists, use entry as fallback
+        if mark_price == 0 and entry_price > 0:
+            mark_price = entry_price
+
+        # If pnl is 0 but we can compute it
+        if pnl == 0 and contracts > 0 and entry_price > 0 and mark_price > 0:
+            side = pos.get("side", "long")
+            if side == "short":
+                pnl = (entry_price - mark_price) * contracts
+            else:
+                pnl = (mark_price - entry_price) * contracts
+
         result.append({
             "user_id": user_id,
             "exchange": exchange_name,
             "symbol": (pos.get("symbol") or "").replace("/", ""),
             "side": pos.get("side", "long"),
-            "size": float(pos.get("contracts", pos.get("size", 0)) or 0),
-            "entry_price": float(pos.get("entryPrice", 0) or 0),
-            "mark_price": float(pos.get("markPrice", 0) or 0),
-            "pnl": float(pos.get("unrealizedPnl", pos.get("pnl", 0)) or 0),
-            "pnl_percent": float(pos.get("percentage", 0) or 0),
-            "leverage": float(pos.get("leverage", 1) or 1),
-            "liquidation_price": _safe_float(pos.get("liquidationPrice")),
-            "margin": float(pos.get("collateral", pos.get("margin", 0)) or 0),
+            "size": contracts,
+            "entry_price": entry_price,
+            "mark_price": mark_price,
+            "pnl": pnl,
+            "pnl_percent": pnl_pct,
+            "leverage": leverage,
+            "liquidation_price": liq_price,
+            "margin": margin,
         })
 
     return result

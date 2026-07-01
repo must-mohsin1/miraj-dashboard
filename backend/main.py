@@ -32,10 +32,34 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create tables on startup (idempotent) and start the scheduler."""
+    """Create tables on startup, auto-migrate new columns, and start the scheduler."""
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # ── Auto-migrate: add missing columns to existing tables ──────────
+    # SQLite doesn't add new columns automatically via create_all.
+    # This block checks each known table and adds columns if missing.
+    import sqlite3 as _sqlite3
+    import os as _os
+    _db_path = _os.environ.get("DATABASE_URL", "crypto_analysis.db")
+    if _db_path.startswith("sqlite"):
+        _db_path = _db_path.replace("sqlite+aiosqlite:///", "").replace("sqlite:///", "")
+    try:
+        _conn = _sqlite3.connect(_db_path)
+        _cursor = _conn.cursor()
+
+        # Check portfolio_balances for usd_value column
+        _cursor.execute("PRAGMA table_info(portfolio_balances)")
+        _cols = [row[1] for row in _cursor.fetchall()]
+        if _cols and "usd_value" not in _cols:
+            _cursor.execute("ALTER TABLE portfolio_balances ADD COLUMN usd_value REAL")
+            logger.info("Migrated portfolio_balances: added usd_value column")
+
+        _conn.commit()
+        _conn.close()
+    except Exception as _e:
+        logger.warning("Auto-migration check failed (non-critical): %s", _e)
 
     # ── Validate alert / sync configs at startup ────────────────────
     import os as _os
