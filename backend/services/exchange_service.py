@@ -404,32 +404,54 @@ def _fetch_positions(
 
     result: List[Dict[str, Any]] = []
     for pos in raw:
-        contracts = float(pos.get("contracts", 0) or pos.get("size", 0) or 0)
-        entry_price = float(pos.get("entryPrice", 0) or pos.get("entry_price", 0) or 0)
+        info = pos.get("info", {})  # Raw MEXC API response
+
+        contracts = float(pos.get("contracts", 0) or pos.get("size", 0) or info.get("holdVol", 0) or 0)
+        entry_price = float(pos.get("entryPrice", 0) or pos.get("entry_price", 0) or info.get("holdAvgPrice", 0) or info.get("openAvgPrice", 0) or 0)
+
+        # Mark price — ccxt returns null for MEXC, try raw info or fetch from ticker
         mark_price = float(pos.get("markPrice", 0) or pos.get("mark_price", 0) or 0)
-        pnl = float(pos.get("unrealizedPnl", 0) or pos.get("pnl", 0) or 0)
+
+        # PnL — ccxt returns null, use raw MEXC field
+        pnl = float(pos.get("unrealizedPnl", 0) or pos.get("pnl", 0) or info.get("unRealizedPnl", 0) or 0)
+
+        # PnL percentage — ccxt returns null, use raw MEXC profitRatio
         pnl_pct = float(pos.get("percentage", 0) or pos.get("pnl_percent", 0) or 0)
-        leverage = float(pos.get("leverage", 1) or 1)
-        liq_price = _safe_float(pos.get("liquidationPrice") or pos.get("liquidation_price"))
-        margin = float(pos.get("collateral", 0) or pos.get("margin", 0) or pos.get("initialMargin", 0) or 0)
+        if pnl_pct == 0 and info.get("profitRatio"):
+            pnl_pct = float(info["profitRatio"]) * 100
 
-        # If mark_price is 0 but entry_price exists, use entry as fallback
+        leverage = float(pos.get("leverage", 1) or info.get("leverage", 1) or 1)
+        liq_price = _safe_float(pos.get("liquidationPrice") or pos.get("liquidation_price") or info.get("liquidatePrice"))
+        margin = float(pos.get("collateral", 0) or pos.get("margin", 0) or pos.get("initialMargin", 0) or info.get("oim", 0) or info.get("im", 0) or 0)
+        side = pos.get("side", "long")
+
+        # If mark_price is still 0, try fetching current ticker price
         if mark_price == 0 and entry_price > 0:
-            mark_price = entry_price
+            symbol = pos.get("symbol", "")
+            if symbol:
+                try:
+                    ticker = exchange.fetchTicker(symbol)
+                    if ticker and ticker.get("last"):
+                        mark_price = float(ticker["last"])
+                except Exception:
+                    pass
+            # Last resort: use entry price
+            if mark_price == 0:
+                mark_price = entry_price
 
-        # If pnl is 0 but we can compute it
-        if pnl == 0 and contracts > 0 and entry_price > 0 and mark_price > 0:
-            side = pos.get("side", "long")
+        # If pnl is still 0 but we have mark_price != entry_price, compute it
+        if pnl == 0 and contracts > 0 and entry_price > 0 and mark_price > 0 and mark_price != entry_price:
+            contract_size = float(pos.get("contractSize", 1) or 1)
             if side == "short":
-                pnl = (entry_price - mark_price) * contracts
+                pnl = (entry_price - mark_price) * contracts * contract_size
             else:
-                pnl = (mark_price - entry_price) * contracts
+                pnl = (mark_price - entry_price) * contracts * contract_size
 
         result.append({
             "user_id": user_id,
             "exchange": exchange_name,
             "symbol": (pos.get("symbol") or "").replace("/", ""),
-            "side": pos.get("side", "long"),
+            "side": side,
             "size": contracts,
             "entry_price": entry_price,
             "mark_price": mark_price,
