@@ -87,25 +87,6 @@ def _render_auth_page() -> None:
                         result = api_login(email, password)
                     if result["success"]:
                         set_auth_token(result["token"], email=email)
-                        # Use JS fetch to login via browser so Set-Cookie header
-                        # reaches the browser. This sets auth_session cookie.
-                        import json as _json
-                        _email = _json.dumps(email)
-                        _password = _json.dumps(password)
-                        st.components.v1.html(f"""
-                        <iframe srcdoc='
-                        <script>
-                        fetch("/api/v1/auth/login", {{
-                            method: "POST",
-                            headers: {{"Content-Type": "application/json"}},
-                            body: JSON.stringify({{username: {_email}, password: {_password}}}),
-                            credentials: "include"
-                        }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
-                            window.parent.location.reload();
-                        }}).catch(function(e) {{}});
-                        </script>
-                        ' style="display:none" width="0" height="0"></iframe>
-                        """, height=0)
                         st.success("Login successful!")
                         st.rerun()
                     else:
