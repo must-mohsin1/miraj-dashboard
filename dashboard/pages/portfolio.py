@@ -25,8 +25,10 @@ from dashboard.utils.session import get_auth_token, is_authenticated
 # Configuration
 # ---------------------------------------------------------------------------
 
+import os
+
 _EXCHANGE = "mexc"
-_BASE_URL = "http://localhost:8000"
+_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
 # ---------------------------------------------------------------------------
 # Auth guard

@@ -19,6 +19,7 @@ from backend.routes import (
     auth_router,
     history_router,
     macro_router,
+    portfolio_router,
     price_alerts_router,
     results_router,
     scan_router,
@@ -94,6 +95,7 @@ app.include_router(results_router)
 app.include_router(settings_router)
 app.include_router(watchlist_router)
 app.include_router(scan_router)
+app.include_router(portfolio_router)
 
 
 # ── Simple health / protected check ─────────────────────────────────────────

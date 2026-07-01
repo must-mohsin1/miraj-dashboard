@@ -268,19 +268,17 @@ async def fetch_portfolio(
     exchange_name = exchange_instance.id  # e.g. "mexc"
 
     try:
-        balances, positions, trades = await asyncio.wait_for(
-            asyncio.gather(
-                asyncio.to_thread(
-                    _fetch_balances, exchange_instance, user_id, exchange_name
-                ),
-                asyncio.to_thread(
-                    _fetch_positions, exchange_instance, user_id, exchange_name
-                ),
-                asyncio.to_thread(
-                    _fetch_trades, exchange_instance, user_id, exchange_name
-                ),
+        # Fetch balances first, then trades (trades need balance symbols)
+        balances = await asyncio.to_thread(
+            _fetch_balances, exchange_instance, user_id, exchange_name
+        )
+        positions, trades = await asyncio.gather(
+            asyncio.to_thread(
+                _fetch_positions, exchange_instance, user_id, exchange_name
             ),
-            timeout=PORTFOLIO_FETCH_TIMEOUT_S,
+            asyncio.to_thread(
+                _fetch_trades, exchange_instance, user_id, exchange_name, balances
+            ),
         )
     except asyncio.TimeoutError:
         raise ExchangeTimeoutError(
@@ -384,15 +382,47 @@ def _fetch_trades(
     exchange: Any,
     user_id: int,
     exchange_name: str,
+    balances: List[Dict[str, Any]] | None = None,
 ) -> List[Dict[str, Any]]:
-    """Fetch the 50 most recent trades across all pairs."""
-    try:
-        raw = exchange.fetchMyTrades(symbol=None, limit=50)
-    except Exception as exc:
-        raise _translate_ccxt_error(exc) from exc
+    """Fetch recent trades across the user's active symbols.
 
+    MEXC requires a symbol argument for fetchMyTrades (symbolRequired=True).
+    We iterate over the user's non-dust balance assets, construct USDT pairs,
+    and fetch a small number of trades per symbol.
+    """
     result: List[Dict[str, Any]] = []
-    for trade in raw:
+
+    # Build list of symbols to query from balances
+    symbols_to_query: List[str] = []
+    if balances:
+        for bal in balances:
+            asset = bal.get("asset", "").upper()
+            if not asset or asset in ("USDT", "USD", "USDC", "BUSD", "TUSD"):
+                continue
+            # Try USDT pair
+            symbols_to_query.append(f"{asset}/USDT")
+
+    # If no balances yielded symbols, return empty — no trades to fetch
+    if not symbols_to_query:
+        return result
+
+    # Limit to top 10 symbols to avoid rate limits
+    symbols_to_query = symbols_to_query[:10]
+
+    all_trades: List[dict] = []
+    for symbol in symbols_to_query:
+        try:
+            raw = exchange.fetchMyTrades(symbol=symbol, limit=10)
+            all_trades.extend(raw)
+        except Exception:
+            # Skip symbols that fail (delisted, no trades, etc.)
+            continue
+
+    # Sort all trades by timestamp descending and keep top 50
+    all_trades.sort(key=lambda t: t.get("timestamp", 0) or 0, reverse=True)
+    all_trades = all_trades[:50]
+
+    for trade in all_trades:
         fee_info = trade.get("fee") or {}
         ts = trade.get("timestamp")
         result.append({
