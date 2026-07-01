@@ -48,24 +48,21 @@ if _api_base:
 
 
 def _trigger_browser_cookie(token: str, email: str) -> None:
-    """Inject JS to set auth_session cookie in the browser via fetch to /api/v1/auth/login.
-    This ensures the browser receives the Set-Cookie header so sessions
-    persist across bare URL navigation.
+    """Set auth_session cookie directly from JavaScript using the token.
+    Cookie is non-HttpOnly so JS can read it for session restore.
     """
     import json as _json
-    safe_email = _json.dumps(email)
     safe_token = _json.dumps(token)
-    st.components.v1.html(f"""
-    <script>
+    st.html(f"""
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" onload="
     (function() {{
-        // Set the cookie directly since we already have the token
         var d = new Date();
-        d.setTime(d.getTime() + (60 * 60 * 1000)); // 1 hour
-        var expires = "expires=" + d.toUTCString();
-        document.cookie = "auth_session=" + {safe_token} + ";" + expires + ";path=/;SameSite=Lax";
+        d.setTime(d.getTime() + (60 * 60 * 1000));
+        var expires = 'expires=' + d.toUTCString();
+        document.cookie = 'auth_session=' + {safe_token} + ';' + expires + ';path=/;SameSite=Lax';
     }})();
-    </script>
-    """, height=0)
+    " />
+    """)
 
 # ---------------------------------------------------------------------------
 # Login / Register page (unauthenticated)
