@@ -61,6 +61,15 @@ def init_session_state() -> None:
         if qe:
             st.session_state.user_email = qe
 
+    # Restore from HTTP cookie (set by backend, survives bare URL navigation)
+    if not st.session_state.auth_token:
+        try:
+            cookie_token = st.context.cookies.get("auth_session")
+            if cookie_token:
+                st.session_state.auth_token = cookie_token
+        except Exception:
+            pass
+
     # If still not authenticated, inject JS to restore from localStorage
     # This handles bare URL navigation (typing localhost:8502 without query params)
     if not st.session_state.auth_token:
