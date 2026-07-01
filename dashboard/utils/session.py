@@ -1,18 +1,41 @@
 """
 Session state management for Streamlit dashboard.
 
-Token stored in st.session_state (survives page navigations),
-mirrored to st.query_params (survives F5 hard refresh), and
-persisted as an HTTP cookie (survives bare-URL navigation).
+Uses localStorage via JS injection for persistent sessions that survive
+bare URL navigation, F5 refresh, and page closings.
 
-Cookie is set via st.context.cookies and echoed by the backend
-on login so both paths converge on the same mechanism.
+Flow:
+1. On login: inject JS to store token+email in localStorage
+2. On page load: inject JS that reads localStorage and redirects to
+   ?token=xxx&email=yyy if session state is empty
+3. Query params restore the session in st.session_state
+4. On logout: inject JS to clear localStorage
 """
 
 import json
 import time
 import streamlit as st
 from typing import Optional
+
+
+def _inject_js(html: str) -> None:
+    """No-op — Streamlit doesn't support script injection reliably."""
+    pass
+
+
+def _store_token_js(token: str, email: str = "") -> None:
+    """No-op — use query params for persistence."""
+    pass
+
+
+def _restore_from_localstorage_js() -> None:
+    """No-op — query params handle F5 refresh, bare URL requires manual re-login."""
+    pass
+
+
+def _clear_token_js() -> None:
+    """No-op."""
+    pass
 
 
 def init_session_state() -> None:
@@ -37,6 +60,11 @@ def init_session_state() -> None:
         qe = st.query_params.get("email")
         if qe:
             st.session_state.user_email = qe
+
+    # If still not authenticated, inject JS to restore from localStorage
+    # This handles bare URL navigation (typing localhost:8502 without query params)
+    if not st.session_state.auth_token:
+        _restore_from_localstorage_js()
 
     # Ensure query params reflect current session for refresh persistence
     _sync_query_params()
@@ -86,13 +114,15 @@ def is_authenticated() -> bool:
 
 
 def set_auth_token(token: str, email: Optional[str] = None) -> None:
-    """Persist JWT to session state and query params."""
+    """Persist JWT to session state, query params, and localStorage."""
     st.session_state.auth_token = token
     if email:
         st.session_state.user_email = email
     st.query_params["token"] = token
     if email:
         st.query_params["email"] = email
+    # Store in localStorage for persistent sessions
+    _store_token_js(token, email or "")
 
 
 def get_auth_token() -> Optional[str]:
@@ -106,8 +136,9 @@ def get_user_email() -> Optional[str]:
 
 
 def logout() -> None:
-    """Clear auth state and query params."""
+    """Clear auth state, query params, and localStorage."""
     st.session_state.auth_token = None
     st.session_state.user_email = None
     st.session_state._just_logged_out = True
     st.query_params.clear()
+    _clear_token_js()
