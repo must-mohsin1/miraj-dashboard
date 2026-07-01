@@ -67,8 +67,16 @@ def init_session_state() -> None:
             cookie_token = st.context.cookies.get("auth_session")
             if cookie_token:
                 st.session_state.auth_token = cookie_token
-        except Exception:
-            pass
+            else:
+                # Debug: log what cookies we see
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "No auth_session cookie. Available: %s",
+                    list(st.context.cookies.keys()),
+                )
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger(__name__).warning("Cookie restore failed: %s", _e)
 
     # If still not authenticated, inject JS to restore from localStorage
     # This handles bare URL navigation (typing localhost:8502 without query params)
