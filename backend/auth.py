@@ -65,24 +65,36 @@ def decode_access_token(token: str) -> Optional[dict]:
 
 # ── Auth dependency ─────────────────────────────────────────────────────────
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> User:
-    """FastAPI dependency — return the authenticated ``User`` or raise 401."""
-    if credentials is None:
+    """FastAPI dependency — return the authenticated ``User`` or raise 401.
+
+    Supports both Bearer token (Authorization header) and HTTP cookie
+    (auth_session cookie set by /login endpoint).
+    """
+    token = None
+    if credentials is not None:
+        token = credentials.credentials
+    else:
+        # Fall back to session cookie
+        token = request.cookies.get("auth_session")
+
+    if token is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = decode_access_token(credentials.credentials)
+    payload = decode_access_token(token)
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
