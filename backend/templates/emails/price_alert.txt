@@ -1,0 +1,16 @@
+Miraj Price Alert
+================
+
+Symbol: {{ symbol }}
+Direction: {{ direction|upper }} target
+Target Price: {{ target_price }}
+Current Price: {{ current_price }}
+
+{% if message %}
+Note: {{ message }}
+
+{% endif %}
+View the full analysis: {{ analysis_url }}
+
+— Miraj Dashboard —
+{{ dashboard_url }}

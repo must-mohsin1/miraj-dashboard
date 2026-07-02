@@ -149,3 +149,15 @@
     overflow: hidden;
   }
 }
+
+/* ── Mobile responsive tweaks ──────────────────────────────────────────── */
+
+/* Touch-friendly button sizes on mobile (min 44×44px tap target).
+   Applied via the `min-h-11` utility on interactive elements. */
+@media (max-width: 767px) {
+  /* Ensure interactive buttons have a comfortable tap target height */
+  button.btn-touch,
+  .min-h-11 {
+    min-height: 2.75rem; /* 44px */
+  }
+}

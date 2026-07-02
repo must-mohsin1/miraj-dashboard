@@ -77,7 +77,7 @@ export function TradesTable({ trades }: TradesTableProps) {
             <TableHead className="text-right text-slate-500">Price</TableHead>
             <TableHead className="text-right text-slate-500">Amount</TableHead>
             <TableHead className="text-right text-slate-500">Cost</TableHead>
-            <TableHead className="text-right text-slate-500">Fee</TableHead>
+            <TableHead className="hidden text-right text-slate-500 md:table-cell">Fee</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -109,7 +109,7 @@ export function TradesTable({ trades }: TradesTableProps) {
                 <TableCell className="text-right text-slate-300 tabular-nums">
                   {fmt(t.cost)}
                 </TableCell>
-                <TableCell className="text-right text-slate-400 tabular-nums">
+                <TableCell className="hidden text-right text-slate-400 tabular-nums md:table-cell">
                   {t.fee != null
                     ? `${fmt(t.fee)}${t.fee_currency ? ` ${t.fee_currency}` : ""}`
                     : "—"}

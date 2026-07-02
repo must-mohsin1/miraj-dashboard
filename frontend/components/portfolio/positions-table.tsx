@@ -68,8 +68,8 @@ export function PositionsTable({ positions }: PositionsTableProps) {
             <TableHead className="text-right text-slate-500">Mark Price</TableHead>
             <TableHead className="text-right text-slate-500">PnL (USD)</TableHead>
             <TableHead className="text-right text-slate-500">PnL %</TableHead>
-            <TableHead className="text-right text-slate-500">Leverage</TableHead>
-            <TableHead className="text-right text-slate-500">Liq Price</TableHead>
+            <TableHead className="hidden text-right text-slate-500 md:table-cell">Leverage</TableHead>
+            <TableHead className="hidden text-right text-slate-500 md:table-cell">Liq Price</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -114,10 +114,10 @@ export function PositionsTable({ positions }: PositionsTableProps) {
                   {pnlPositive ? "+" : ""}
                   {p.pnl_percent.toFixed(2)}%
                 </TableCell>
-                <TableCell className="text-right text-slate-300 tabular-nums">
+                <TableCell className="hidden text-right text-slate-300 tabular-nums md:table-cell">
                   {p.leverage}x
                 </TableCell>
-                <TableCell className="text-right text-slate-400 tabular-nums">
+                <TableCell className="hidden text-right text-slate-400 tabular-nums md:table-cell">
                   {p.liquidation_price != null
                     ? fmt(p.liquidation_price)
                     : "—"}

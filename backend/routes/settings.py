@@ -8,6 +8,9 @@ GET    /api/v1/settings/channels        — list all alert channels for the curr
 POST   /api/v1/settings/channels        — create a new alert channel (Telegram / Discord)
 PUT    /api/v1/settings/channels/{id}   — update an alert channel config
 DELETE /api/v1/settings/channels/{id}   — delete an alert channel
+GET    /api/v1/settings/email           — get the user's alert email address
+POST   /api/v1/settings/email           — save / update the user's alert email address
+POST   /api/v1/settings/email/test      — send a test email to the configured address
 """
 
 from __future__ import annotations
@@ -292,3 +295,162 @@ async def delete_alert_channel(
 
     await session.delete(channel)
     await session.commit()
+
+
+# ── Email Alert Settings ────────────────────────────────────────────────────
+#
+# Stores the user's alert email address as an ``AlertChannel`` row with
+# ``channel_type="email"`` and ``config={"email": "user@example.com", "alerts_enabled": true}``.
+# This reuses the existing channels table rather than adding a column to User.
+
+
+class EmailSettingsResponse(BaseModel):
+    """Response body for GET /api/v1/settings/email."""
+
+    email: Optional[str] = None
+    alerts_enabled: bool = False
+
+
+class EmailSettingsUpdateRequest(BaseModel):
+    """Request body for POST /api/v1/settings/email."""
+
+    email: Optional[str] = Field(
+        default=None,
+        description="Email address for alerts. Set to null or empty to clear.",
+    )
+    alerts_enabled: bool = Field(
+        default=True,
+        description="Whether email alerts are enabled for this user.",
+    )
+
+
+class EmailTestResponse(BaseModel):
+    """Response body for POST /api/v1/settings/email/test."""
+
+    ok: bool
+    error: Optional[str] = None
+
+
+def _get_email_channel(user: User, session: AsyncSession):
+    """Fetch the user's email alert channel (lazy — returns a coroutine)."""
+    return session.execute(
+        select(AlertChannel).where(
+            AlertChannel.user_id == user.id,
+            AlertChannel.channel_type == "email",
+        )
+    )
+
+
+@router.get("/email", response_model=EmailSettingsResponse)
+async def get_email_settings(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> EmailSettingsResponse:
+    """Get the user's saved alert email address and enabled status."""
+    result = await _get_email_channel(current_user, session)
+    channel = result.scalar_one_or_none()
+
+    if not channel:
+        return EmailSettingsResponse(email=None, alerts_enabled=False)
+
+    config = _parse_settings_json(channel.config)
+    return EmailSettingsResponse(
+        email=config.get("email"),
+        alerts_enabled=bool(channel.enabled),
+    )
+
+
+@router.post("/email", response_model=EmailSettingsResponse)
+async def update_email_settings(
+    body: EmailSettingsUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> EmailSettingsResponse:
+    """Save or update the user's alert email address.
+
+    Creates an ``email``-type AlertChannel if none exists, otherwise updates
+    the existing one. Pass ``email: null`` to clear the address.
+    """
+    # Validate email syntax if a non-empty address is provided.
+    if body.email:
+        from email_validator import EmailNotValidError, validate_email
+
+        try:
+            validated = validate_email(body.email, check_deliverability=False)
+            normalized = validated.normalized
+        except EmailNotValidError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid email address format",
+            )
+    else:
+        normalized = None
+
+    result = await _get_email_channel(current_user, session)
+    channel = result.scalar_one_or_none()
+
+    config = {"email": normalized}
+
+    if channel:
+        channel.config = json.dumps(config)
+        channel.enabled = 1 if body.alerts_enabled else 0
+        channel.updated_at = datetime.utcnow()
+    else:
+        channel = AlertChannel(
+            user_id=current_user.id,
+            channel_type="email",
+            config=json.dumps(config),
+            enabled=1 if body.alerts_enabled else 0,
+        )
+        session.add(channel)
+
+    await session.commit()
+    await session.refresh(channel)
+
+    return EmailSettingsResponse(
+        email=normalized,
+        alerts_enabled=bool(channel.enabled),
+    )
+
+
+@router.post("/email/test", response_model=EmailTestResponse)
+async def send_test_email_route(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> EmailTestResponse:
+    """Send a test email to the user's configured alert email address.
+
+    Returns ``{ok: true}`` on success or ``{ok: false, error: "..."}`` on
+    failure (e.g. SMTP not configured).
+    """
+    result = await _get_email_channel(current_user, session)
+    channel = result.scalar_one_or_none()
+
+    if not channel:
+        return EmailTestResponse(
+            ok=False, error="No email address configured. Set one first."
+        )
+
+    config = _parse_settings_json(channel.config)
+    recipient = config.get("email")
+
+    if not recipient:
+        return EmailTestResponse(
+            ok=False, error="No email address configured. Set one first."
+        )
+
+    success = await _send_email_safe(recipient)
+    return EmailTestResponse(ok=success, error=None if success else "SMTP send failed")
+
+
+async def _send_email_safe(recipient: str) -> bool:
+    """Wrap the test email send so import / config errors don't crash the route."""
+    try:
+        from backend.services.email_service import send_test_email
+
+        return await send_test_email(recipient)
+    except ImportError:
+        return False
+    except Exception as exc:
+        logger.error("Test email to %s failed: %s", recipient, exc)
+        return False

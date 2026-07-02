@@ -19,6 +19,7 @@ import {
   type IPriceLine,
 } from "lightweight-charts";
 
+import { useMediaQuery } from "@/hooks/use-media-query";
 import type { Candle, EmaData, OrderBlock, FairValueGap } from "@/lib/types";
 
 /**
@@ -117,6 +118,10 @@ export function CandlestickChart({
   const chartRef = useRef<IChartApi | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
 
+  // Responsive chart height: 300px on mobile, 500px on desktop.
+  const isMobile = useMediaQuery("(max-width: 768px)");
+  const chartHeight = isMobile ? 300 : 500;
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -164,7 +169,7 @@ export function CandlestickChart({
         secondsVisible: false,
       },
       width: container.clientWidth || 600,
-      height: 500,
+      height: chartHeight,
     });
     chartRef.current = chart;
 
@@ -402,6 +407,7 @@ export function CandlestickChart({
       if (containerRef.current && chartRef.current) {
         chartRef.current.applyOptions({
           width: containerRef.current.clientWidth,
+          height: chartHeight,
         });
       }
     };
@@ -415,9 +421,10 @@ export function CandlestickChart({
       chart.remove();
       chartRef.current = null;
     };
-    // Re-create the chart whenever any data array reference changes.
+    // Re-create the chart whenever any data array reference or the chart
+    // height (mobile/desktop breakpoint) changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, emas, orderBlocks, fvgs, tradeLevels, symbol]);
+  }, [candles, emas, orderBlocks, fvgs, tradeLevels, symbol, chartHeight]);
 
   if (!candles || candles.length === 0) {
     return (
@@ -432,7 +439,7 @@ export function CandlestickChart({
       <div
         ref={containerRef}
         className="w-full rounded-xl border border-slate-800 bg-slate-950"
-        style={{ minHeight: 500 }}
+        style={{ minHeight: chartHeight }}
       />
       {/* Legend */}
       <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-slate-400">

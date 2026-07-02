@@ -92,6 +92,21 @@ async def lifespan(app: FastAPI):
             _vault_path,
         )
 
+    # ── SMTP email config check ─────────────────────────────────────
+    _smtp_host = _os.environ.get("SMTP_HOST", "")
+    _smtp_user = _os.environ.get("SMTP_USER", "")
+    _smtp_pass = _os.environ.get("SMTP_PASSWORD", "")
+    if _smtp_host and (_smtp_user and not _smtp_pass):
+        logger.warning(
+            "SMTP_HOST and SMTP_USER are set but SMTP_PASSWORD is not — "
+            "email alerts will not be delivered. Set SMTP_PASSWORD in .env"
+        )
+    if _smtp_host and (_smtp_pass and not _smtp_user):
+        logger.warning(
+            "SMTP_HOST and SMTP_PASSWORD are set but SMTP_USER is not — "
+            "email alerts will not be delivered. Set SMTP_USER in .env"
+        )
+
     # ── Start APScheduler ────────────────────────────────────────────
     from backend.scheduler import setup_scheduler, start_scheduler
 

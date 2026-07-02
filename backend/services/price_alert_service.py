@@ -281,6 +281,26 @@ async def _trigger_alert(
             webhook_url = config.get("webhook_url")
             if webhook_url:
                 success = await send_webhook(str(webhook_url), dc_embed)
+        elif ch.channel_type == "email":
+            email_addr = config.get("email")
+            if email_addr:
+                try:
+                    from backend.services.email_service import (
+                        send_price_alert_email,
+                    )
+
+                    success = await send_price_alert_email(
+                        to=str(email_addr),
+                        symbol=alert.symbol,
+                        direction=alert.direction,
+                        current_price=current_price,
+                        target_price=alert.price_level,
+                        message=alert.message,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Email alert for %s failed: %s", alert.symbol, exc
+                    )
 
         if success:
             channels_sent.append(ch.channel_type)

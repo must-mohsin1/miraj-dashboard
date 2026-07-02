@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Bell, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, Bell, Mail, Plus, Send, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";

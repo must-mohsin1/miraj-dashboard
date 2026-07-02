@@ -179,13 +179,13 @@ export function PortfolioDashboard({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
             onClick={handleRefresh}
             disabled={refreshing || disconnecting}
-            className="border-slate-700 bg-slate-900/60 text-slate-200 hover:bg-slate-800 hover:text-slate-100"
+            className="min-h-11 border-slate-700 bg-slate-900/60 text-slate-200 hover:bg-slate-800 hover:text-slate-100"
           >
             {refreshing ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -199,7 +199,7 @@ export function PortfolioDashboard({
             size="sm"
             onClick={handleDisconnect}
             disabled={refreshing || disconnecting}
-            className="border-red-800/50 bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300"
+            className="min-h-11 border-red-800/50 bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300"
           >
             {disconnecting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
