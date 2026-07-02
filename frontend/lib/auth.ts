@@ -24,6 +24,7 @@ export async function getSessionAndToken(): Promise<{
 /** Convenience: returns just the JWT access token, or null when unauthenticated. */
 export async function getAccessToken(): Promise<string | null> {
   const session = await auth();
+  console.log("[auth] getAccessToken: session exists:", !!session, "accessToken exists:", !!session?.accessToken);
   return session?.accessToken ?? null;
 }
 
