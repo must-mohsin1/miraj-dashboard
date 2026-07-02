@@ -57,7 +57,7 @@ RUN addgroup --system --gid 1001 nodejs \
 
 # Copy the standalone build output + static assets.
 # Next.js standalone output lives in .next/standalone.
-COPY --from=builder /app/public ./public 2>/dev/null || true
+RUN mkdir -p ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
