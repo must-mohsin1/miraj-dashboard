@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScoreGauge } from "@/components/score-gauge";
 import { TradePlan } from "@/components/trade-plan";
 import { CandlestickChart } from "@/components/candlestick-chart";
+import { TradingGlossary } from "@/components/trading-glossary";
 
 /**
  * Analysis detail page — async Server Component.
@@ -307,6 +308,7 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
             targets: tradeTargets,
           }}
         />
+        <TradingGlossary />
       </section>
 
       {/* Score breakdown */}
