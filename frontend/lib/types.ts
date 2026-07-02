@@ -85,6 +85,106 @@ export interface HistoryResponse {
   page_size: number;
 }
 
+// ── Portfolio (MEXC exchange) ──────────────────────────────────────────────
+
+/** Response for `GET /api/v1/portfolio/mexc/keys`. */
+export interface KeysResponse {
+  connected: boolean;
+  masked_key: string | null;
+}
+
+/** Response for `POST /api/v1/portfolio/mexc/connect`. */
+export interface ConnectResponse {
+  connected: boolean;
+  exchange: string;
+  masked_key: string;
+}
+
+/** A single balance row from the portfolio endpoint. */
+export interface BalanceItem {
+  asset: string;
+  free: number;
+  locked: number;
+  total: number;
+  usd_value: number | null;
+}
+
+/** A single open position row. */
+export interface PositionItem {
+  symbol: string;
+  side: string;
+  size: number;
+  entry_price: number;
+  mark_price: number;
+  pnl: number;
+  pnl_percent: number;
+  leverage: number;
+  liquidation_price: number | null;
+  margin: number;
+}
+
+/** A single trade row. */
+export interface TradeItem {
+  symbol: string;
+  side: string;
+  type: string;
+  price: number;
+  amount: number;
+  cost: number;
+  fee: number | null;
+  fee_currency: string | null;
+  timestamp: string;
+  exchange_trade_id: string;
+}
+
+/** Aggregated portfolio snapshot metrics. */
+export interface SnapshotItem {
+  total_balance_usd: number | null;
+  total_pnl_usd: number;
+  open_positions: number;
+  timestamp: string;
+}
+
+/** Response for `GET/POST /api/v1/portfolio/mexc`. */
+export interface PortfolioResponse {
+  exchange: string;
+  balances: BalanceItem[];
+  positions: PositionItem[];
+  trades: TradeItem[];
+  snapshot: SnapshotItem | null;
+  last_refreshed: string | null;
+  stale: boolean;
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────
+
+/** Per-pair alert settings row from `GET /api/v1/settings/pairs`. */
+export interface PairSettingsResponse {
+  id: number;
+  user_id: number;
+  pair: string;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A single alert channel row from `GET /api/v1/settings/channels`. */
+export interface AlertChannel {
+  id: number;
+  user_id: number;
+  channel_type: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Response envelope for `GET /api/v1/settings/channels`. */
+export interface AlertChannelListResponse {
+  total: number;
+  channels: AlertChannel[];
+}
+
 /** A single per-source error reported by the macro endpoint. */
 export interface MacroSourceError {
   field: string;
