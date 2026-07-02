@@ -14,31 +14,39 @@ import type { ConnectResponse } from "@/lib/types";
  * ConnectForm — Client Component.
  *
  * Two-field form (API key + secret) that POSTs to
- * `POST /api/v1/portfolio/mexc/connect`. On success the page is refreshed
- * via `router.refresh()` so the server component re-renders the connected
- * portfolio dashboard.
+ * `POST /api/v1/portfolio/{exchange}/connect`. On success the page is
+ * refreshed via `router.refresh()` so the server component re-renders the
+ * connected portfolio dashboard.
  *
  * The backend validates the credentials with a live `fetchBalance` call
  * before persisting them — on a 400 (invalid keys) or 502 (exchange error)
  * the error message is surfaced inline.
  */
 
+function titleCase(slug: string): string {
+  return slug.charAt(0).toUpperCase() + slug.slice(1);
+}
+
 interface ConnectFormProps {
   /** The signed-in user's JWT access token (or null when unauthenticated). */
   token: string | null;
+  /** Exchange slug (e.g. "mexc", "binance", "bybit"). */
+  exchange: string;
 }
 
-export function ConnectForm({ token }: ConnectFormProps) {
+export function ConnectForm({ token, exchange }: ConnectFormProps) {
   const router = useRouter();
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
+
+  const exchangeName = titleCase(exchange);
 
   const {
     trigger,
     isMutating,
     error,
   } = useMutation<ConnectResponse, { api_key: string; api_secret: string }>(
-    "/api/v1/portfolio/mexc/connect",
+    `/api/v1/portfolio/${exchange}/connect`,
     "POST"
   );
 
@@ -66,12 +74,12 @@ export function ConnectForm({ token }: ConnectFormProps) {
           <div className="flex items-center gap-2">
             <KeyRound className="h-5 w-5 text-emerald-400" />
             <h2 className="text-lg font-semibold text-slate-100">
-              Connect MEXC Account
+              Connect {exchangeName} Account
             </h2>
           </div>
           <p className="text-sm text-slate-400">
-            Enter your MEXC API credentials. Keys are encrypted at rest and
-            never exposed to the client after submission.
+            Enter your {exchangeName} API credentials. Keys are encrypted at
+            rest and never exposed to the client after submission.
           </p>
         </div>
 
@@ -84,7 +92,7 @@ export function ConnectForm({ token }: ConnectFormProps) {
               id="api_key"
               type="text"
               autoComplete="off"
-              placeholder="mex…"
+              placeholder={`${exchange.slice(0, 3)}…`}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               disabled={isMutating}

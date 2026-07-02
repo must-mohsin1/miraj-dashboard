@@ -85,9 +85,17 @@ export interface HistoryResponse {
   page_size: number;
 }
 
-// ── Portfolio (MEXC exchange) ──────────────────────────────────────────────
+// ── Portfolio (multi-exchange) ─────────────────────────────────────────────
 
-/** Response for `GET /api/v1/portfolio/mexc/keys`. */
+/**
+ * Response for `GET /api/v1/portfolio/exchanges`.
+ * Lists the exchange slugs supported by the backend (e.g. ["mexc","binance","bybit"]).
+ */
+export interface ExchangesResponse {
+  exchanges: string[];
+}
+
+/** Response for `GET /api/v1/portfolio/{exchange}/keys`. */
 export interface KeysResponse {
   connected: boolean;
   masked_key: string | null;

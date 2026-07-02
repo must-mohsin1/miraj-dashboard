@@ -52,6 +52,7 @@ from backend.services.exchange_service import (
     create_exchange_instance,
     fetch_portfolio,
     get_exchange,
+    get_supported_exchanges,
     is_ccxt_available,
     validate_exchange_keys,
 )
@@ -62,14 +63,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
 
 
+class ExchangesResponse(BaseModel):
+    """Response for `GET /api/v1/portfolio/exchanges`."""
+
+    exchanges: List[str]
+
+
 # ── Pydantic request/response schemas ────────────────────────────────────────
 
 
 class ConnectRequest(BaseModel):
     """Body for POST /connect — plaintext API credentials (HTTPS only)."""
 
-    api_key: str = Field(..., min_length=1, description="MEXC API key")
-    api_secret: str = Field(..., min_length=1, description="MEXC API secret")
+    api_key: str = Field(..., min_length=1, description="Exchange API key")
+    api_secret: str = Field(..., min_length=1, description="Exchange API secret")
 
 
 class ConnectResponse(BaseModel):
@@ -284,6 +291,26 @@ def _get_iso_ts(snapshot: Optional[PortfolioSnapshot]) -> Optional[str]:
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
+@router.get(
+    "/exchanges",
+    response_model=ExchangesResponse,
+    summary="List supported exchanges",
+)
+async def list_supported_exchanges(
+    current_user: User = Depends(get_current_user),
+) -> ExchangesResponse:
+    """Return the list of exchange slugs supported by the backend.
+
+    The list is sourced from ``SUPPORTED_EXCHANGES`` (which reflects what
+    ccxt can import). Useful for driving the frontend exchange selector
+    dropdown.
+    """
+    # If ccxt isn't installed we still return an empty list (rather than 501)
+    # so the frontend can degrade gracefully.
+    exchanges = sorted(get_supported_exchanges().keys()) if is_ccxt_available() else []
+    return ExchangesResponse(exchanges=exchanges)
+
+
 @router.post(
     "/{exchange}/connect",
     response_model=ConnectResponse,
@@ -300,7 +327,7 @@ async def connect_exchange(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ConnectResponse:
-    """Validate and store MEXC API credentials for the current user.
+    """Validate and store exchange API credentials for the current user.
 
     The keys are validated by calling ``fetchBalance()`` before being stored.
     Invalid credentials return HTTP 400; exchange errors return 502.

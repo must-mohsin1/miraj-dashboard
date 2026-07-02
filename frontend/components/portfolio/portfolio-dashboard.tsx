@@ -23,15 +23,19 @@ import type { PortfolioResponse } from "@/lib/types";
  * Renders the three-tab portfolio view (Balances · Positions · Trades) with
  * Refresh and Disconnect action buttons in the header.
  *
- *  - **Refresh** → `POST /api/v1/portfolio/mexc/refresh`, then
+ *  - **Refresh** → `POST /api/v1/portfolio/{exchange}/refresh`, then
  *    `router.refresh()` re-renders the server component with fresh cached data.
- *  - **Disconnect** → `DELETE /api/v1/portfolio/mexc/disconnect`, then
+ *  - **Disconnect** → `DELETE /api/v1/portfolio/{exchange}/disconnect`, then
  *    `router.refresh()` flips the server component back to the connect form.
  *
  * Both actions use inline fetch (no SWR) because they are one-shot mutations
  * whose result replaces the entire page state — `router.refresh()` handles
  * revalidation.
  */
+
+function titleCase(slug: string): string {
+  return slug.charAt(0).toUpperCase() + slug.slice(1);
+}
 
 interface PortfolioDashboardProps {
   /** The signed-in user's JWT access token (or null when unauthenticated). */
@@ -40,17 +44,22 @@ interface PortfolioDashboardProps {
   portfolio: PortfolioResponse | null;
   /** Masked API key preview to display in the header. */
   maskedKey: string | null;
+  /** Exchange slug (e.g. "mexc", "binance", "bybit"). */
+  exchange: string;
 }
 
 export function PortfolioDashboard({
   token,
   portfolio,
   maskedKey,
+  exchange,
 }: PortfolioDashboardProps) {
   const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const exchangeName = titleCase(exchange);
 
   const balances = portfolio?.balances ?? [];
   const positions = portfolio?.positions ?? [];
@@ -65,7 +74,7 @@ export function PortfolioDashboard({
     try {
       const headers: HeadersInit = {};
       if (token) headers.Authorization = `Bearer ${token}`;
-      const res = await fetch("/api/v1/portfolio/mexc/refresh", {
+      const res = await fetch(`/api/v1/portfolio/${exchange}/refresh`, {
         method: "POST",
         headers,
       });
@@ -93,7 +102,7 @@ export function PortfolioDashboard({
   async function handleDisconnect() {
     if (
       !window.confirm(
-        "Disconnect MEXC? This removes your stored API keys and all cached portfolio data."
+        `Disconnect ${exchangeName}? This removes your stored API keys and all cached portfolio data.`
       )
     ) {
       return;
@@ -103,7 +112,7 @@ export function PortfolioDashboard({
     try {
       const headers: HeadersInit = {};
       if (token) headers.Authorization = `Bearer ${token}`;
-      const res = await fetch("/api/v1/portfolio/mexc/disconnect", {
+      const res = await fetch(`/api/v1/portfolio/${exchange}/disconnect`, {
         method: "DELETE",
         headers,
       });

@@ -95,7 +95,9 @@ def _load_supported_exchanges() -> None:
         return
     import ccxt  # noqa: PLC0415 — lazy import (ccxt is a large library)
 
-    SUPPORTED_EXCHANGES["mexc"] = ccxt.mexc
+    SUPPORTED_EXCHANGES["mexc"]    = ccxt.mexc
+    SUPPORTED_EXCHANGES["binance"] = ccxt.binance
+    SUPPORTED_EXCHANGES["bybit"]   = ccxt.bybit
     _exchanges_loaded = True
 
 
@@ -406,19 +408,19 @@ def _fetch_positions(
     for pos in raw:
         info = pos.get("info", {})  # Raw MEXC API response
 
-        contracts = float(pos.get("contracts", 0) or pos.get("size", 0) or info.get("holdVol", 0) or 0)
+        contracts = float(pos.get("contracts", 0) or pos.get("size", 0) or info.get("holdVol", 0) or info.get("positionAmt", 0) or 0)
         entry_price = float(pos.get("entryPrice", 0) or pos.get("entry_price", 0) or info.get("holdAvgPrice", 0) or info.get("openAvgPrice", 0) or 0)
 
         # Mark price — ccxt returns null for MEXC, try raw info or fetch from ticker
         mark_price = float(pos.get("markPrice", 0) or pos.get("mark_price", 0) or 0)
 
-        # PnL — ccxt returns null, use raw MEXC field
-        pnl = float(pos.get("unrealizedPnl", 0) or pos.get("pnl", 0) or info.get("unRealizedPnl", 0) or 0)
+        # PnL — ccxt returns null, use raw fields (MEXC unRealizedPnl, Binance unRealizedProfit, Bybit unrealised_pnl)
+        pnl = float(pos.get("unrealizedPnl", 0) or pos.get("pnl", 0) or info.get("unRealizedPnl", 0) or info.get("unRealizedProfit", 0) or info.get("unrealised_pnl", 0) or 0)
 
         # PnL percentage — compute from PnL / margin (ROI on position)
         leverage = float(pos.get("leverage", 1) or info.get("leverage", 1) or 1)
-        liq_price = _safe_float(pos.get("liquidationPrice") or pos.get("liquidation_price") or info.get("liquidatePrice"))
-        margin = float(pos.get("collateral", 0) or pos.get("margin", 0) or pos.get("initialMargin", 0) or info.get("oim", 0) or info.get("im", 0) or 0)
+        liq_price = _safe_float(pos.get("liquidationPrice") or pos.get("liquidation_price") or info.get("liquidatePrice") or info.get("liquidationPrice") or info.get("liq_price"))
+        margin = float(pos.get("collateral", 0) or pos.get("margin", 0) or pos.get("initialMargin", 0) or info.get("oim", 0) or info.get("im", 0) or info.get("initialMargin", 0) or info.get("positionIM", 0) or 0)
         side = pos.get("side", "long")
 
         pnl_pct = 0.0

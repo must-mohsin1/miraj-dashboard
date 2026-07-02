@@ -2,46 +2,30 @@
 
 import { Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTheme } from "next-themes";
 
 /**
  * ThemeSettings — Client Component.
  *
- * A simple dark/light toggle persisted to `localStorage` and applied by
- * toggling the `dark` class on `<html>`. The app defaults to dark theme; the
- * toggle lets the user switch to a light appearance.
+ * A dark/light toggle backed by `next-themes` (replaces the previous
+ * hand-rolled `localStorage` + class-toggle). `next-themes` handles SSR
+ * (no flash of incorrect theme), persistence to `localStorage`, and
+ * provides a single source of truth via the `useTheme()` hook.
  *
  * Theme is purely client-side (no backend round-trip).
  */
 
-const STORAGE_KEY = "miraj-theme";
-
 export function ThemeSettings() {
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
-  // Initialise from localStorage on mount.
+  // next-themes recommends a `mounted` guard to avoid hydration mismatch.
   useEffect(() => {
     setMounted(true);
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === "light" || stored === "dark") {
-      setTheme(stored);
-    }
   }, []);
 
-  // Apply theme to <html>.
-  useEffect(() => {
-    if (!mounted) return;
-    const root = document.documentElement;
-    if (theme === "dark") {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
-    localStorage.setItem(STORAGE_KEY, theme);
-  }, [theme, mounted]);
-
   function toggle() {
-    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+    setTheme(theme === "dark" ? "light" : "dark");
   }
 
   if (!mounted) {
