@@ -24,8 +24,7 @@ import {
 const loginSchema = z.object({
   username: z
     .string()
-    .min(3, "Username must be at least 3 characters")
-    .max(32, "Username must be 32 characters or fewer"),
+    .min(3, "Username must be at least 3 characters"),
   password: z.string().min(1, "Password is required"),
 });
 
@@ -51,16 +50,16 @@ export function LoginForm({ className }: { className?: string }) {
     const result = await signIn("credentials", {
       username: values.username,
       password: values.password,
-      redirect: false,
+      redirect: true,
+      callbackUrl: callbackUrl,
     });
 
+    // If redirect: true, this code won't run (page navigates).
+    // But if the callback fails, result may be returned.
     if (result?.error) {
       setServerError("Invalid username or password.");
       return;
     }
-
-    router.push(callbackUrl);
-    router.refresh();
   }
 
   return (
@@ -82,12 +81,12 @@ export function LoginForm({ className }: { className?: string }) {
             </div>
           )}
           <div className="space-y-2">
-            <Label htmlFor="username">Username</Label>
+            <Label htmlFor="username">Email</Label>
             <Input
               id="username"
-              type="text"
-              autoComplete="username"
-              placeholder="your-username"
+              type="email"
+              autoComplete="email"
+              placeholder="you@example.com"
               aria-invalid={!!errors.username}
               {...register("username")}
             />
