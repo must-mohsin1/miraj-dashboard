@@ -38,3 +38,5 @@ test_qa_*
 .DS_Store
 Thumbs.db
 *.db-journal
+frontend/node_modules/
+frontend/.next/
