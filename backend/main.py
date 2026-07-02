@@ -24,6 +24,7 @@ from backend.routes import (
     results_router,
     scan_router,
     settings_router,
+    stream_router,
     watchlist_router,
 )
 
@@ -132,6 +133,7 @@ app.include_router(macro_router)
 app.include_router(price_alerts_router)
 app.include_router(results_router)
 app.include_router(settings_router)
+app.include_router(stream_router)
 app.include_router(watchlist_router)
 app.include_router(scan_router)
 app.include_router(portfolio_router)

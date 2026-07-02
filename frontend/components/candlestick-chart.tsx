@@ -89,6 +89,13 @@ function toTimestamp(time: string | number): UTCTimestamp {
 
 /* ── Props ──────────────────────────────────────────────────────────────── */
 
+/**
+ * Live price map — an optional record of ``{ price, timestamp }`` per
+ * symbol. When provided, the chart updates the last candle's close price
+ * in real time via ``series.update()``.
+ */
+export type LivePrices = Record<string, { price: number; timestamp: number }>;
+
 interface CandlestickChartProps {
   candles: Candle[];
   emas?: EmaData | null;
@@ -102,6 +109,12 @@ interface CandlestickChartProps {
     stopLoss?: number | null;
     targets?: number[];
   } | null;
+  /**
+   * Optional live prices keyed by symbol. When the symbol matches the
+   * chart's ``symbol`` prop, the last candle's close is updated in real
+   * time via ``series.update()``.
+   */
+  livePrices?: LivePrices | null;
 }
 
 /* ── Component ───────────────────────────────────────────────────────────── */
@@ -113,10 +126,15 @@ export function CandlestickChart({
   fvgs = null,
   symbol = "",
   tradeLevels = null,
+  livePrices = null,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  // The last candle's data, kept in a ref so the live-update effect can
+  // mutate it without re-creating the chart.
+  const lastCandleRef = useRef<CandlestickData | null>(null);
 
   // Responsive chart height: 300px on mobile, 500px on desktop.
   const isMobile = useMediaQuery("(max-width: 768px)");
@@ -222,6 +240,11 @@ export function CandlestickChart({
       priceFormat: { type: "price", precision: 2, minMove: 0.01 },
     });
     candleSeries.setData(candleData);
+    candleSeriesRef.current = candleSeries;
+    // Stash the last candle so the live-price effect can mutate it via
+    // series.update() without re-creating the chart.
+    lastCandleRef.current =
+      candleData.length > 0 ? { ...candleData[candleData.length - 1] } : null;
 
     // ── EMA overlay lines (main pane) ───────────────────────────────
     // The backend returns emas as {period: number[]} aligned 1-to-1 with
@@ -418,6 +441,8 @@ export function CandlestickChart({
     return () => {
       resizeObserver.disconnect();
       priceLinesRef.current = [];
+      candleSeriesRef.current = null;
+      lastCandleRef.current = null;
       chart.remove();
       chartRef.current = null;
     };
@@ -425,6 +450,48 @@ export function CandlestickChart({
     // height (mobile/desktop breakpoint) changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candles, emas, orderBlocks, fvgs, tradeLevels, symbol, chartHeight]);
+
+  // ── Live price updates (real-time mode) ──────────────────────────────
+  // This effect runs whenever the livePrices prop changes (e.g. a new tick
+  // arrives every 5 s). It uses refs to access the candle series + last
+  // candle so it never re-creates the chart — it just calls series.update()
+  // to mutate the last candle's close/high/low in place.
+  useEffect(() => {
+    if (!livePrices) return;
+    // Only update if the symbol matches the chart's symbol prop.
+    const sym = symbol.trim().toUpperCase();
+    if (!sym) return;
+    const tick = livePrices[sym];
+    if (!tick || typeof tick.price !== "number") return;
+
+    const series = candleSeriesRef.current;
+    const last = lastCandleRef.current;
+    if (!series || !last) return;
+
+    const price = tick.price;
+    // Construct an updated candle: open stays, high/low widen, close = tick price.
+    const updated: CandlestickData = {
+      time: last.time,
+      open: last.open,
+      high: Math.max(last.high, price),
+      low: Math.min(last.low, price),
+      close: price,
+    };
+
+    try {
+      series.update(updated);
+      // Persist the mutation so the next tick continues from here.
+      lastCandleRef.current = updated;
+    } catch (err) {
+      // lightweight-charts throws if the time isn't >= the last bar's time.
+      // This can happen during the brief window between data load and the
+      // first live tick — silently ignore.
+      // eslint-disable-next-line no-console
+      console.debug("series.update failed:", err);
+    }
+    // Re-run only when the livePrices map reference or symbol changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livePrices, symbol]);
 
   if (!candles || candles.length === 0) {
     return (
