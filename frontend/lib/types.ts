@@ -101,3 +101,130 @@ export interface MacroResponse {
   /** Per-source errors, or `null` when every source succeeded. */
   errors: MacroSourceError[] | null;
 }
+
+// ── Analysis / Scan ────────────────────────────────────────────────────────
+
+/**
+ * A single OHLCV candle bar as returned by the scan endpoint's `candles`
+ * array. `time` is an ISO-8601 string (or epoch seconds) suitable for
+ * lightweight-charts.
+ */
+export interface Candle {
+  time: string | number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number | null;
+}
+
+/**
+ * EMA overlay data. The backend returns a dict keyed by EMA period string
+ * (e.g. "ema_9", "ema_50") whose value is an array of the last N floats,
+ * aligned 1-to-1 with the `candles` array. There are no per-point timestamps
+ * baked in — the frontend re-aligns them to the candle times.
+ */
+export type EmaData = Record<string, number[]>;
+
+/**
+ * An order block zone rendered as a rectangle on the chart. `type` is
+ * "bullish" or "bearish" and controls the fill colour.
+ */
+export interface OrderBlock {
+  start_time: string | number;
+  end_time: string | number;
+  price_high: number | null;
+  price_low: number | null;
+  type: string;
+}
+
+/** A fair-value-gap zone rendered as a dashed rectangle on the chart. */
+export interface FairValueGap {
+  start_time: string | number;
+  end_time: string | number;
+  price_high: number | null;
+  price_low: number | null;
+}
+
+/**
+ * The flat, UI-friendly trade plan derived by the backend from the full
+ * `trade_plan` object. Entry / stop / targets are plain floats (or null
+ * when unavailable). `rationale` is a free-text human explanation.
+ */
+export interface TradePlanFlat {
+  direction: string;
+  entry: number | null;
+  stop_loss: number | null;
+  target_1: number | null;
+  target_2: number | null;
+  target_3?: number | null;
+  rationale?: string | null;
+}
+
+/**
+ * Category-level sub-scores (0–5 raw points each). Keys: regime, location,
+ * confirmation, volume_retest, risk.
+ */
+export type CategoryScores = Record<string, number>;
+
+/**
+ * Full response shape for `POST /api/v1/scan/{symbol}`.
+ *
+ * Mirrors the backend `ScanResponse` Pydantic model. Optional fields are
+ * nullable because any given pipeline step may fail and the backend
+ * substitutes `null` / empty instead of raising.
+ */
+export interface ScanResult {
+  symbol: string;
+  /** Overall confluence score scaled to 0–100 (may be null on failure). */
+  overall_score: number | null;
+  /** Raw confluence score out of 30. */
+  confluence_score: number;
+  /** Per-category sub-scores (regime, location, confirmation, volume_retest, risk). */
+  scores: CategoryScores | null;
+  /** Full trade plan object from the backend (nested shape). */
+  trade_plan: Record<string, unknown>;
+  /** Flat, UI-friendly trade plan (entry/stop/targets/direction). */
+  trade_plan_flat: TradePlanFlat | null;
+  /** Breakdown of the confluence score (category objects with `score`/`max`). */
+  score_breakdown: Record<string, unknown>;
+  macro_data: Record<string, unknown> | null;
+  smc: Record<string, unknown> | null;
+  patterns: Record<string, unknown> | null;
+  qqe: Record<string, unknown> | null;
+  indicators: Record<string, unknown> | null;
+  /** Last 100 daily candles for the chart. */
+  candles: Candle[] | null;
+  /** EMA overlay series keyed by period string. */
+  emas: EmaData | null;
+  /** Order block zones for the chart. */
+  order_blocks: OrderBlock[] | null;
+  /** Fair-value-gap zones for the chart. */
+  fvgs: FairValueGap[] | null;
+  /** `true` when the result is served from a stale cache. */
+  stale: boolean;
+  /** ISO-8601 timestamp the result was cached at, or `null`. */
+  cached_at: string | null;
+}
+
+// ── History (analyses list) ────────────────────────────────────────────────
+
+/** A single row in the paginated history response from `GET /api/v1/history`. */
+export interface HistoryRow {
+  id: number;
+  symbol: string;
+  analysis_type: string;
+  score: number | null;
+  direction: string | null;
+  alert_sent: boolean;
+  created_at: string;
+}
+
+/** Response envelope for `GET /api/v1/history`. */
+export interface ScanHistoryResponse {
+  rows: HistoryRow[];
+  total: number;
+  page: number;
+  per_page: number;
+  pages: number;
+}

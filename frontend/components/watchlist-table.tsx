@@ -58,7 +58,8 @@ interface WatchlistTableProps {
 export function WatchlistTable({ token }: WatchlistTableProps) {
   const { data, error, isLoading } = useSWR<WatchlistResponse>(
     token ? [WATCHLIST_KEY, token] : null,
-    ([url, tok]) => fetcher<WatchlistResponse>(url, tok)
+    ([url, tok]: [string, string | null]) =>
+      fetcher<WatchlistResponse>(url, tok)
   );
 
   // Add a new pair — POST /api/v1/watchlist with body { pair }.

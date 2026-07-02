@@ -106,9 +106,10 @@ function DominancePie({ data }: { data: MacroData | null }) {
               color: "#e2e8f0",
               fontSize: "0.75rem",
             }}
-            formatter={(value: number, name: string) =>
-              hasData ? [`${value.toFixed(2)}%`, name] : ["N/A", name]
-            }
+            formatter={(value, name) => {
+              const v = Number(value) || 0;
+              return hasData ? [`${v.toFixed(2)}%`, String(name)] : ["N/A", String(name)];
+            }}
           />
         </PieChart>
       </ResponsiveContainer>
@@ -255,7 +256,10 @@ export function FearGreedBarChart({ data }: { data: MacroData | null }) {
               color: "#e2e8f0",
               fontSize: "0.75rem",
             }}
-            formatter={(v: number) => [`${v} / 100`, "Fear & Greed"]}
+            formatter={(value) => {
+              const v = Number(value) || 0;
+              return [`${v} / 100`, "Fear & Greed"];
+            }}
           />
           <Bar
             dataKey="value"
