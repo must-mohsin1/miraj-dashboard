@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 
 import { cn } from "@/lib/utils";
@@ -31,7 +31,6 @@ const loginSchema = z.object({
 type LoginValues = z.infer<typeof loginSchema>;
 
 export function LoginForm({ className }: { className?: string }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") ?? "/";
   const [serverError, setServerError] = useState<string | null>(null);
@@ -47,19 +46,12 @@ export function LoginForm({ className }: { className?: string }) {
 
   async function onSubmit(values: LoginValues) {
     setServerError(null);
-    const result = await signIn("credentials", {
+    await signIn("credentials", {
       username: values.username,
       password: values.password,
       redirect: true,
       callbackUrl: callbackUrl,
     });
-
-    // If redirect: true, this code won't run (page navigates).
-    // But if the callback fails, result may be returned.
-    if (result?.error) {
-      setServerError("Invalid username or password.");
-      return;
-    }
   }
 
   return (
