@@ -57,21 +57,28 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        const username = credentials?.username as string | undefined;
-        const password = credentials?.password as string | undefined;
-        if (!username || !password) {
-          return null;
-        }
+        try {
+          const username = credentials?.username as string | undefined;
+          const password = credentials?.password as string | undefined;
+          if (!username || !password) {
+            console.error("[auth] Missing username or password");
+            return null;
+          }
 
-        const res = await fetch(`${apiUrl}/api/v1/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, password }),
-        });
+          console.log("[auth] Attempting login for:", username, "to:", `${apiUrl}/api/v1/auth/login`);
 
-        if (!res.ok) {
-          return null;
-        }
+          const res = await fetch(`${apiUrl}/api/v1/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+
+          console.log("[auth] Login response status:", res.status);
+
+          if (!res.ok) {
+            console.error("[auth] Login failed:", res.status, await res.text());
+            return null;
+          }
 
         const data = (await res.json()) as {
           access_token: string;
