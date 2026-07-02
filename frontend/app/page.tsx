@@ -1,85 +1,70 @@
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { getAccessToken } from "@/lib/auth";
+import { serverFetch } from "@/lib/api";
+import type { MacroResponse } from "@/lib/types";
+import { MacroCards } from "@/components/macro-cards";
+import { QuickActions } from "@/components/quick-actions";
 
-export default function Home() {
+/**
+ * Home page — async Server Component.
+ *
+ * Fetches the latest macro snapshot from `GET /api/v1/macro` using the
+ * signed-in user's access token and renders the four headline cards plus
+ * quick-action links to the Macro Dashboard and Scanner.
+ *
+ * The page degrades gracefully: if the user is unauthenticated (no token)
+ * or the backend is unreachable, the cards render with placeholder em-dashes
+ * instead of throwing, so the home page always loads.
+ */
+export default async function Home() {
+  const token = await getAccessToken();
+
+  let macro: MacroResponse | null = null;
+  if (token) {
+    try {
+      macro = await serverFetch<MacroResponse>("/api/v1/macro", token);
+    } catch {
+      // Swallow transient backend errors — render placeholder cards.
+      macro = null;
+    }
+  }
+
+  const updatedAt = macro?.cached_at
+    ? new Date(macro.cached_at).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      })
+    : null;
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-24">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Miraj Dashboard</CardTitle>
-          <CardDescription>Next.js frontend scaffold is ready.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Input placeholder="Type something…" aria-label="Sample input" />
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button>Open dialog</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Hello</DialogTitle>
-                <DialogDescription>
-                  This dialog verifies Radix UI and the dialog component.
-                </DialogDescription>
-              </DialogHeader>
-            </DialogContent>
-          </Dialog>
-        </CardContent>
-        <CardFooter>
-          <Tabs defaultValue="table" className="w-full">
-            <TabsList>
-              <TabsTrigger value="table">Table</TabsTrigger>
-              <TabsTrigger value="empty">Empty</TabsTrigger>
-            </TabsList>
-            <TabsContent value="table">
-              <Table>
-                <TableCaption>Sample table view</TableCaption>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Asset</TableHead>
-                    <TableHead className="text-right">Price</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <TableRow>
-                    <TableCell>BTC</TableCell>
-                    <TableCell className="text-right">$100,000</TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </TabsContent>
-            <TabsContent value="empty">
-              <p className="text-sm text-muted-foreground">Nothing here yet.</p>
-            </TabsContent>
-          </Tabs>
-        </CardFooter>
-      </Card>
-    </main>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
+      {/* Welcome heading */}
+      <header className="flex flex-col gap-1">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-100">
+          Crypto Analysis Dashboard
+        </h1>
+        <p className="text-sm text-slate-400">
+          Snapshot of the key macro forces driving crypto markets right now.
+        </p>
+        {updatedAt && (
+          <p className="mt-1 text-xs text-slate-500">
+            Updated {updatedAt}
+            {macro?.stale ? " · showing cached data" : ""}
+          </p>
+        )}
+      </header>
+
+      {/* Macro cards */}
+      <section aria-label="Macro indicators">
+        <MacroCards data={macro?.data ?? null} />
+      </section>
+
+      {/* Quick actions */}
+      <section aria-label="Quick actions">
+        <h2 className="mb-3 text-lg font-semibold text-slate-200">
+          Quick Actions
+        </h2>
+        <QuickActions />
+      </section>
+    </div>
   );
 }
