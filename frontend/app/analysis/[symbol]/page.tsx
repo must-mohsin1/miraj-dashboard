@@ -14,7 +14,7 @@ import type { ScanResult, TradePlanFlat } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { ScoreGauge } from "@/components/score-gauge";
 import { TradePlan } from "@/components/trade-plan";
-import { CandlestickChart } from "@/components/candlestick-chart";
+import { LiveCandlestickChart } from "@/components/live-candlestick-chart";
 import { TradingGlossary } from "@/components/trading-glossary";
 
 /**
@@ -286,22 +286,15 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
         </div>
       </section>
 
-      {/* Candlestick chart */}
+      {/* Candlestick chart (with live price streaming) */}
       <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-medium text-slate-300">
-            Price Chart — {result.symbol}
-          </h3>
-          <span className="text-xs text-slate-500">
-            Daily, last 100 bars
-          </span>
-        </div>
-        <CandlestickChart
+        <LiveCandlestickChart
           candles={candles}
           emas={result.emas ?? null}
           orderBlocks={result.order_blocks ?? null}
           fvgs={result.fvgs ?? null}
           symbol={result.symbol}
+          token={token}
           tradeLevels={{
             entry: flat?.entry ?? null,
             stopLoss: flat?.stop_loss ?? null,

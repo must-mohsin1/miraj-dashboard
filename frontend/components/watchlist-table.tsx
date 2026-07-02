@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Loader2, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import useSWR, { useSWRConfig } from "swr";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LivePriceBadge } from "@/components/live-price-badge";
 import {
   Table,
   TableBody,
@@ -15,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useMutation } from "@/hooks/use-mutation";
+import { usePriceStream } from "@/hooks/use-price-stream";
 import type { WatchlistPair, WatchlistResponse } from "@/lib/types";
 
 /**
@@ -89,6 +91,15 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
   } | null>(null);
 
   const pairs = data?.pairs ?? [];
+
+  // ── Live price streaming for watchlist pairs ───────────────────────
+  // Subscribe to SSE price updates for every pair in the watchlist.
+  // The hook debounces symbol-list changes and auto-reconnects on drop.
+  const streamSymbols = useMemo(
+    () => pairs.map((p) => p.pair),
+    [pairs],
+  );
+  const { prices, isConnected } = usePriceStream(streamSymbols, token);
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
