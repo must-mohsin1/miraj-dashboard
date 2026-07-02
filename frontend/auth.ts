@@ -45,11 +45,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           const username = credentials?.username as string | undefined;
           const password = credentials?.password as string | undefined;
           if (!username || !password) {
-            console.error("[auth] Missing username or password");
             return null;
           }
 
-          console.log("[auth] Attempting login for:", username);
 
           const res = await fetch(`${apiUrl}/api/v1/auth/login`, {
             method: "POST",
@@ -57,10 +55,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             body: JSON.stringify({ username, password }),
           });
 
-          console.log("[auth] Login response status:", res.status);
 
           if (!res.ok) {
-            console.error("[auth] Login failed:", res.status);
             return null;
           }
 
@@ -70,7 +66,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           };
 
           if (!data?.access_token) {
-            console.error("[auth] No access_token in response");
             return null;
           }
 
@@ -85,7 +80,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               username: string;
               email: string;
             };
-            console.log("[auth] Login successful for:", me.email);
             return {
               id: String(me.id),
               userId: me.id,
@@ -96,14 +90,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           }
 
           // Fall back if /me unavailable
-          console.log("[auth] /me failed, returning minimal user");
           return {
             id: username,
             username,
             accessToken: data.access_token,
           };
         } catch (error) {
-          console.error("[auth] Authorize error:", error);
           return null;
         }
       },
