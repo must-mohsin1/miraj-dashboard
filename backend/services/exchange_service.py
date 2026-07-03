@@ -642,12 +642,18 @@ def _fetch_positions_history(
                 )
                 or {}
             )
-            page_data = resp.get("data") or {}
-            rows = page_data.get("list") or page_data.get("result") or []
+            page_data = resp.get("data")
+            # MEXC API returns data as a list directly (not a dict with "list" key)
+            if isinstance(page_data, list):
+                rows = page_data
+            elif isinstance(page_data, dict):
+                rows = page_data.get("list") or page_data.get("result") or []
+            else:
+                rows = []
             if not rows:
                 break
             positions_raw.extend(rows)
-            total_pages = page_data.get("totalPage") or page_data.get("pages") or 1
+            total_pages = (page_data.get("totalPage") or page_data.get("pages") or 1) if isinstance(page_data, dict) else 1
             if page >= total_pages:
                 break
             page += 1
@@ -766,12 +772,17 @@ def _fetch_order_history(
                 )
                 or {}
             )
-            page_data = resp.get("data") or {}
-            rows = page_data.get("list") or page_data.get("result") or []
+            page_data = resp.get("data")
+            if isinstance(page_data, list):
+                rows = page_data
+            elif isinstance(page_data, dict):
+                rows = page_data.get("list") or page_data.get("result") or []
+            else:
+                rows = []
             if not rows:
                 break
             orders_raw.extend(rows)
-            total_pages = page_data.get("totalPage") or page_data.get("pages") or 1
+            total_pages = (page_data.get("totalPage") or page_data.get("pages") or 1) if isinstance(page_data, dict) else 1
             if page >= total_pages:
                 break
             page += 1
