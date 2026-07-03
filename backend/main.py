@@ -11,10 +11,12 @@ from backend.database import Base, get_engine
 # Import portfolio models so Base.metadata.create_all() creates their tables.
 from backend.models import (  # noqa: F401 — imported for side effect (table registration)
     ExchangeKey,
+    OrderHistory,
     PortfolioBalance,
     PortfolioPosition,
     PortfolioSnapshot,
     PortfolioTrade,
+    PositionHistory,
 )
 from backend.routes import (
     auth_router,

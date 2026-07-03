@@ -36,10 +36,12 @@ from backend.auth import get_current_user
 from backend.database import get_session
 from backend.models import (
     ExchangeKey,
+    OrderHistory,
     PortfolioBalance,
     PortfolioPosition,
     PortfolioSnapshot,
     PortfolioTrade,
+    PositionHistory,
     User,
 )
 from backend.services import exchange_service
@@ -50,6 +52,7 @@ from backend.services.exchange_service import (
     ExchangeRateLimitError,
     ExchangeTimeoutError,
     create_exchange_instance,
+    fetch_history,
     fetch_portfolio,
     get_exchange,
     get_supported_exchanges,
@@ -129,6 +132,34 @@ class TradeItem(BaseModel):
     exchange_trade_id: str
 
 
+class PositionHistoryItem(BaseModel):
+    symbol: str
+    side: str
+    size: float
+    entry_price: float
+    exit_price: float
+    pnl: float
+    pnl_percent: float
+    leverage: float
+    open_time: Optional[datetime] = None
+    close_time: Optional[datetime] = None
+    close_reason: Optional[str] = None
+    contract_size: Optional[float] = None
+
+
+class OrderHistoryItem(BaseModel):
+    symbol: str
+    type: str
+    side: str
+    price: float
+    amount: float
+    filled: float
+    cost: float
+    status: str
+    timestamp: datetime
+    reduce_only: Optional[int] = None
+
+
 class SnapshotItem(BaseModel):
     total_balance_usd: Optional[float] = None
     total_pnl_usd: float
@@ -143,9 +174,19 @@ class PortfolioResponse(BaseModel):
     balances: List[BalanceItem]
     positions: List[PositionItem]
     trades: List[TradeItem]
+    position_history: List[PositionHistoryItem] = []
+    order_history: List[OrderHistoryItem] = []
     snapshot: Optional[SnapshotItem] = None
     last_refreshed: Optional[str] = None
     stale: bool = True
+
+
+class HistoryResponse(BaseModel):
+    """Response for `GET /api/v1/portfolio/{exchange}/history`."""
+
+    exchange: str
+    position_history: List[PositionHistoryItem]
+    order_history: List[OrderHistoryItem]
 
 
 class PortfolioErrorResponse(BaseModel):
@@ -268,6 +309,38 @@ def _serialise_trade(row: PortfolioTrade) -> Dict[str, Any]:
         "fee_currency": row.fee_currency,
         "timestamp": row.timestamp,
         "exchange_trade_id": row.exchange_trade_id,
+    }
+
+
+def _serialise_position_history(row: PositionHistory) -> Dict[str, Any]:
+    return {
+        "symbol": row.symbol,
+        "side": row.side,
+        "size": row.size,
+        "entry_price": row.entry_price,
+        "exit_price": row.exit_price,
+        "pnl": row.pnl,
+        "pnl_percent": row.pnl_percent,
+        "leverage": row.leverage,
+        "open_time": row.open_time,
+        "close_time": row.close_time,
+        "close_reason": row.close_reason,
+        "contract_size": row.contract_size,
+    }
+
+
+def _serialise_order_history(row: OrderHistory) -> Dict[str, Any]:
+    return {
+        "symbol": row.symbol,
+        "type": row.type,
+        "side": row.side,
+        "price": row.price,
+        "amount": row.amount,
+        "filled": row.filled,
+        "cost": row.cost,
+        "status": row.status,
+        "timestamp": row.timestamp,
+        "reduce_only": row.reduce_only,
     }
 
 
@@ -444,6 +517,18 @@ async def disconnect_exchange(
             PortfolioSnapshot.exchange == exchange_slug,
         )
     )
+    await session.execute(
+        delete(PositionHistory).where(
+            PositionHistory.user_id == current_user.id,
+            PositionHistory.exchange == exchange_slug,
+        )
+    )
+    await session.execute(
+        delete(OrderHistory).where(
+            OrderHistory.user_id == current_user.id,
+            OrderHistory.exchange == exchange_slug,
+        )
+    )
     await session.commit()
 
 
@@ -572,6 +657,8 @@ async def refresh_portfolio(
         balances=[BalanceItem(**b) for b in data["balances"]],
         positions=[PositionItem(**p) for p in data["positions"]],
         trades=[TradeItem(**t) for t in data["trades"]],
+        position_history=[PositionHistoryItem(**p) for p in data.get("position_history", [])],
+        order_history=[OrderHistoryItem(**o) for o in data.get("order_history", [])],
         snapshot=SnapshotItem(**_serialise_snapshot(snapshot)) if snapshot else None,
         last_refreshed=_get_iso_ts(snapshot),
         stale=False,
@@ -601,6 +688,8 @@ async def get_portfolio(
     balances = await _load_balances(session, current_user.id, exchange_slug)
     positions = await _load_positions(session, current_user.id, exchange_slug)
     trades = await _load_trades(session, current_user.id, exchange_slug)
+    position_history = await _load_position_history(session, current_user.id, exchange_slug)
+    order_history = await _load_order_history(session, current_user.id, exchange_slug)
     snapshot = await _get_latest_snapshot(session, current_user.id, exchange_slug)
 
     return PortfolioResponse(
@@ -608,13 +697,271 @@ async def get_portfolio(
         balances=[BalanceItem(**_serialise_balance(b)) for b in balances],
         positions=[PositionItem(**_serialise_position(p)) for p in positions],
         trades=[TradeItem(**_serialise_trade(t)) for t in trades],
+        position_history=[
+            PositionHistoryItem(**_serialise_position_history(p)) for p in position_history
+        ],
+        order_history=[
+            OrderHistoryItem(**_serialise_order_history(o)) for o in order_history
+        ],
         snapshot=SnapshotItem(**_serialise_snapshot(snapshot)) if snapshot else None,
         last_refreshed=_get_iso_ts(snapshot),
         stale=True,
     )
 
 
+@router.get(
+    "/{exchange}/history",
+    response_model=HistoryResponse,
+    responses={
+        400: {"model": PortfolioErrorResponse, "description": "No stored keys"},
+        404: {"model": PortfolioErrorResponse, "description": "Unsupported exchange"},
+        429: {"model": PortfolioErrorResponse, "description": "Rate limited"},
+        502: {"model": PortfolioErrorResponse, "description": "Exchange error"},
+        501: {"model": PortfolioErrorResponse, "description": "ccxt not installed"},
+    },
+)
+async def get_portfolio_history(
+    exchange: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> HistoryResponse:
+    """Fetch fresh position history + order history from the exchange.
+
+    Unlike ``GET /{exchange}``, this endpoint always makes a live exchange
+    call (no cache) so the user sees the most recent closed positions and
+    orders. Intended for the "Position History" and "Order History" tabs.
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+
+    # 1. Get exchange instance — raises ValueError if no keys stored
+    try:
+        exchange_instance = await get_exchange(
+            user_id=current_user.id,
+            exchange_name=exchange_slug,
+            db_session=session,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+            headers={"X-Error-Code": "no_api_keys"},
+        ) from exc
+
+    # 2. Fetch live history data
+    try:
+        data = await fetch_history(
+            exchange_instance=exchange_instance,
+            user_id=current_user.id,
+        )
+    except ExchangeRateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"X-Error-Code": exc.code, "Retry-After": "30"},
+        ) from exc
+    except ExchangeAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"Exchange rejected the API key: {exc}. "
+                "Your key may be invalid or revoked — please reconnect."
+            ),
+            headers={"X-Error-Code": exc.code},
+        ) from exc
+    except ExchangeTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Exchange request timed out: {exc}",
+            headers={"X-Error-Code": exc.code},
+        ) from exc
+    except ExchangeError as exc:
+        raise _map_exchange_error(exc, action="fetch history") from exc
+
+    return HistoryResponse(
+        exchange=exchange_slug,
+        position_history=[
+            PositionHistoryItem(**p) for p in data.get("position_history", [])
+        ],
+        order_history=[
+            OrderHistoryItem(**o) for o in data.get("order_history", [])
+        ],
+    )
+
+
+@router.post(
+    "/{exchange}/history",
+    response_model=HistoryResponse,
+    responses={
+        400: {"model": PortfolioErrorResponse, "description": "No stored keys"},
+        404: {"model": PortfolioErrorResponse, "description": "Unsupported exchange"},
+        429: {"model": PortfolioErrorResponse, "description": "Rate limited"},
+        502: {"model": PortfolioErrorResponse, "description": "Exchange error"},
+        501: {"model": PortfolioErrorResponse, "description": "ccxt not installed"},
+    },
+)
+async def get_exchange_history(
+    exchange: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> HistoryResponse:
+    """Fetch position history + order history from the exchange, persist to
+    cache tables, and return the freshest data.
+
+    Unlike ``POST /refresh`` this endpoint only fetches the two historical
+    lists (no balances / open positions / trades), making it lighter for
+    tab-switching on the frontend.
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+
+    # 1. Get exchange instance
+    try:
+        exchange_instance = await get_exchange(
+            user_id=current_user.id,
+            exchange_name=exchange_slug,
+            db_session=session,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+            headers={"X-Error-Code": "no_api_keys"},
+        ) from exc
+
+    # 2. Fetch history from exchange
+    try:
+        data = await fetch_history(
+            exchange_instance=exchange_instance,
+            user_id=current_user.id,
+        )
+    except ExchangeRateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"X-Error-Code": exc.code, "Retry-After": "30"},
+        ) from exc
+    except ExchangeAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"Exchange rejected the API key: {exc}. "
+                "Your key may be invalid or revoked — please reconnect."
+            ),
+            headers={"X-Error-Code": exc.code},
+        ) from exc
+    except ExchangeTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Exchange request timed out: {exc}",
+            headers={"X-Error-Code": exc.code},
+        ) from exc
+    except ExchangeError as exc:
+        raise _map_exchange_error(exc, action="history") from exc
+
+    # 3. Persist both lists to cache tables (dedup-aware)
+    now = datetime.utcnow()
+    await _persist_history_data(session, current_user.id, exchange_slug, data, now)
+    await session.commit()
+
+    return HistoryResponse(
+        exchange=exchange_slug,
+        position_history=[
+            PositionHistoryItem(**p) for p in data.get("position_history", [])
+        ],
+        order_history=[
+            OrderHistoryItem(**o) for o in data.get("order_history", [])
+        ],
+    )
+
+
 # ── DB persistence helpers ───────────────────────────────────────────────────
+
+
+async def _persist_history_data(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+    data: Dict[str, List[Dict[str, Any]]],
+    now: datetime,
+) -> None:
+    """Persist position_history and order_history from a history-only fetch.
+
+    Uses the same dedup-aware upsert logic as ``_persist_portfolio_data``
+    but only handles the two history tables — no balances / positions /
+    trades / snapshot.
+    """
+    # ── Upsert position history (skip duplicates) ───────────────────
+    pos_hist = data.get("position_history", [])
+    existing_pos_keys: set[tuple] = set()
+    if pos_hist:
+        rows = await session.execute(
+            select(
+                PositionHistory.symbol,
+                PositionHistory.close_time,
+            ).where(
+                PositionHistory.user_id == user_id,
+                PositionHistory.exchange == exchange,
+            )
+        )
+        existing_pos_keys = {(r[0], r[1]) for r in rows.all()}
+
+    for ph in pos_hist:
+        key = (ph["symbol"], ph.get("close_time"))
+        if key in existing_pos_keys:
+            continue
+        session.add(PositionHistory(
+            user_id=user_id,
+            exchange=exchange,
+            symbol=ph["symbol"],
+            side=ph["side"],
+            size=ph["size"],
+            entry_price=ph["entry_price"],
+            exit_price=ph.get("exit_price", 0.0),
+            pnl=ph["pnl"],
+            pnl_percent=ph.get("pnl_percent", 0.0),
+            leverage=ph.get("leverage", 1.0),
+            open_time=ph.get("open_time"),
+            close_time=ph.get("close_time"),
+            close_reason=ph.get("close_reason"),
+            contract_size=ph.get("contract_size", 1.0),
+            updated_at=now,
+        ))
+
+    # ── Upsert order history (skip duplicates) ──────────────────────
+    ord_hist = data.get("order_history", [])
+    existing_ord_keys: set[tuple] = set()
+    if ord_hist:
+        rows = await session.execute(
+            select(
+                OrderHistory.symbol,
+                OrderHistory.timestamp,
+                OrderHistory.side,
+                OrderHistory.price,
+            ).where(
+                OrderHistory.user_id == user_id,
+                OrderHistory.exchange == exchange,
+            )
+        )
+        existing_ord_keys = {(r[0], r[1], r[2], r[3]) for r in rows.all()}
+
+    for oh in ord_hist:
+        key = (oh["symbol"], oh["timestamp"], oh["side"], oh["price"])
+        if key in existing_ord_keys:
+            continue
+        session.add(OrderHistory(
+            user_id=user_id,
+            exchange=exchange,
+            symbol=oh["symbol"],
+            type=oh["type"],
+            side=oh["side"],
+            price=oh["price"],
+            amount=oh["amount"],
+            filled=oh.get("filled", 0.0),
+            cost=oh.get("cost", 0.0),
+            status=oh["status"],
+            timestamp=oh["timestamp"],
+            reduce_only=oh.get("reduce_only"),
+            updated_at=now,
+        ))
 
 
 async def _persist_portfolio_data(
@@ -710,6 +1057,81 @@ async def _persist_portfolio_data(
             exchange_trade_id=trade["exchange_trade_id"],
         ))
 
+    # ── Upsert position history (skip duplicates) ───────────────────
+    pos_hist = data.get("position_history", [])
+    # Build a set of existing cache keys for fast dedup.
+    existing_pos_keys: set[tuple] = set()
+    if pos_hist:
+        rows = await session.execute(
+            select(
+                PositionHistory.symbol,
+                PositionHistory.close_time,
+            ).where(
+                PositionHistory.user_id == user_id,
+                PositionHistory.exchange == exchange,
+            )
+        )
+        existing_pos_keys = {(r[0], r[1]) for r in rows.all()}
+
+    for ph in pos_hist:
+        key = (ph["symbol"], ph.get("close_time"))
+        if key in existing_pos_keys:
+            continue
+        session.add(PositionHistory(
+            user_id=user_id,
+            exchange=exchange,
+            symbol=ph["symbol"],
+            side=ph["side"],
+            size=ph["size"],
+            entry_price=ph["entry_price"],
+            exit_price=ph.get("exit_price", 0.0),
+            pnl=ph["pnl"],
+            pnl_percent=ph.get("pnl_percent", 0.0),
+            leverage=ph.get("leverage", 1.0),
+            open_time=ph.get("open_time"),
+            close_time=ph.get("close_time"),
+            close_reason=ph.get("close_reason"),
+            contract_size=ph.get("contract_size", 1.0),
+            updated_at=now,
+        ))
+
+    # ── Upsert order history (skip duplicates) ──────────────────────
+    ord_hist = data.get("order_history", [])
+    existing_ord_keys: set[tuple] = set()
+    if ord_hist:
+        rows = await session.execute(
+            select(
+                OrderHistory.symbol,
+                OrderHistory.timestamp,
+                OrderHistory.side,
+                OrderHistory.price,
+            ).where(
+                OrderHistory.user_id == user_id,
+                OrderHistory.exchange == exchange,
+            )
+        )
+        existing_ord_keys = {(r[0], r[1], r[2], r[3]) for r in rows.all()}
+
+    for oh in ord_hist:
+        key = (oh["symbol"], oh["timestamp"], oh["side"], oh["price"])
+        if key in existing_ord_keys:
+            continue
+        session.add(OrderHistory(
+            user_id=user_id,
+            exchange=exchange,
+            symbol=oh["symbol"],
+            type=oh["type"],
+            side=oh["side"],
+            price=oh["price"],
+            amount=oh["amount"],
+            filled=oh.get("filled", 0.0),
+            cost=oh.get("cost", 0.0),
+            status=oh["status"],
+            timestamp=oh["timestamp"],
+            reduce_only=oh.get("reduce_only"),
+            updated_at=now,
+        ))
+
     # ── Snapshot row ────────────────────────────────────────────────
     total_pnl = sum(p["pnl"] for p in data["positions"])
     open_positions = len(data["positions"])
@@ -766,6 +1188,40 @@ async def _load_trades(
         )
         .order_by(PortfolioTrade.timestamp.desc())
         .limit(50)
+    )
+    return list(result.scalars().all())
+
+
+async def _load_position_history(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+) -> List[PositionHistory]:
+    result = await session.execute(
+        select(PositionHistory)
+        .where(
+            PositionHistory.user_id == user_id,
+            PositionHistory.exchange == exchange,
+        )
+        .order_by(PositionHistory.close_time.desc().nullslast())
+        .limit(200)
+    )
+    return list(result.scalars().all())
+
+
+async def _load_order_history(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+) -> List[OrderHistory]:
+    result = await session.execute(
+        select(OrderHistory)
+        .where(
+            OrderHistory.user_id == user_id,
+            OrderHistory.exchange == exchange,
+        )
+        .order_by(OrderHistory.timestamp.desc())
+        .limit(200)
     )
     return list(result.scalars().all())
 

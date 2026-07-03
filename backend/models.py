@@ -28,6 +28,8 @@ class User(Base):
     portfolio_positions = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")
     portfolio_trades = relationship("PortfolioTrade", back_populates="user", cascade="all, delete-orphan")
     portfolio_snapshots = relationship("PortfolioSnapshot", back_populates="user", cascade="all, delete-orphan")
+    position_history = relationship("PositionHistory", back_populates="user", cascade="all, delete-orphan")
+    order_history = relationship("OrderHistory", back_populates="user", cascade="all, delete-orphan")
 
 
 class AlertChannel(Base):
@@ -237,6 +239,9 @@ class PortfolioSnapshot(Base):
     """Periodic portfolio value snapshots per user per exchange."""
 
     __tablename__ = "portfolio_snapshots"
+    __table_args__ = (
+        Index("ix_portfolio_snapshots_user_exchange", "user_id", "exchange"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -247,3 +252,71 @@ class PortfolioSnapshot(Base):
     timestamp = Column(DateTime, nullable=False)
 
     user = relationship("User", back_populates="portfolio_snapshots")
+
+
+class PositionHistory(Base):
+    """Closed/historical futures positions per user per exchange.
+
+    Persisted on each portfolio refresh so the dashboard can show a history
+    of closed positions without re-fetching from the exchange.
+    """
+
+    __tablename__ = "position_history"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "exchange", "symbol", "close_time",
+            name="uq_position_history_user_exchange_symbol_close",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exchange = Column(String(32), nullable=False)
+    symbol = Column(String(40), nullable=False)
+    side = Column(String(10), nullable=False)  # "long" or "short"
+    size = Column(Float, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=False, default=0.0)
+    pnl = Column(Float, nullable=False)
+    pnl_percent = Column(Float, nullable=False, default=0.0)
+    leverage = Column(Float, nullable=False, default=1.0)
+    open_time = Column(DateTime, nullable=True)
+    close_time = Column(DateTime, nullable=True)
+    close_reason = Column(String(20), nullable=True)  # liquidated/closed/manual
+    contract_size = Column(Float, nullable=True, default=1.0)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="position_history")
+
+
+class OrderHistory(Base):
+    """Historical (closed/cancelled) orders per user per exchange.
+
+    Persisted on each portfolio refresh so the dashboard can show order
+    history without re-fetching from the exchange.
+    """
+
+    __tablename__ = "order_history"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "exchange", "symbol", "timestamp", "side", "price",
+            name="uq_order_history_user_exchange_symbol_ts_side_price",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exchange = Column(String(32), nullable=False)
+    symbol = Column(String(40), nullable=False)
+    type = Column(String(20), nullable=False)  # limit / market
+    side = Column(String(10), nullable=False)  # buy / sell
+    price = Column(Float, nullable=False)
+    amount = Column(Float, nullable=False)
+    filled = Column(Float, nullable=False, default=0.0)
+    cost = Column(Float, nullable=False, default=0.0)
+    status = Column(String(20), nullable=False)  # filled / cancelled / open
+    timestamp = Column(DateTime, nullable=False)
+    reduce_only = Column(Integer, nullable=True, default=0)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="order_history")

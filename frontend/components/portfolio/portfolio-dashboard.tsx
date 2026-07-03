@@ -15,6 +15,8 @@ import {
 import { BalancesTable } from "@/components/portfolio/balances-table";
 import { PositionsTable } from "@/components/portfolio/positions-table";
 import { TradesTable } from "@/components/portfolio/trades-table";
+import { PositionHistoryTable } from "@/components/portfolio/position-history-table";
+import { OrderHistoryTable } from "@/components/portfolio/order-history-table";
 import { LivePortfolioHeader } from "@/components/portfolio/live-portfolio-header";
 import type { PortfolioResponse } from "@/lib/types";
 import type { PriceMap } from "@/hooks/use-price-stream";
@@ -146,6 +148,8 @@ export function PortfolioDashboard({
   const balances = portfolio?.balances ?? [];
   const positions = portfolio?.positions ?? [];
   const trades = portfolio?.trades ?? [];
+  const positionHistory = portfolio?.position_history ?? [];
+  const orderHistory = portfolio?.order_history ?? [];
   const snapshot = portfolio?.snapshot ?? null;
   const isStale = portfolio?.stale ?? true;
   const lastRefreshed = portfolio?.last_refreshed ?? null;
@@ -438,8 +442,14 @@ export function PortfolioDashboard({
           <TabsTrigger value="positions">
             Positions ({positions.length})
           </TabsTrigger>
+          <TabsTrigger value="position-history">
+            Position History ({positionHistory.length})
+          </TabsTrigger>
           <TabsTrigger value="trades">
             Trades ({trades.length})
+          </TabsTrigger>
+          <TabsTrigger value="order-history">
+            Order History ({orderHistory.length})
           </TabsTrigger>
         </TabsList>
         <TabsContent value="balances">
@@ -448,8 +458,14 @@ export function PortfolioDashboard({
         <TabsContent value="positions">
           <PositionsTable positions={positions} livePrices={livePrices} />
         </TabsContent>
+        <TabsContent value="position-history">
+          <PositionHistoryTable positions={positionHistory} />
+        </TabsContent>
         <TabsContent value="trades">
           <TradesTable trades={trades} />
+        </TabsContent>
+        <TabsContent value="order-history">
+          <OrderHistoryTable orders={orderHistory} />
         </TabsContent>
       </Tabs>
     </div>

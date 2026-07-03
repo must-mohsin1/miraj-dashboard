@@ -278,12 +278,23 @@ async def fetch_portfolio(
         balances = await asyncio.to_thread(
             _fetch_balances, exchange_instance, user_id, exchange_name
         )
-        positions, trades = await asyncio.gather(
+        (
+            positions,
+            trades,
+            position_history,
+            order_history,
+        ) = await asyncio.gather(
             asyncio.to_thread(
                 _fetch_positions, exchange_instance, user_id, exchange_name
             ),
             asyncio.to_thread(
                 _fetch_trades, exchange_instance, user_id, exchange_name, balances
+            ),
+            asyncio.to_thread(
+                _fetch_positions_history, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_order_history, exchange_instance, user_id, exchange_name
             ),
         )
     except asyncio.TimeoutError:
@@ -295,7 +306,55 @@ async def fetch_portfolio(
     except Exception as exc:
         raise _translate_ccxt_error(exc) from exc
 
-    return {"balances": balances, "positions": positions, "trades": trades}
+    return {
+        "balances": balances,
+        "positions": positions,
+        "trades": trades,
+        "position_history": position_history,
+        "order_history": order_history,
+    }
+
+
+async def fetch_history(
+    exchange_instance: Any,
+    user_id: int,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Fetch position history and order history (closed orders) from the exchange.
+
+    Unlike :func:`fetch_portfolio`, this does **not** re-fetch balances/positions/
+    trades — it only fetches the two historical lists. Designed for the
+    ``GET /api/v1/portfolio/{exchange}/history`` endpoint which always returns
+    fresh (uncached) data.
+
+    Returns ``{"position_history": [...], "order_history": [...]}``.
+
+    Raises :class:`ExchangeAuthError`, :class:`ExchangeRateLimitError`,
+    :class:`ExchangeTimeoutError`, or :class:`ExchangeError` on failure.
+    """
+    exchange_name = exchange_instance.id  # e.g. "mexc"
+
+    try:
+        position_history, order_history = await asyncio.gather(
+            asyncio.to_thread(
+                _fetch_positions_history, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_order_history, exchange_instance, user_id, exchange_name
+            ),
+        )
+    except asyncio.TimeoutError:
+        raise ExchangeTimeoutError(
+            f"History fetch exceeded {PORTFOLIO_FETCH_TIMEOUT_S}s timeout"
+        ) from None
+    except ExchangeError:
+        raise
+    except Exception as exc:
+        raise _translate_ccxt_error(exc) from exc
+
+    return {
+        "position_history": position_history,
+        "order_history": order_history,
+    }
 
 
 # ── Internal fetch helpers (blocking — called via asyncio.to_thread) ─────────
@@ -533,6 +592,309 @@ def _fetch_trades(
                 if ts else datetime.utcnow()
             ),
             "exchange_trade_id": str(trade.get("id", "")),
+        })
+
+    return result
+
+
+def _fetch_positions_history(
+    exchange: Any,
+    user_id: int,
+    exchange_name: str,
+) -> List[Dict[str, Any]]:
+    """Fetch closed/historical futures positions.
+
+    Calls ``exchange.fetch_positions_history()`` when available, falling back
+    to the raw MEXC API ``contract_private_get_position_list_history_positions``
+    for exchanges that don't implement it directly. Returns a normalised list
+    of dicts suitable for direct ``PositionHistoryItem`` construction.
+
+    Spot-only accounts or non-futures exchanges return an empty list.
+    """
+    import ccxt  # noqa: PLC0415
+
+    # 1. Fetch raw positions history
+    raw: List[Dict[str, Any]] = []
+    try:
+        if hasattr(exchange, "fetch_positions_history"):
+            raw = exchange.fetch_positions_history() or []
+        elif exchange_name == "mexc" and hasattr(
+            exchange,
+            "contract_private_get_position_list_history_positions",
+        ):
+            # Raw MEXC fallback (paginate: 100 per page)
+            page = 1
+            while True:
+                resp = (
+                    exchange.contract_private_get_position_list_history_positions(
+                        {"pageSize": 100, "pageNum": page}
+                    )
+                    or {}
+                )
+                page_data = resp.get("data") or {}
+                rows = page_data.get("list") or page_data.get("result") or []
+                if not rows:
+                    break
+                raw.extend(rows)
+                total_pages = page_data.get("totalPage") or page_data.get("pages") or 1
+                if page >= total_pages:
+                    break
+                page += 1
+        else:
+            return []
+    except (ccxt.BadSymbol, ccxt.NotSupported):
+        return []
+    except Exception as exc:
+        raise _translate_ccxt_error(exc) from exc
+
+    # 2. Normalise each position entry
+    result: List[Dict[str, Any]] = []
+    for pos in raw:
+        info = pos.get("info", {}) if isinstance(pos, dict) else {}
+
+        # Handle raw MEXC dict shape (strings) vs ccxt unified shape
+        symbol = (
+            pos.get("symbol")
+            or info.get("symbol")
+            or ""
+        )
+        if symbol:
+            symbol = symbol.replace("/", "")
+
+        # Side — ccxt returns "long"/"short"; MEXC raw returns 1/2
+        side = pos.get("side") or info.get("side") or ""
+        if not side:
+            pos_side = info.get("positionType") or info.get("position_type") or 1
+            side = "long" if str(pos_side) == "1" else "short"
+
+        size = float(
+            pos.get("contracts", 0)
+            or pos.get("size", 0)
+            or info.get("vol", 0)
+            or info.get("holdVol", 0)
+            or 0
+        )
+        entry_price = float(
+            pos.get("entryPrice", 0)
+            or pos.get("entry_price", 0)
+            or info.get("openAvgPrice", 0)
+            or info.get("holdAvgPrice", 0)
+            or info.get("avgEntryPrice", 0)
+            or 0
+        )
+        exit_price = float(
+            pos.get("exitPrice", 0)
+            or pos.get("exit_price", 0)
+            or info.get("closeAvgPrice", 0)
+            or info.get("closePrice", 0)
+            or 0
+        )
+        pnl = float(
+            pos.get("realizedPnl", 0)
+            or pos.get("pnl", 0)
+            or info.get("realisedPnl", 0)
+            or info.get("relizedPnl", 0)
+            or info.get("closeProfit", 0)
+            or 0
+        )
+
+        # PnL percentage
+        pnl_percent = 0.0
+        if pnl != 0:
+            pnl_percent = float(
+                pos.get("pnlPercentage", 0)
+                or pos.get("pnl_percent", 0)
+                or info.get("profitRatio", 0)
+                or 0
+            )
+            if abs(pnl_percent) > 0:
+                # MEXC returns a ratio (e.g. 0.15 = 15%)
+                pnl_percent = pnl_percent * 100 if abs(pnl_percent) < 1.5 else pnl_percent
+            else:
+                # Compute from margin if available
+                margin = float(
+                    pos.get("collateral", 0)
+                    or pos.get("margin", 0)
+                    or info.get("oim", 0)
+                    or info.get("im", 0)
+                    or info.get("initialMargin", 0)
+                    or 0
+                )
+                if margin > 0:
+                    pnl_percent = (pnl / margin) * 100
+
+        leverage = float(
+            pos.get("leverage", 1) or info.get("leverage", 1) or 1
+        )
+        contract_size = float(pos.get("contractSize", 1) or info.get("contractSize", 1) or 1)
+
+        # Timestamps — ccxt exposes open_time / close_time (ms); MEXC raw
+        # returns openTime / closeTime (ms strings)
+        open_ts = pos.get("open_time") or pos.get("openTime") or info.get("openTime")
+        close_ts = pos.get("close_time") or pos.get("closeTime") or info.get("closeTime")
+        open_time = datetime.utcfromtimestamp(open_ts / 1000.0) if open_ts else None
+        close_time = datetime.utcfromtimestamp(close_ts / 1000.0) if close_ts else None
+
+        # Close reason — infer from raw fields
+        close_reason: Optional[str] = None
+        raw_reason = (
+            pos.get("close_reason")
+            or info.get("closeReason")
+            or info.get("closeType")
+            or info.get("trigger_type")
+        )
+        if raw_reason is not None:
+            reason_str = str(raw_reason).lower()
+            if "liquidat" in reason_str or reason_str in ("2", "liquidation"):
+                close_reason = "liquidated"
+            elif "manual" in reason_str or reason_str in ("1", "close"):
+                close_reason = "manual"
+            elif "close" in reason_str or reason_str in ("3", "0"):
+                close_reason = "closed"
+            else:
+                close_reason = "closed"
+        else:
+            # Default: if pnl <= 0, might be liquidation; else closed
+            close_reason = "closed"
+
+        result.append({
+            "user_id": user_id,
+            "exchange": exchange_name,
+            "symbol": symbol,
+            "side": side,
+            "size": size,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "pnl": pnl,
+            "pnl_percent": pnl_percent,
+            "leverage": leverage,
+            "open_time": open_time,
+            "close_time": close_time,
+            "close_reason": close_reason,
+            "contract_size": contract_size,
+        })
+
+    # Sort by close_time descending (most recent first)
+    result.sort(
+        key=lambda p: (p["close_time"] or p["open_time"] or datetime.utcnow()),
+        reverse=True,
+    )
+    return result[:200]  # Cap at 200 entries
+
+
+def _fetch_order_history(
+    exchange: Any,
+    user_id: int,
+    exchange_name: str,
+) -> List[Dict[str, Any]]:
+    """Fetch closed/cancelled orders across the user's active symbols.
+
+    MEXC requires a symbol for ``fetchClosedOrders`` (symbolRequired=True),
+    so we iterate over the user's balance symbols similar to ``_fetch_trades``.
+    Returns a normalised list of dicts suitable for direct
+    ``OrderHistoryItem`` construction.
+
+    Spot-only accounts return an empty list when there are no balance symbols.
+    """
+    import ccxt  # noqa: PLC0415
+
+    result: List[Dict[str, Any]] = []
+
+    # 1. Build symbol list from the user's balance assets
+    #    (reuse fetchBalance to avoid a DB dependency here)
+    symbols_to_query: List[str] = []
+    try:
+        raw_balance = exchange.fetchBalance()
+        for currency, data in (raw_balance or {}).items():
+            if not isinstance(data, dict) or "total" not in data:
+                continue
+            total = float(data.get("total", 0) or 0)
+            if total < 1e-8:
+                continue
+            if currency.upper() in ("USDT", "USD", "USDC", "BUSD", "TUSD", "DAI"):
+                continue
+            symbols_to_query.append(f"{currency}/USDT")
+    except Exception:
+        pass
+
+    # Also try fetching positions to get futures symbols
+    try:
+        raw_positions = exchange.fetchPositions()
+        for p in raw_positions or []:
+            sym = p.get("symbol") if isinstance(p, dict) else None
+            if sym and sym not in symbols_to_query:
+                symbols_to_query.append(sym)
+    except Exception:
+        pass
+
+    # Limit to avoid rate limits
+    symbols_to_query = symbols_to_query[:15]
+
+    # 2. Fetch closed orders per symbol
+    all_orders: List[Dict[str, Any]] = []
+    for symbol in symbols_to_query:
+        try:
+            if hasattr(exchange, "fetchClosedOrders"):
+                raw = exchange.fetchClosedOrders(symbol) or []
+            else:
+                raw = exchange.fetch_orders(symbol, {"status": "closed"}) or []
+            all_orders.extend(raw)
+        except (ccxt.BadSymbol, ccxt.NotSupported):
+            continue
+        except Exception:
+            # Skip symbols that fail (delisted, etc.)
+            continue
+
+    # 3. Sort by timestamp descending and cap
+    all_orders.sort(
+        key=lambda o: o.get("timestamp", 0) or 0,
+        reverse=True,
+    )
+    all_orders = all_orders[:200]
+
+    # 4. Normalise each order entry
+    for order in all_orders:
+        info = order.get("info", {})
+        ts = order.get("timestamp")
+        status = order.get("status") or info.get("status") or info.get("state") or ""
+        # Normalise status labels
+        status_lower = str(status).lower()
+        if status_lower in ("closed", "filled"):
+            status = "filled"
+        elif status_lower in ("canceled", "cancelled"):
+            status = "cancelled"
+        elif status_lower in ("open", "new", "untriggered"):
+            status = "open"
+
+        result.append({
+            "user_id": user_id,
+            "exchange": exchange_name,
+            "symbol": (order.get("symbol") or "").replace("/", ""),
+            "type": order.get("type") or info.get("type") or "limit",
+            "side": order.get("side") or info.get("side") or "",
+            "price": float(order.get("price", 0) or info.get("price", 0) or 0),
+            "amount": float(
+                order.get("amount", 0)
+                or order.get("quantity", 0)
+                or info.get("vol", 0)
+                or info.get("origQty", 0)
+                or 0
+            ),
+            "filled": float(
+                order.get("filled", 0)
+                or order.get("filledAmount", 0)
+                or info.get("dealVol", 0)
+                or info.get("executedQty", 0)
+                or 0
+            ),
+            "cost": float(order.get("cost", 0) or info.get("dealMoney", 0) or 0),
+            "status": status,
+            "timestamp": (
+                datetime.utcfromtimestamp(ts / 1000.0)
+                if ts
+                else datetime.utcnow()
+            ),
+            "reduce_only": 1 if (order.get("reduceOnly") or info.get("reduceOnly")) else 0,
         })
 
     return result

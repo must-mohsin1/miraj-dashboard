@@ -146,6 +146,36 @@ export interface TradeItem {
   exchange_trade_id: string;
 }
 
+/** A single closed/historical position row. */
+export interface PositionHistoryItem {
+  symbol: string;
+  side: string;
+  size: number;
+  entry_price: number;
+  exit_price: number;
+  pnl: number;
+  pnl_percent: number;
+  leverage: number;
+  open_time: string | null;
+  close_time: string | null;
+  close_reason: string | null;
+  contract_size?: number | null;
+}
+
+/** A single historical (closed/cancelled) order row. */
+export interface OrderHistoryItem {
+  symbol: string;
+  type: string;
+  side: string;
+  price: number;
+  amount: number;
+  filled: number;
+  cost: number;
+  status: string;
+  timestamp: string;
+  reduce_only: number | null;
+}
+
 /** Aggregated portfolio snapshot metrics. */
 export interface SnapshotItem {
   total_balance_usd: number | null;
@@ -160,9 +190,20 @@ export interface PortfolioResponse {
   balances: BalanceItem[];
   positions: PositionItem[];
   trades: TradeItem[];
+  position_history: PositionHistoryItem[];
+  order_history: OrderHistoryItem[];
   snapshot: SnapshotItem | null;
   last_refreshed: string | null;
   stale: boolean;
+}
+  stale: boolean;
+}
+
+/** Response for `GET /api/v1/portfolio/{exchange}/history`. */
+export interface HistoryResponse {
+  exchange: string;
+  position_history: PositionHistoryItem[];
+  order_history: OrderHistoryItem[];
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────
