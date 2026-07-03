@@ -16,9 +16,10 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -29,6 +30,11 @@ from backend.alerts.telegram import format_alert_message as format_tg_message, s
 from backend.alerts.discord import build_embed, send_webhook
 
 logger = logging.getLogger(__name__)
+
+#: Per-alert cooldown — once fired, won't fire again for this many hours.
+#: Protects against duplicate fires within a single scheduler cycle and
+#: suppresses re-armed alerts long enough for the user to react.
+COOLDOWN_HOURS = 1
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
@@ -155,19 +161,26 @@ async def delete_price_alert(
 async def check_single_price(
     symbol: str,
 ) -> Optional[float]:
-    """Fetch the latest price for *symbol* via yfinance.
+    """Fetch the latest price for *symbol* via ccxt (Binance public ticker).
 
-    Returns the current price as a float, or ``None`` if the fetch fails.
+    Accepts any of the dashboard symbol conventions (``BTCUSDT``, ``BTC-USD``,
+    ``BTC/USDT``) by delegating normalisation to
+    :func:`backend.routes.stream._to_ccxt_symbol`.  Returns ``None`` on failure.
+
+    Note: previous implementations used ``yfinance`` which cannot resolve
+    concatenated watchlist symbols like ``BTCUSDT`` — ccxt is required so
+    alerts actually fire for watchlist pairs.
     """
-    import yfinance as yf
     try:
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period="1d", interval="1m")
-        if data is None or data.empty:
-            # Fall back to 5d daily
-            data = ticker.history(period="5d", interval="1d")
-        if data is not None and not data.empty:
-            return float(data["Close"].iloc[-1])
+        from backend.routes.stream import _fetch_ticker_price, _get_public_exchange, _to_ccxt_symbol
+
+        exchange = await _get_public_exchange()
+        ccxt_symbol = _to_ccxt_symbol(symbol)
+        return await _fetch_ticker_price(exchange, ccxt_symbol)
+    except ImportError:
+        logger.warning(
+            "ccxt/stream module unavailable; cannot fetch price for %s", symbol,
+        )
         return None
     except Exception as exc:
         logger.warning("Failed to fetch price for %s: %s", symbol, exc)
@@ -178,9 +191,11 @@ async def check_price_alerts(session: AsyncSession) -> list[dict[str, Any]]:
     """Check all active price alerts and trigger those whose level is hit.
 
     For each active alert:
-      1. Fetch the current market price via yfinance.
+      1. Fetch the current market price via ccxt (Binance public ticker).
       2. Evaluate if the trigger condition (above/below) is met.
-      3. If met, mark as triggered and send notifications.
+      3. If the price has crossed the level AND the alert is not in cooldown
+         (``triggered_at`` more than ``COOLDOWN_HOURS`` ago for the same
+         pair+direction), mark as triggered and send notifications.
 
     Returns a list of outcome dicts for logging::
 
@@ -221,11 +236,39 @@ async def check_price_alerts(session: AsyncSession) -> list[dict[str, Any]]:
             elif alert.direction == "below" and current_price <= alert.price_level:
                 triggered = True
 
-            if triggered:
-                outcome = await _trigger_alert(session, alert, current_price)
-                outcomes.append(outcome)
+            if not triggered:
+                continue
+
+            # ── Cooldown / dedup ────────────────────────────────────────
+            # Skip if this alert fired within the cooldown window.  This is
+            # the same pair+direction (the alert IS the pair+direction
+            # binding), so a single check on ``triggered_at`` suffices and
+            # also prevents repeated fires while the price lingers past the
+            # level across scheduler cycles.
+            if _is_in_cooldown(alert):
+                logger.debug(
+                    "Price alert %d (%s %s) fired recently — in cooldown, skipping",
+                    alert.id, alert.symbol, alert.direction,
+                )
+                continue
+
+            outcome = await _trigger_alert(session, alert, current_price)
+            outcomes.append(outcome)
 
     return outcomes
+
+
+def _is_in_cooldown(alert: PriceAlert) -> bool:
+    """Return ``True`` if *alert* was triggered within ``COOLDOWN_HOURS``."""
+    if alert.triggered_at is None:
+        return False
+    try:
+        last = alert.triggered_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - last < timedelta(hours=COOLDOWN_HOURS)
+    except Exception:
+        return False
 
 
 # ── Trigger handler ────────────────────────────────────────────────────────

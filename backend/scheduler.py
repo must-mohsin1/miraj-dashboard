@@ -4,7 +4,7 @@ Three recurring jobs:
   1. **Watchlist scan** (every 4 h) — fetches every user's watchlist, runs the
      full analysis pipeline for each unique pair, writes results to ``analyses``,
      then invokes the alert manager.
-  2. **Price alert check** (every 15 m) — evaluates active price alerts.
+  2. **Price alert check** (every 2 m) — evaluates active price alerts.
   3. **Portfolio auto-refresh** (every 5 m) — finds all connected users (rows in
      ``exchange_keys``) and refreshes their cached balances/positions/trades by
      calling the exchange service directly (no HTTP auth overhead). Keeps PnL
@@ -381,9 +381,9 @@ def setup_scheduler(app) -> AsyncIOScheduler:
     )
     scheduler.add_job(
         _check_price_alerts_job,
-        trigger=CronTrigger(minute="*/15"),  # every 15 minutes
-        id="price_alert_check",
-        name="Price alert check (every 15m)",
+        trigger=CronTrigger(minute="*/2"),  # every 2 minutes
+        id="check_price_alerts",
+        name="Price alert check (every 2m)",
         replace_existing=True,
     )
     scheduler.add_job(
