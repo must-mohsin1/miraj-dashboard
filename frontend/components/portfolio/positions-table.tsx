@@ -122,10 +122,11 @@ export function PositionsTable({ positions, livePrices = null }: PositionsTableP
               liveMark != null && dir !== 0
                 ? (liveMark - p.entry_price) * p.size * contractSize * dir
                 : p.pnl;
+            // PnL% = ROI on margin (matches MEXC's display)
             const pnlPercent =
               liveMark != null && dir !== 0
-                ? p.entry_price !== 0
-                  ? (pnl / (p.entry_price * Math.abs(p.size) * contractSize)) * 100
+                ? p.margin > 0
+                  ? (pnl / p.margin) * 100
                   : 0
                 : p.pnl_percent;
             const pnlPositive = pnl >= 0;
