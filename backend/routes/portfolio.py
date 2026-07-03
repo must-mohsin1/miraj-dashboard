@@ -252,6 +252,7 @@ def _serialise_position(row: PortfolioPosition) -> Dict[str, Any]:
         "leverage": row.leverage,
         "liquidation_price": row.liquidation_price,
         "margin": row.margin,
+        "contract_size": row.contract_size,
     }
 
 
@@ -669,6 +670,7 @@ async def _persist_portfolio_data(
             leverage=pos["leverage"],
             liquidation_price=pos["liquidation_price"],
             margin=pos["margin"],
+            contract_size=pos.get("contract_size", 1.0),
             updated_at=now,
         ))
 

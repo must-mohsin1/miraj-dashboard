@@ -202,6 +202,7 @@ class PortfolioPosition(Base):
     leverage = Column(Float, nullable=False)
     liquidation_price = Column(Float, nullable=True)
     margin = Column(Float, nullable=False)
+    contract_size = Column(Float, nullable=True, default=1.0)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="portfolio_positions")
