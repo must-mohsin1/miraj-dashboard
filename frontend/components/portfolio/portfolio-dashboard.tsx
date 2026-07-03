@@ -132,6 +132,7 @@ export function PortfolioDashboard({
 }: PortfolioDashboardProps) {
   const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
+  const [autoRefreshing, setAutoRefreshing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -231,6 +232,23 @@ export function PortfolioDashboard({
       }
     };
   }, [streamSymbols]);
+
+  // Automatic background refresh — every 5 minutes, call router.refresh()
+  // to re-render the server component with the freshest cached data (which
+  // the backend scheduler keeps up to date independently). This is a light
+  // revalidation — the manual Refresh button does a full exchange fetch.
+  useEffect(() => {
+    const AUTO_REFRESH_MS = 5 * 60 * 1000; // 5 minutes
+    const interval = setInterval(() => {
+      setAutoRefreshing(true);
+      // router.refresh() re-renders the server component asynchronously;
+      // clear the indicator shortly after to let the new data settle in.
+      router.refresh();
+      // Brief pulse so the indicator is visible but not distracting.
+      setTimeout(() => setAutoRefreshing(false), 1500);
+    }, AUTO_REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [router]);
 
   // The price map is only "live" once the stream is open and we have data.
   const livePrices: PriceMap | null =
@@ -355,6 +373,12 @@ export function PortfolioDashboard({
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
               </span>
               Live
+            </span>
+          )}
+          {autoRefreshing && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-sky-700/50 bg-sky-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-400">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Auto-refreshing
             </span>
           )}
         </div>
