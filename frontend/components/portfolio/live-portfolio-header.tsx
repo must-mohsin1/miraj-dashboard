@@ -135,24 +135,15 @@ export function LivePortfolioHeader({
       }
     }
 
-    // 2. Sum live PnL across all open positions.
+    // 2. Sum PnL across all open positions.
+    // Use backend PnL (from MEXC API) — MEXC contract sizes differ from
+    // raw size field, so client-side recalculation is inaccurate.
     let pnl = 0;
     let hasLivePnl = false;
     for (const p of positions) {
       const livePrice = livePositionPrice(p.symbol, livePrices);
-      let positionPnl: number;
-      if (livePrice != null) {
-        const dir =
-          p.side?.toUpperCase() === "LONG" ||
-          p.side?.toUpperCase() === "BUY"
-            ? 1
-            : -1;
-        positionPnl = (livePrice - p.entry_price) * p.size * dir;
-        hasLivePnl = true;
-      } else {
-        positionPnl = p.pnl;
-      }
-      pnl += positionPnl;
+      if (livePrice != null) hasLivePnl = true;
+      pnl += p.pnl;
     }
 
     // 3. Total = balance values + live PnL (we avoid double-counting margins

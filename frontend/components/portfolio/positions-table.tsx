@@ -113,17 +113,11 @@ export function PositionsTable({ positions, livePrices = null }: PositionsTableP
             const liveTick = livePrices?.[priceKey];
             const liveMark = liveTick?.price ?? null;
 
+            // Use live mark price for display + flash, but keep backend PnL/PnL%
+            // (MEXC contract sizes differ from raw size, so client-side PnL calc is inaccurate)
             const markPrice = liveMark ?? p.mark_price;
-            const pnl =
-              liveMark != null && dir !== 0
-                ? (liveMark - p.entry_price) * p.size * dir
-                : p.pnl;
-            const pnlPercent =
-              liveMark != null && dir !== 0
-                ? p.entry_price !== 0
-                  ? (pnl / (p.entry_price * Math.abs(p.size))) * 100
-                  : 0
-                : p.pnl_percent;
+            const pnl = p.pnl;
+            const pnlPercent = p.pnl_percent;
             const pnlPositive = pnl >= 0;
 
             return (
