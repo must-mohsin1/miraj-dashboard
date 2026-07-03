@@ -7,6 +7,7 @@ import { z } from "zod";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { CheckCircle2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ type LoginValues = z.infer<typeof loginSchema>;
 export function LoginForm({ className }: { className?: string }) {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") ?? "/";
+  const justRegistered = searchParams.get("registered") === "1";
   const [serverError, setServerError] = useState<string | null>(null);
 
   const {
@@ -64,6 +66,15 @@ export function LoginForm({ className }: { className?: string }) {
       </CardHeader>
       <form onSubmit={handleSubmit(onSubmit)}>
         <CardContent className="space-y-4">
+          {justRegistered && (
+            <div
+              role="status"
+              className="flex items-center gap-2 rounded-md border border-emerald-600/50 bg-emerald-500/10 p-3 text-sm text-emerald-400"
+            >
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              <span>Account created! Please sign in.</span>
+            </div>
+          )}
           {serverError && (
             <div
               role="alert"

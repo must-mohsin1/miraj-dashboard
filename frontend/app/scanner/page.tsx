@@ -1,9 +1,11 @@
 import { Search } from "lucide-react";
+import { Suspense } from "react";
 
 import { getAccessToken } from "@/lib/auth";
 import { serverFetch } from "@/lib/api";
 import type { WatchlistResponse } from "@/lib/types";
 import { WatchlistTable } from "@/components/watchlist-table";
+import { TableSkeleton } from "@/components/skeletons";
 
 /**
  * Scanner page — async Server Component.
@@ -57,7 +59,9 @@ export default async function ScannerPage() {
       </header>
 
       <section aria-label="Watchlist">
-        <WatchlistTable token={token} />
+        <Suspense fallback={<TableSkeleton />}>
+          <WatchlistTable token={token} />
+        </Suspense>
       </section>
     </div>
   );

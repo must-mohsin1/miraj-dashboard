@@ -1,10 +1,12 @@
 import { AlertTriangle, Clock } from "lucide-react";
+import { Suspense } from "react";
 
 import { getAccessToken } from "@/lib/auth";
 import { serverFetch } from "@/lib/api";
 import type { MacroResponse } from "@/lib/types";
 import { MacroCards } from "@/components/macro-cards";
 import { MacroChart } from "@/components/macro-chart";
+import { CardSkeleton } from "@/components/skeletons";
 import { Badge } from "@/components/ui/badge";
 
 /**
@@ -92,7 +94,9 @@ export default async function MacroPage() {
 
       {/* Stat cards */}
       <section aria-label="Macro indicators">
-        <MacroCards data={data} />
+        <Suspense fallback={<CardSkeleton />}>
+          <MacroCards data={data} />
+        </Suspense>
       </section>
 
       {/* Charts */}

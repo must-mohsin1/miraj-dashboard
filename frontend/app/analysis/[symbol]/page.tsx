@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -16,6 +17,7 @@ import { ScoreGauge } from "@/components/score-gauge";
 import { TradePlan } from "@/components/trade-plan";
 import { LiveCandlestickChart } from "@/components/live-candlestick-chart";
 import { TradingGlossary } from "@/components/trading-glossary";
+import { ChartSkeleton } from "@/components/skeletons";
 
 /**
  * Analysis detail page — async Server Component.
@@ -288,19 +290,21 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
 
       {/* Candlestick chart (with live price streaming) */}
       <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <LiveCandlestickChart
-          candles={candles}
-          emas={result.emas ?? null}
-          orderBlocks={result.order_blocks ?? null}
-          fvgs={result.fvgs ?? null}
-          symbol={result.symbol}
-          token={token}
-          tradeLevels={{
-            entry: flat?.entry ?? null,
-            stopLoss: flat?.stop_loss ?? null,
-            targets: tradeTargets,
-          }}
-        />
+        <Suspense fallback={<ChartSkeleton />}>
+          <LiveCandlestickChart
+            candles={candles}
+            emas={result.emas ?? null}
+            orderBlocks={result.order_blocks ?? null}
+            fvgs={result.fvgs ?? null}
+            symbol={result.symbol}
+            token={token}
+            tradeLevels={{
+              entry: flat?.entry ?? null,
+              stopLoss: flat?.stop_loss ?? null,
+              targets: tradeTargets,
+            }}
+          />
+        </Suspense>
         <TradingGlossary />
       </section>
 

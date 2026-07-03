@@ -1,10 +1,14 @@
-"""APScheduler integration — periodic scan of all active watchlist pairs.
+"""APScheduler integration — periodic background jobs.
 
-Every 4 hours the scheduler fetches every user's watchlist, runs the full
-analysis pipeline for each unique pair, then writes results to the ``analyses``
-table for every user who watches that pair.  After persisting results, the
-alert manager evaluates thresholds and delivers alerts.  Each cycle is tracked
-in ``scan_runs`` with status tracking.
+Three recurring jobs:
+  1. **Watchlist scan** (every 4 h) — fetches every user's watchlist, runs the
+     full analysis pipeline for each unique pair, writes results to ``analyses``,
+     then invokes the alert manager.
+  2. **Price alert check** (every 15 m) — evaluates active price alerts.
+  3. **Portfolio auto-refresh** (every 5 m) — finds all connected users (rows in
+     ``exchange_keys``) and refreshes their cached balances/positions/trades by
+     calling the exchange service directly (no HTTP auth overhead). Keeps PnL
+     current without the user clicking Refresh.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from backend.database import get_session_factory
-from backend.models import Analysis, ScanRun, WatchlistPair
+from backend.models import Analysis, ExchangeKey, ScanRun, WatchlistPair
 from backend.obsidian import get_vault_path, is_sync_enabled, sync_scan_result
 from backend.services.analysis_service import run_scan
 
@@ -233,6 +237,132 @@ async def _check_price_alerts_job() -> None:
             logger.exception("Price alert check failed: %s", exc)
 
 
+# ── Portfolio auto-refresh job ──────────────────────────────────────────────
+
+
+async def refresh_all_portfolios_job() -> None:
+    """APScheduler job callback — refresh cached portfolio data for every
+    connected user on every supported exchange.
+
+    Designed to run every 5 minutes.  For each ``(user_id, exchange)`` row in
+    ``exchange_keys`` it:
+
+      1. Opens a dedicated DB session (independent of any HTTP request).
+      2. Calls ``get_exchange()`` to build a ccxt instance from the stored
+         encrypted keys — *no HTTP round-trip / JWT auth overhead*.
+      3. Calls ``fetch_portfolio()`` to pull fresh balances / positions / trades.
+      4. Persists results via the existing ``_persist_portfolio_data`` helper
+         (same code path as the manual ``POST /refresh`` endpoint).
+
+    Resilience:
+      * **No connected users** → logs and returns immediately (skips entirely).
+      * **Rate limits** → each user is refreshed at most once per 5-min cycle
+        (the cron interval is the natural throttle); per-user failures are
+        caught so one user being rate-limited doesn't skip others.
+      * **Errors** → logged and the job continues to the next user/exchange;
+        a top-level ``except`` guarantees the scheduler is never crashed.
+    """
+    logger.info("Portfolio auto-refresh: starting cycle")
+
+    # Import here to avoid a circular import at module load time
+    # (portfolio.py imports from exchange_service and models).
+    from backend.routes.portfolio import _persist_portfolio_data
+    from backend.services.exchange_service import (
+        ExchangeError,
+        ExchangeRateLimitError,
+        fetch_portfolio,
+        get_exchange,
+        is_ccxt_available,
+    )
+
+    # Skip entirely if ccxt isn't installed (e.g. lightweight deploy).
+    if not is_ccxt_available():
+        logger.info("Portfolio auto-refresh: ccxt not installed — skipping")
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        # ── Find every connected (user, exchange) pair ────────────────
+        result = await session.execute(select(ExchangeKey))
+        key_rows = result.scalars().all()
+
+        if not key_rows:
+            logger.info("Portfolio auto-refresh: no connected users — skipping")
+            return
+
+        logger.info(
+            "Portfolio auto-refresh: refreshing %d user/exchange connection(s)",
+            len(key_rows),
+        )
+
+        success_count = 0
+        skip_count = 0
+        fail_count = 0
+
+        # Process sequentially — MEXC/etc. rate limits are per-user, but a
+        # single ccxt instance per user already enablesRateLimit. Processing
+        # one at a time keeps the outbound request rate modest and the logs
+        # easy to follow.
+        for row in key_rows:
+            user_id = row.user_id
+            exchange_slug = row.exchange
+            label = f"user {user_id} / {exchange_slug}"
+
+            try:
+                exchange_instance = await get_exchange(
+                    user_id=user_id,
+                    exchange_name=exchange_slug,
+                    db_session=session,
+                )
+                data = await fetch_portfolio(
+                    exchange_instance=exchange_instance,
+                    user_id=user_id,
+                )
+                await _persist_portfolio_data(
+                    session, user_id, exchange_slug, data, datetime.utcnow()
+                )
+                await session.commit()
+                success_count += 1
+                logger.info(
+                    "Portfolio auto-refresh: refreshed %s "
+                    "(%d balances, %d positions, %d trades)",
+                    label,
+                    len(data["balances"]),
+                    len(data["positions"]),
+                    len(data["trades"]),
+                )
+            except ExchangeRateLimitError as exc:
+                # Rate-limited by the exchange — log and move on; the 5-min
+                # cron interval ensures we don't hammer the API (≤1 refresh
+                # per user per cycle).
+                # Roll back any partial state for this user before continuing.
+                await session.rollback()
+                skip_count += 1
+                logger.warning(
+                    "Portfolio auto-refresh: rate-limited for %s — skipping: %s",
+                    label, exc,
+                )
+            except ExchangeError as exc:
+                await session.rollback()
+                fail_count += 1
+                logger.warning(
+                    "Portfolio auto-refresh: exchange error for %s — skipping: %s",
+                    label, exc,
+                )
+            except Exception as exc:
+                await session.rollback()
+                fail_count += 1
+                logger.exception(
+                    "Portfolio auto-refresh: unexpected error for %s: %s",
+                    label, exc,
+                )
+
+        logger.info(
+            "Portfolio auto-refresh: cycle complete — %d ok, %d skipped, %d failed",
+            success_count, skip_count, fail_count,
+        )
+
+
 # ── Lifecycle helpers ──────────────────────────────────────────────────────
 
 
@@ -254,6 +384,13 @@ def setup_scheduler(app) -> AsyncIOScheduler:
         trigger=CronTrigger(minute="*/15"),  # every 15 minutes
         id="price_alert_check",
         name="Price alert check (every 15m)",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        refresh_all_portfolios_job,
+        trigger=CronTrigger(minute="*/5"),  # every 5 minutes
+        id="portfolio_auto_refresh",
+        name="Portfolio auto-refresh (every 5m)",
         replace_existing=True,
     )
     # Register the daily digest job

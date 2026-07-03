@@ -1,5 +1,6 @@
 """FastAPI application entry-point."""
 
+import asyncio
 from contextlib import asynccontextmanager
 import logging
 
@@ -112,12 +113,31 @@ async def lifespan(app: FastAPI):
     from backend.scheduler import setup_scheduler, start_scheduler
 
     setup_scheduler(app)
-    start_scheduler()
+    # Start the scheduler as a background task so FastAPI startup isn't
+    # blocked and the scheduler runs for the lifetime of the app.
+    asyncio.create_task(_start_scheduler_task())
+
     yield
+
     # ── Stop APScheduler ─────────────────────────────────────────────
     from backend.scheduler import stop_scheduler
 
     stop_scheduler()
+
+
+async def _start_scheduler_task() -> None:
+    """Background task wrapper that starts APScheduler on app startup.
+
+    Wrapped in an exception boundary so a scheduler failure never crashes
+    the FastAPI server process — it logs and exits the task only.
+    """
+    try:
+        from backend.scheduler import start_scheduler
+
+        start_scheduler()
+        logger.info("APScheduler started as background task")
+    except Exception as exc:
+        logger.exception("Failed to start APScheduler: %s", exc)
 
 
 app = FastAPI(

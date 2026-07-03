@@ -7,6 +7,7 @@ import type { KeysResponse, PortfolioResponse } from "@/lib/types";
 import { ConnectForm } from "@/components/portfolio/connect-form";
 import { PortfolioDashboard } from "@/components/portfolio/portfolio-dashboard";
 import { ExchangeSelector } from "@/components/portfolio/exchange-selector";
+import { TabsSkeleton } from "@/components/skeletons";
 
 /**
  * Portfolio page — async Server Component.
@@ -97,12 +98,14 @@ export default async function PortfolioPage({ searchParams }: PageProps) {
       </header>
 
       {isConnected ? (
-        <PortfolioDashboard
-          token={token}
-          portfolio={portfolio}
-          maskedKey={keys?.masked_key ?? null}
-          exchange={exchange}
-        />
+        <Suspense fallback={<TabsSkeleton />}>
+          <PortfolioDashboard
+            token={token}
+            portfolio={portfolio}
+            maskedKey={keys?.masked_key ?? null}
+            exchange={exchange}
+          />
+        </Suspense>
       ) : (
         <ConnectForm token={token} exchange={exchange} />
       )}

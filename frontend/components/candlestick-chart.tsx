@@ -186,6 +186,26 @@ export function CandlestickChart({
         timeVisible: true,
         secondsVisible: false,
       },
+      // ── Touch / mobile gesture config ─────────────────────────────────
+      // handleScale enables pinch-to-zoom on the time & price axes (and
+      // scale-on-axis when a user drags on an axis). handleScroll enables
+      // touch panning (1-finger drag) and kinetic momentum scrolling.
+      handleScale: {
+        axisPressedMouseMove: true,
+        axisDoubleClickReset: true,
+        mouseWheel: true,
+        pinch: true,
+      },
+      handleScroll: {
+        mouseWheel: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      // Kinetic (momentum) scrolling for touch pans — feels native on mobile.
+      kineticScroll: {
+        touch: true,
+        mouse: false,
+      },
       width: container.clientWidth || 600,
       height: chartHeight,
     });
