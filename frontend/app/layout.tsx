@@ -5,6 +5,7 @@ import "./globals.css";
 import { auth } from "@/auth";
 import { AppShell } from "@/components/app-shell";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Providers } from "@/components/providers";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -31,7 +32,9 @@ export default async function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans`}>
         <ThemeProvider>
-          <AppShell email={session?.user?.email}>{children}</AppShell>
+          <Providers>
+            <AppShell email={session?.user?.email}>{children}</AppShell>
+          </Providers>
         </ThemeProvider>
       </body>
     </html>
