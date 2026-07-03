@@ -101,10 +101,13 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
     [pairs],
   );
   // Get token client-side via useSession (server-passed token isn't in RSC payload)
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const clientToken = session?.accessToken ?? token;
 
-  const { prices, isConnected } = usePriceStream(streamSymbols, clientToken);
+  const { prices, isConnected } = usePriceStream(
+    streamSymbols,
+    status === 'loading' ? null : clientToken,
+  );
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();

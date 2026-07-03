@@ -47,15 +47,18 @@ export function LiveCandlestickChart({
   tradeLevels = null,
   token,
 }: LiveCandlestickChartProps) {
-  // Subscribe to a single symbol's live price stream.
-  // useMemo keeps the array reference stable so the hook's debounce doesn't
-  // fire on every render.
-  // Get token client-side via useSession (server-passed token isn't available in RSC payload)
-  const { data: session } = useSession();
+  // Get token client-side via useSession.
+  // Server-passed token isn't available in RSC payload, so we need the client session.
+  const { data: session, status } = useSession();
   const clientToken = session?.accessToken ?? token;
 
+  // symbols list for the price stream
   const symbols = useMemo(() => [symbol], [symbol]);
-  const { prices, isConnected } = usePriceStream(symbols, clientToken);
+  const { prices, isConnected } = usePriceStream(
+    symbols,
+    // Only pass token when session is loaded (not 'loading')
+    status === 'loading' ? null : clientToken,
+  );
 
   const livePrices: LivePrices | null = isConnected && Object.keys(prices).length > 0
     ? prices
