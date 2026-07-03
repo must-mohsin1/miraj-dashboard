@@ -81,10 +81,15 @@ function balanceSymbol(asset: string): string {
 function positionSymbol(symbol: string): string {
   const s = symbol.toUpperCase();
   // ccxt futures style "BTC/USDT:USDT" → base "BTC", quote "USDT"
-  const base = s.split(":")[0].replace("/", "-");
+  // Strip the ":USDT" settlement part
+  let base = s.split(":")[0].replace("/", "-");
   // "BTC-USDT" → convert USDT to USD for watchlist compatibility
   if (base.endsWith("-USDT")) {
     return base.slice(0, -5) + "-USD";
+  }
+  // "SOLUSDT" (no separator) → split off USDT suffix → "SOL-USD"
+  if (base.endsWith("USDT") && base.length > 4) {
+    return base.slice(0, -4) + "-USD";
   }
   return base;
 }

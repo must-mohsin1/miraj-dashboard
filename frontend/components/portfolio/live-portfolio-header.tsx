@@ -84,11 +84,12 @@ export interface LivePortfolioHeaderProps {
  */
 export function positionSymbolToPriceKey(symbol: string): string {
   const s = symbol.toUpperCase();
-  // ccxt futures style "BTC/USDT:USDT" → base "BTC", quote "USDT"
-  const base = s.split(":")[0].replace("/", "-");
-  // "BTC-USDT" → convert to "BTC-USD" for SSE key matching
+  let base = s.split(":")[0].replace("/", "-");
   if (base.endsWith("-USDT")) {
     return base.slice(0, -5) + "-USD";
+  }
+  if (base.endsWith("USDT") && base.length > 4) {
+    return base.slice(0, -4) + "-USD";
   }
   return base;
 }

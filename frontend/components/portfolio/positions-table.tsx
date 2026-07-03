@@ -39,10 +39,14 @@ import type { PriceMap } from "@/hooks/use-price-stream";
 function positionSymbolToPriceKey(symbol: string): string {
   const s = symbol.toUpperCase();
   // ccxt futures style "BTC/USDT:USDT" → base "BTC", quote "USDT"
-  const base = s.split(":")[0].replace("/", "-");
+  let base = s.split(":")[0].replace("/", "-");
   // "BTC-USDT" → convert to "BTC-USD" for SSE key matching
   if (base.endsWith("-USDT")) {
     return base.slice(0, -5) + "-USD";
+  }
+  // "SOLUSDT" (no separator) → "SOL-USD"
+  if (base.endsWith("USDT") && base.length > 4) {
+    return base.slice(0, -4) + "-USD";
   }
   return base;
 }
