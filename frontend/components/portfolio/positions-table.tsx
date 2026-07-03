@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useMemo, useRef, useState } from "react";
+
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -10,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { PositionItem } from "@/lib/types";
+import type { PriceMap } from "@/hooks/use-price-stream";
 
 /**
  * PositionsTable — Client Component.
@@ -17,10 +20,34 @@ import type { PositionItem } from "@/lib/types";
  * Renders the user's open futures positions. The Side column shows a coloured
  * badge (green for long, red for short). PnL and PnL% are coloured green for
  * profit, red for loss.
+ *
+ * When a `livePrices` map is supplied (keyed in SSE format, e.g. "BTC-USDT"),
+ * the Mark Price and PnL are recalculated on every tick:
+ *
+ *   liveMark   = livePrices[positionSymbolToPriceKey(symbol)].price
+ *   pnl        = (liveMark - entry_price) * size * (LONG ? 1 : -1)
+ *   pnl_pct    = (pnl / (entry_price * |size|)) * 100
+ *
+ * A live mark price cell flashes green/red with each price update, and the
+ * PnL cell is colored by the sign of the (live-or-static) PnL.
  */
+
+/**
+ * Convert a position symbol (e.g. "BTC/USDT:USDT" or "BTC-USDT") to the SSE
+ * price map key used for live lookups ("BTC-USDT").
+ */
+function positionSymbolToPriceKey(symbol: string): string {
+  const s = symbol.toUpperCase();
+  // ccxt futures style "BTC/USDT:USDT" → base "BTC", quote "USDT"
+  const colon = s.split(":")[0];
+  // "BTC/USDT" or "BTC-USDT" → "BTC-USDT"
+  return colon.replace("/", "-");
+}
 
 interface PositionsTableProps {
   positions: PositionItem[];
+  /** Live prices keyed in SSE format (e.g. "BTC-USDT"). null when not streaming. */
+  livePrices?: PriceMap | null;
 }
 
 function sideMeta(side: string) {
@@ -28,8 +55,7 @@ function sideMeta(side: string) {
   if (s === "LONG" || s === "BUY") {
     return {
       label: "LONG",
-      className:
-        "bg-emerald-500/10 text-emerald-400 border-emerald-700/50",
+      className: "bg-emerald-500/10 text-emerald-400 border-emerald-700/50",
       arrow: "▲" as const,
     };
   }
@@ -47,7 +73,7 @@ function sideMeta(side: string) {
   };
 }
 
-export function PositionsTable({ positions }: PositionsTableProps) {
+export function PositionsTable({ positions, livePrices = null }: PositionsTableProps) {
   if (positions.length === 0) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-sm text-slate-400">
@@ -75,59 +101,160 @@ export function PositionsTable({ positions }: PositionsTableProps) {
         <TableBody>
           {positions.map((p, i) => {
             const meta = sideMeta(p.side);
-            const pnlPositive = p.pnl >= 0;
+            const dir = meta.label === "LONG" ? 1 : meta.label === "SHORT" ? -1 : 0;
+            const priceKey = positionSymbolToPriceKey(p.symbol);
+            const liveTick = livePrices?.[priceKey];
+            const liveMark = liveTick?.price ?? null;
+
+            const markPrice = liveMark ?? p.mark_price;
+            const pnl =
+              liveMark != null && dir !== 0
+                ? (liveMark - p.entry_price) * p.size * dir
+                : p.pnl;
+            const pnlPercent =
+              liveMark != null && dir !== 0
+                ? p.entry_price !== 0
+                  ? (pnl / (p.entry_price * Math.abs(p.size))) * 100
+                  : 0
+                : p.pnl_percent;
+            const pnlPositive = pnl >= 0;
+
             return (
-              <TableRow
+              <PositionRow
                 key={`${p.symbol}-${i}`}
-                className="border-slate-800/60 transition-colors last:border-0 hover:bg-slate-800/30"
-              >
-                <TableCell className="font-medium text-slate-100">
-                  {p.symbol}
-                </TableCell>
-                <TableCell>
-                  <Badge variant="outline" className={meta.className}>
-                    {meta.arrow} {meta.label}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-right text-slate-300 tabular-nums">
-                  {fmt(p.size)}
-                </TableCell>
-                <TableCell className="text-right text-slate-300 tabular-nums">
-                  {fmt(p.entry_price)}
-                </TableCell>
-                <TableCell className="text-right text-slate-300 tabular-nums">
-                  {fmt(p.mark_price)}
-                </TableCell>
-                <TableCell
-                  className={`text-right font-semibold tabular-nums ${
-                    pnlPositive ? "text-emerald-400" : "text-red-400"
-                  }`}
-                >
-                  {pnlPositive ? "+" : ""}
-                  {fmt(p.pnl)}
-                </TableCell>
-                <TableCell
-                  className={`text-right font-semibold tabular-nums ${
-                    pnlPositive ? "text-emerald-400" : "text-red-400"
-                  }`}
-                >
-                  {pnlPositive ? "+" : ""}
-                  {p.pnl_percent.toFixed(2)}%
-                </TableCell>
-                <TableCell className="hidden text-right text-slate-300 tabular-nums md:table-cell">
-                  {p.leverage}x
-                </TableCell>
-                <TableCell className="hidden text-right text-slate-400 tabular-nums md:table-cell">
-                  {p.liquidation_price != null
-                    ? fmt(p.liquidation_price)
-                    : "—"}
-                </TableCell>
-              </TableRow>
+                position={p}
+                dir={dir}
+                meta={meta}
+                markPrice={markPrice}
+                liveMark={liveMark}
+                pnl={pnl}
+                pnlPercent={pnlPercent}
+                pnlPositive={pnlPositive}
+              />
             );
           })}
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+/**
+ * Single position row. Isolated per row so the mark-price flash animation
+ * (green/red) only fires for the symbol whose price just ticked.
+ */
+interface PositionRowProps {
+  position: PositionItem;
+  dir: number;
+  meta: ReturnType<typeof sideMeta>;
+  markPrice: number | null;
+  liveMark: number | null;
+  pnl: number;
+  pnlPercent: number;
+  pnlPositive: boolean;
+}
+
+function PositionRow({
+  position,
+  dir: _dir,
+  meta,
+  markPrice,
+  liveMark,
+  pnl,
+  pnlPercent,
+  pnlPositive,
+}: PositionRowProps) {
+  const [flash, setFlash] = useState<"up" | "down" | null>(null);
+  const prevMarkRef = useRef<number | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (liveMark == null) return;
+    const prev = prevMarkRef.current;
+    if (prev != null && liveMark > prev) {
+      setFlash("up");
+    } else if (prev != null && liveMark < prev) {
+      setFlash("down");
+    }
+    prevMarkRef.current = liveMark;
+
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setFlash(null), 600);
+
+    return () => {
+      if (flashTimerRef.current) {
+        clearTimeout(flashTimerRef.current);
+        flashTimerRef.current = null;
+      }
+    };
+  }, [liveMark]);
+
+  const markColor =
+    flash === "up"
+      ? "text-emerald-400"
+      : flash === "down"
+        ? "text-red-400"
+        : "text-slate-300";
+
+  return (
+    <TableRow
+      className="border-slate-800/60 transition-colors last:border-0 hover:bg-slate-800/30"
+    >
+      <TableCell className="font-medium text-slate-100">
+        <span className="inline-flex items-center gap-2">
+          {position.symbol}
+          {liveMark != null && (
+            <span className="relative flex h-1.5 w-1.5" aria-hidden title="Live price">
+              <span
+                className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
+                style={{ animationDuration: "1.5s" }}
+              />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            </span>
+          )}
+        </span>
+      </TableCell>
+      <TableCell>
+        <Badge variant="outline" className={meta.className}>
+          {meta.arrow} {meta.label}
+        </Badge>
+      </TableCell>
+      <TableCell className="text-right text-slate-300 tabular-nums">
+        {fmt(position.size)}
+      </TableCell>
+      <TableCell className="text-right text-slate-300 tabular-nums">
+        {fmt(position.entry_price)}
+      </TableCell>
+      <TableCell
+        className={`text-right tabular-nums transition-colors duration-300 ${markColor}`}
+      >
+        {markPrice != null ? fmt(markPrice) : "—"}
+      </TableCell>
+      <TableCell
+        className={`text-right font-semibold tabular-nums ${
+          pnlPositive ? "text-emerald-400" : "text-red-400"
+        }`}
+      >
+        {pnlPositive ? "+" : ""}
+        {fmt(pnl)}
+      </TableCell>
+      <TableCell
+        className={`text-right font-semibold tabular-nums ${
+          pnlPositive ? "text-emerald-400" : "text-red-400"
+        }`}
+      >
+        {pnlPositive ? "+" : ""}
+        {pnlPercent.toFixed(2)}%
+      </TableCell>
+      <TableCell className="hidden text-right text-slate-300 tabular-nums md:table-cell">
+        {position.leverage}x
+      </TableCell>
+      <TableCell className="hidden text-right text-slate-400 tabular-nums md:table-cell">
+        {position.liquidation_price != null
+          ? fmt(position.liquidation_price)
+          : "—"}
+      </TableCell>
+    </TableRow>
   );
 }
 

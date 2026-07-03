@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, LogOut, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,9 @@ import {
 import { BalancesTable } from "@/components/portfolio/balances-table";
 import { PositionsTable } from "@/components/portfolio/positions-table";
 import { TradesTable } from "@/components/portfolio/trades-table";
+import { LivePortfolioHeader } from "@/components/portfolio/live-portfolio-header";
 import type { PortfolioResponse } from "@/lib/types";
+import type { PriceMap } from "@/hooks/use-price-stream";
 
 /**
  * PortfolioDashboard — Client Component.
@@ -31,10 +33,75 @@ import type { PortfolioResponse } from "@/lib/types";
  * Both actions use inline fetch (no SWR) because they are one-shot mutations
  * whose result replaces the entire page state — `router.refresh()` handles
  * revalidation.
+ *
+ * ## Live price streaming
+ *
+ * The dashboard subscribes to the FastAPI SSE endpoint
+ * ``GET /api/v1/stream/prices?symbols=…&token=…`` for every balance asset
+ * and every position symbol, converting them to SSE format:
+ *  - Balance asset "BTC"  → "BTC-USD"
+ *  - Position symbol "BTC/USDT:USDT" → "BTC-USDT"
+ *  - Position symbol "BTC-USDT"       → "BTC-USDT"
+ *
+ * The JWT token is fetched client-side via ``fetch('/api/auth/session')``
+ * (same pattern as `live-candlestick-chart.tsx`) because ``EventSource``
+ * cannot set custom Authorization headers. The resulting live price map is
+ * passed down to ``BalancesTable`` and ``PositionsTable`` which recalculate
+ * USD value, PnL and PnL% in real-time.
  */
 
 function titleCase(slug: string): string {
   return slug.charAt(0).toUpperCase() + slug.slice(1);
+}
+
+const STABLECOINS = new Set([
+  "USDT",
+  "USDC",
+  "BUSD",
+  "DAI",
+  "TUSD",
+  "FDUSD",
+  "USDP",
+  "PAX",
+  "GUSD",
+  "UST",
+  "SUSD",
+]);
+
+/** Convert a balance asset ("BTC") to its SSE symbol ("BTC-USD"). */
+function balanceSymbol(asset: string): string {
+  return `${asset.toUpperCase()}-USD`;
+}
+
+/**
+ * Convert a position symbol (e.g. "BTC/USDT:USDT" or "BTC-USDT") to the SSE
+ * symbol format ("BTC-USDT").
+ */
+function positionSymbol(symbol: string): string {
+  const s = symbol.toUpperCase();
+  // ccxt futures style "BTC/USDT:USDT" → base "BTC", quote "USDT"
+  const base = s.split(":")[0];
+  // "BTC/USDT" or "BTC-USDT" → "BTC-USDT"
+  return base.replace("/", "-");
+}
+
+/** Build the sorted, de-duplicated SSE symbol list from balances + positions. */
+function buildStreamSymbols(
+  balances: PortfolioResponse["balances"],
+  positions: PortfolioResponse["positions"],
+): string[] {
+  const set = new Set<string>();
+  for (const b of balances) {
+    // Stablecoins already have a $1 peg — no need to stream them (saves a slot).
+    if (b.total <= 0 && b.free <= 0 && b.locked <= 0) continue;
+    const upper = b.asset.toUpperCase();
+    if (STABLECOINS.has(upper)) continue;
+    set.add(balanceSymbol(b.asset));
+  }
+  for (const p of positions) {
+    set.add(positionSymbol(p.symbol));
+  }
+  return Array.from(set);
 }
 
 interface PortfolioDashboardProps {
@@ -59,6 +126,11 @@ export function PortfolioDashboard({
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Live prices state (SSE).
+  const [prices, setPrices] = useState<PriceMap>({});
+  const [isConnected, setIsConnected] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
+
   const exchangeName = titleCase(exchange);
 
   const balances = portfolio?.balances ?? [];
@@ -67,6 +139,93 @@ export function PortfolioDashboard({
   const snapshot = portfolio?.snapshot ?? null;
   const isStale = portfolio?.stale ?? true;
   const lastRefreshed = portfolio?.last_refreshed ?? null;
+
+  // Compute the SSE symbol list whenever balances/positions change.
+  const streamSymbols = useMemo(
+    () => buildStreamSymbols(balances, positions),
+    [balances, positions],
+  );
+
+  // Subscribe to live prices via EventSource (same pattern as
+  // live-candlestick-chart.tsx: fetch token client-side, pass via ?token=).
+  useEffect(() => {
+    let cancelled = false;
+
+    async function connect() {
+      if (cancelled) return;
+      if (streamSymbols.length === 0) return;
+
+      // Fetch token client-side (EventSource can't set Authorization header).
+      try {
+        const res = await fetch("/api/auth/session");
+        const data = await res.json();
+        const token = data?.user?.accessToken;
+        if (!token || cancelled) return;
+
+        const symParam = streamSymbols.map((s) => s.toUpperCase()).join(",");
+        const url = `/api/v1/stream/prices?symbols=${encodeURIComponent(
+          symParam,
+        )}&token=${encodeURIComponent(token)}`;
+
+        // Close any prior connection before opening a new one.
+        if (esRef.current) {
+          esRef.current.close();
+        }
+
+        const es = new EventSource(url);
+        esRef.current = es;
+
+        es.onopen = () => {
+          if (!cancelled) setIsConnected(true);
+        };
+
+        es.onmessage = (event) => {
+          if (cancelled) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.symbol && typeof data.price === "number") {
+              const sym = data.symbol.toUpperCase();
+              setPrices((prev) => ({
+                ...prev,
+                [sym]: { price: data.price, timestamp: data.timestamp },
+              }));
+            }
+          } catch {
+            /* ignore malformed lines */
+          }
+        };
+
+        es.onerror = () => {
+          if (!cancelled) setIsConnected(false);
+          es.close();
+          // Reconnect after 3s backoff.
+          setTimeout(() => {
+            if (!cancelled) connect();
+          }, 3000);
+        };
+      } catch {
+        if (!cancelled) {
+          setTimeout(() => {
+            if (!cancelled) connect();
+          }, 3000);
+        }
+      }
+    }
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (esRef.current) {
+        esRef.current.close();
+        esRef.current = null;
+      }
+    };
+  }, [streamSymbols]);
+
+  // The price map is only "live" once the stream is open and we have data.
+  const livePrices: PriceMap | null =
+    isConnected && Object.keys(prices).length > 0 ? prices : null;
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -88,7 +247,7 @@ export function PortfolioDashboard({
         throw new Error(
           `Refresh failed: ${res.status} ${res.statusText}${
             detail ? ` — ${detail}` : ""
-          }`
+          }`,
         );
       }
       router.refresh();
@@ -126,7 +285,7 @@ export function PortfolioDashboard({
         throw new Error(
           `Disconnect failed: ${res.status} ${res.statusText}${
             detail ? ` — ${detail}` : ""
-          }`
+          }`,
         );
       }
       router.refresh();
@@ -166,7 +325,7 @@ export function PortfolioDashboard({
               Stale — click Refresh
             </Badge>
           )}
-          {snapshot && snapshot.total_balance_usd != null && (
+          {snapshot && snapshot.total_balance_usd != null && !isConnected && (
             <Badge
               variant="outline"
               className="border-emerald-700/50 bg-emerald-500/10 text-emerald-400"
@@ -176,6 +335,18 @@ export function PortfolioDashboard({
                 maximumFractionDigits: 2,
               })}
             </Badge>
+          )}
+          {isConnected && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-700/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400">
+              <span className="relative flex h-2 w-2" aria-hidden>
+                <span
+                  className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
+                  style={{ animationDuration: "1.5s" }}
+                />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+              </span>
+              Live
+            </span>
           )}
         </div>
 
@@ -217,6 +388,14 @@ export function PortfolioDashboard({
         </div>
       )}
 
+      {/* Live portfolio summary header — recalculates total value + PnL in real-time */}
+      <LivePortfolioHeader
+        balances={balances}
+        positions={positions}
+        livePrices={livePrices}
+        isConnected={isConnected}
+      />
+
       {/* Tabs */}
       <Tabs defaultValue="balances" className="w-full">
         <TabsList>
@@ -231,10 +410,10 @@ export function PortfolioDashboard({
           </TabsTrigger>
         </TabsList>
         <TabsContent value="balances">
-          <BalancesTable balances={balances} />
+          <BalancesTable balances={balances} livePrices={livePrices} />
         </TabsContent>
         <TabsContent value="positions">
-          <PositionsTable positions={positions} />
+          <PositionsTable positions={positions} livePrices={livePrices} />
         </TabsContent>
         <TabsContent value="trades">
           <TradesTable trades={trades} />
