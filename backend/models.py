@@ -310,12 +310,17 @@ class OrderHistory(Base):
     symbol = Column(String(40), nullable=False)
     type = Column(String(20), nullable=False)  # limit / market
     side = Column(String(10), nullable=False)  # buy / sell
+    side_action = Column(String(20), nullable=True)  # "Open Long", "Close Short", etc.
     price = Column(Float, nullable=False)
     amount = Column(Float, nullable=False)
     filled = Column(Float, nullable=False, default=0.0)
+    filled_price = Column(Float, nullable=True)
     cost = Column(Float, nullable=False, default=0.0)
     status = Column(String(20), nullable=False)  # filled / cancelled / open
     timestamp = Column(DateTime, nullable=False)
+    fee = Column(Float, nullable=True, default=0.0)
+    fee_currency = Column(String(20), nullable=True, default="USDT")
+    leverage = Column(Float, nullable=True, default=1.0)
     reduce_only = Column(Integer, nullable=True, default=0)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
