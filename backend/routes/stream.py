@@ -50,8 +50,9 @@ def _to_ccxt_symbol(symbol: str) -> str:
       * Watchlist / exchange pairs:      ``BTCUSDT``
       * ccxt unified:                    ``BTC/USD`` or ``BTC/USDT``
 
-    ccxt's ``fetchTicker`` requires the unified ``BASE/QUOTE`` form, so we
-    normalise here.  ``BTC-USD`` → ``BTC/USD``, ``BTCUSDT`` → ``BTC/USDT``.
+    For live streaming we prefer ``/USDT`` pairs on Binance because they
+    have the highest liquidity and most frequent price updates.
+    ``BTC-USD`` → ``BTC/USDT``, ``ETH-USD`` → ``ETH/USDT``.
     """
     s = symbol.strip().upper()
     if "/" in s:
@@ -60,18 +61,20 @@ def _to_ccxt_symbol(symbol: str) -> str:
     # Yahoo-finance style: BTC-USD, ETH-USD
     if "-" in s:
         base, quote = s.split("-", 1)
+        # Convert -USD suffix to /USDT for better liquidity on Binance
+        if quote == "USD":
+            return f"{base}/USDT"
         return f"{base}/{quote}"
 
     # Bare concatenated form: BTCUSDT, ETHUSDT
-    # Try to split off the longest known stablecoin quote suffix.
     for quote in ("USDT", "USDC", "BUSD", "TUSD", "FDUSD", "USD", "BTC", "ETH"):
         if s.endswith(quote) and len(s) > len(quote):
             base = s[: -len(quote)]
             if base:
                 return f"{base}/{quote}"
 
-    # Fallback: assume /USD
-    return f"{s}/USD"
+    # Fallback: assume /USDT
+    return f"{s}/USDT"
 
 
 def _display_symbol(symbol: str) -> str:
@@ -112,12 +115,14 @@ async def _fetch_ticker_price(exchange: Any, ccxt_symbol: str) -> Optional[float
 
     Runs the blocking ``fetchTicker`` in a thread pool.  Returns ``None``
     on error (so a single bad symbol doesn't kill the whole stream).
+
+    Note: ccxt caches ticker responses internally.  We clear the cache
+    before each fetch to ensure we always get the latest price.
     """
     try:
         ticker = await asyncio.to_thread(exchange.fetchTicker, ccxt_symbol)
         if ticker and ticker.get("last") is not None:
             return float(ticker["last"])
-        # Some exchanges return ``close`` instead of ``last``
         if ticker and ticker.get("close") is not None:
             return float(ticker["close"])
         return None
