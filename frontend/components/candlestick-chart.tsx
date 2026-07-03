@@ -457,19 +457,26 @@ export function CandlestickChart({
   // candle so it never re-creates the chart — it just calls series.update()
   // to mutate the last candle's close/high/low in place.
   useEffect(() => {
-    if (!livePrices) return;
-    // Only update if the symbol matches the chart's symbol prop.
+    if (!livePrices) {
+      console.log("[chart] no livePrices");
+      return;
+    }
     const sym = symbol.trim().toUpperCase();
     if (!sym) return;
     const tick = livePrices[sym];
-    if (!tick || typeof tick.price !== "number") return;
+    if (!tick || typeof tick.price !== "number") {
+      console.log("[chart] no tick for symbol:", sym, "available keys:", Object.keys(livePrices));
+      return;
+    }
 
     const series = candleSeriesRef.current;
     const last = lastCandleRef.current;
-    if (!series || !last) return;
+    if (!series || !last) {
+      console.log("[chart] no series or last candle ref");
+      return;
+    }
 
     const price = tick.price;
-    // Construct an updated candle: open stays, high/low widen, close = tick price.
     const updated: CandlestickData = {
       time: last.time,
       open: last.open,
@@ -480,14 +487,10 @@ export function CandlestickChart({
 
     try {
       series.update(updated);
-      // Persist the mutation so the next tick continues from here.
       lastCandleRef.current = updated;
+      console.log("[chart] series.update OK, price:", price);
     } catch (err) {
-      // lightweight-charts throws if the time isn't >= the last bar's time.
-      // This can happen during the brief window between data load and the
-      // first live tick — silently ignore.
-      // eslint-disable-next-line no-console
-      console.debug("series.update failed:", err);
+      console.debug("[chart] series.update failed:", err);
     }
     // Re-run only when the livePrices map reference or symbol changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
