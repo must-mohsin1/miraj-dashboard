@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import useSWR, { useSWRConfig } from "swr";
 import { useClientToken } from "@/hooks/use-client-token";
@@ -17,7 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useMutation } from "@/hooks/use-mutation";
-import { usePriceStream } from "@/hooks/use-price-stream";
+import { usePriceStream, type LivePrice } from "@/hooks/use-price-stream";
 import type { WatchlistPair, WatchlistResponse } from "@/lib/types";
 
 /**
@@ -33,6 +33,12 @@ import type { WatchlistPair, WatchlistResponse } from "@/lib/types";
  *
  * Mutations revalidate the SWR `/api/v1/watchlist` cache key so the table
  * stays in sync automatically.
+ *
+ * Live prices are streamed over SSE for every watchlist pair and rendered in
+ * a dedicated "Live Price" column with a flashing LivePriceBadge. A "LIVE"
+ * pill at the top of the table indicates the stream connection state, and
+ * each row shows a 24h-style % change comparing the latest tick to the
+ * previous one (green for up, red for down).
  *
  * NOTE: The backend stores trading pairs under a `pair` field (not
  * `symbol`), and the scan endpoint is `POST /api/v1/scan/{symbol}` (path
@@ -104,6 +110,35 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
   const clientToken = useClientToken();
 
   const { prices, isConnected } = usePriceStream(streamSymbols, clientToken ?? token);
+
+  // Track the previous price per symbol so we can show a +X% / -X% change.
+  // We keep this in a ref (not state) to avoid re-renders on every tick; the
+  // derived change value is computed from `prices` during render.
+  const prevPriceRef = useRef<Record<string, number>>({});
+
+  // Snapshot the "anchor" price for each symbol — the first price we see —
+  // so the % change reflects movement since the stream started, not just the
+  // last tick (which can be noisy and reset on reconnect).
+  const anchorPriceRef = useRef<Record<string, number>>({});
+
+  /**
+   * Given a symbol and its current LivePrice tick, compute the percent
+   * change relative to the anchored first tick. Returns null when there's
+   * no previous tick to compare against.
+   */
+  function getChangePct(symbol: string, live?: LivePrice): number | null {
+    if (!live) return null;
+    const sym = symbol.toUpperCase();
+    const anchor = anchorPriceRef.current[sym];
+    // Set anchor on first seen tick
+    if (anchor == null) {
+      anchorPriceRef.current[sym] = live.price;
+      prevPriceRef.current[sym] = live.price;
+      return null;
+    }
+    if (anchor === 0) return null;
+    return ((live.price - anchor) / anchor) * 100;
+  }
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -241,6 +276,10 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
     setScanning(false);
   }
 
+  // Determine if any prices are flowing (used for the header pill).
+  const hasLivePrices = Object.keys(prices).length > 0;
+  const liveLabel = isConnected ? "LIVE" : hasLivePrices ? "IDLE" : "OFFLINE";
+
   return (
     <div className="flex flex-col gap-4">
       {/* Add pair form + scan-all action */}
@@ -273,21 +312,60 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
           </Button>
         </form>
 
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleScanAll}
-          disabled={scanning || pairs.length === 0}
-          className="border-slate-700 text-slate-200 hover:bg-slate-800"
-        >
-          {scanning ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
-          Scan All
-        </Button>
+        <div className="flex items-center gap-3">
+          {/* Live connection indicator */}
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide transition-colors ${
+              isConnected
+                ? "border-emerald-700/50 bg-emerald-500/10 text-emerald-400"
+                : hasLivePrices
+                  ? "border-amber-700/40 bg-amber-500/10 text-amber-400"
+                  : "border-slate-700 bg-slate-800/50 text-slate-500"
+            }`}
+            title={
+              isConnected
+                ? "SSE price stream connected"
+                : hasLivePrices
+                  ? "Stream idle — last prices shown"
+                  : "Price stream offline"
+            }
+          >
+            <span className="relative flex h-2 w-2">
+              {isConnected && (
+                <span
+                  className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
+                  style={{ animationDuration: "1.5s" }}
+                />
+              )}
+              <span
+                className={`relative inline-flex h-2 w-2 rounded-full ${
+                  isConnected
+                    ? "bg-emerald-400"
+                    : hasLivePrices
+                      ? "bg-amber-400"
+                      : "bg-slate-500"
+                }`}
+              />
+            </span>
+            {liveLabel}
+          </span>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleScanAll}
+            disabled={scanning || pairs.length === 0}
+            className="border-slate-700 text-slate-200 hover:bg-slate-800"
+          >
+            {scanning ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Scan All
+          </Button>
+        </div>
       </div>
 
       {/* Inline error / status messages */}
@@ -325,6 +403,24 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
           <TableHeader>
             <TableRow className="border-slate-800 hover:bg-transparent">
               <TableHead className="text-slate-400">Symbol</TableHead>
+              <TableHead className="text-slate-400">
+                <span className="inline-flex items-center gap-1.5">
+                  Live Price
+                  {isConnected && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-700/50 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none text-emerald-400">
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span
+                          className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
+                          style={{ animationDuration: "1.5s" }}
+                        />
+                        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                      </span>
+                      Live
+                    </span>
+                  )}
+                </span>
+              </TableHead>
+              <TableHead className="text-right text-slate-400">Change</TableHead>
               <TableHead className="text-slate-400">Added</TableHead>
               <TableHead className="text-slate-400">Status</TableHead>
               <TableHead className="text-right text-slate-400">Actions</TableHead>
@@ -334,7 +430,7 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
             {isLoading ? (
               <TableRow className="border-slate-800">
                 <TableCell
-                  colSpan={4}
+                  colSpan={6}
                   className="py-8 text-center text-slate-500"
                 >
                   Loading watchlist…
@@ -343,7 +439,7 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
             ) : error ? (
               <TableRow className="border-slate-800">
                 <TableCell
-                  colSpan={4}
+                  colSpan={6}
                   className="py-8 text-center text-red-400"
                 >
                   Failed to load watchlist: {error.message}
@@ -352,7 +448,7 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
             ) : pairs.length === 0 ? (
               <TableRow className="border-slate-800">
                 <TableCell
-                  colSpan={4}
+                  colSpan={6}
                   className="py-8 text-center text-slate-500"
                 >
                   No pairs in your watchlist yet. Add one above to get started.
@@ -367,10 +463,34 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
                   undefined,
                   { dateStyle: "medium", timeStyle: "short" }
                 );
+                const liveTick = prices[pair.pair.toUpperCase()];
+                const changePct = getChangePct(pair.pair, liveTick);
                 return (
                   <TableRow key={pair.id} className="border-slate-800">
                     <TableCell className="font-medium text-slate-100">
                       {pair.pair}
+                    </TableCell>
+                    <TableCell>
+                      <LivePriceBadge
+                        symbol=""
+                        price={liveTick}
+                        connected={isConnected}
+                        precision={2}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {changePct == null ? (
+                        <span className="text-slate-600">—</span>
+                      ) : (
+                        <span
+                          className={`font-mono tabular-nums text-xs font-semibold ${
+                            changePct >= 0 ? "text-emerald-400" : "text-red-400"
+                          }`}
+                        >
+                          {changePct >= 0 ? "+" : ""}
+                          {changePct.toFixed(2)}%
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell className="text-slate-400">{created}</TableCell>
                     <TableCell className="text-slate-400">

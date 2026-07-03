@@ -2,11 +2,12 @@
 
 Endpoints
 ---------
-POST   /api/v1/alerts/price         — create a price alert
-GET    /api/v1/alerts/price          — list price alerts (optional ``?status=active|triggered|cancelled``)
-GET    /api/v1/alerts/price/{id}     — get a single price alert
-PUT    /api/v1/alerts/price/{id}     — update/cancel a price alert
-DELETE /api/v1/alerts/price/{id}     — delete a price alert
+POST   /api/v1/alerts/price              — create a price alert
+GET    /api/v1/alerts/price              — list price alerts (optional ``?status=active|triggered|cancelled``)
+GET    /api/v1/alerts/price/{id}         — get a single price alert
+PUT    /api/v1/alerts/price/{id}         — update/cancel a price alert
+DELETE /api/v1/alerts/price/{id}         — delete a price alert
+POST   /api/v1/alerts/price/test         — send a test Telegram alert
 """
 
 from __future__ import annotations
@@ -156,6 +157,71 @@ async def list_alerts(
             )
             for a in alerts
         ],
+    )
+
+
+class TestAlertResponse(BaseModel):
+    """Response body for POST /api/v1/alerts/price/test."""
+    ok: bool
+    error: Optional[str] = None
+
+
+# IMPORTANT: This route MUST be placed before ``/{alert_id}`` so that
+# FastAPI does not interpret ``test`` as a path parameter.
+@router.post("/test", response_model=TestAlertResponse)
+async def test_telegram_alert(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> TestAlertResponse:
+    """Send a test Telegram alert to the user's configured channel.
+
+    Finds the user's first enabled Telegram ``AlertChannel``, sends a
+    test message, and returns ``{ok: true}`` on success or
+    ``{ok: false, error: "..."}`` on failure.
+    """
+    from backend.alerts.telegram import send_alert
+    from backend.models import AlertChannel
+    from sqlalchemy import select
+    import json
+
+    result = await session.execute(
+        select(AlertChannel).where(
+            AlertChannel.user_id == current_user.id,
+            AlertChannel.channel_type == "telegram",
+            AlertChannel.enabled == 1,
+        )
+    )
+    channel = result.scalar_one_or_none()
+
+    if not channel:
+        return TestAlertResponse(
+            ok=False,
+            error="No enabled Telegram channel found. Add one in Settings → Alerts.",
+        )
+
+    try:
+        config = json.loads(channel.config) if channel.config else {}
+    except (json.JSONDecodeError, TypeError):
+        config = {}
+
+    chat_id = config.get("chat_id")
+    if not chat_id:
+        return TestAlertResponse(
+            ok=False,
+            error="Telegram channel is missing a chat_id in its config.",
+        )
+
+    message = (
+        "🔔 *Test Alert from Miraj Dashboard*\n\n"
+        "✅ Your Telegram alert channel is working!\n\n"
+        "Active alerts will be sent here when price thresholds are hit.\n"
+        f"Connected as: *{current_user.username}*"
+    )
+
+    success = await send_alert(str(chat_id), message)
+    return TestAlertResponse(
+        ok=success,
+        error=None if success else "Telegram send failed. Check bot token and chat ID.",
     )
 
 
