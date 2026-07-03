@@ -167,13 +167,18 @@ export interface OrderHistoryItem {
   symbol: string;
   type: string;
   side: string;
+  side_action?: string | null;
   price: number;
   amount: number;
   filled: number;
+  filled_price?: number | null;
   cost: number;
   status: string;
   timestamp: string;
-  reduce_only: number | null;
+  fee?: number | null;
+  fee_currency?: string | null;
+  leverage?: number | null;
+  reduce_only?: number | null;
 }
 
 /** Aggregated portfolio snapshot metrics. */

@@ -79,10 +79,11 @@ export function PositionHistoryTable({ positions }: PositionHistoryTableProps) {
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+    <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/60">
       <Table>
         <TableHeader>
           <TableRow className="border-slate-800 hover:bg-transparent">
+            <TableHead className="text-slate-500">Open Time</TableHead>
             <TableHead className="text-slate-500">Close Time</TableHead>
             <TableHead className="text-slate-500">Symbol</TableHead>
             <TableHead className="text-slate-500">Side</TableHead>
@@ -105,7 +106,10 @@ export function PositionHistoryTable({ positions }: PositionHistoryTableProps) {
                 key={`${p.symbol}-${p.close_time ?? p.open_time}-${i}`}
                 className="border-slate-800/60 transition-colors last:border-0 hover:bg-slate-800/30"
               >
-                <TableCell className="text-slate-400 tabular-nums">
+                <TableCell className="whitespace-nowrap text-slate-400 tabular-nums">
+                  {p.open_time ? formatTime(p.open_time) : "—"}
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-slate-400 tabular-nums">
                   {p.close_time ? formatTime(p.close_time) : "—"}
                 </TableCell>
                 <TableCell className="font-medium text-slate-100">

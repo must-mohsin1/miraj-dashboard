@@ -151,12 +151,17 @@ class OrderHistoryItem(BaseModel):
     symbol: str
     type: str
     side: str
+    side_action: Optional[str] = None
     price: float
     amount: float
     filled: float
+    filled_price: Optional[float] = None
     cost: float
     status: str
     timestamp: datetime
+    fee: Optional[float] = None
+    fee_currency: Optional[str] = None
+    leverage: Optional[float] = None
     reduce_only: Optional[int] = None
 
 
