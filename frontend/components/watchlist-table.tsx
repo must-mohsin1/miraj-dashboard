@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Loader2, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import useSWR, { useSWRConfig } from "swr";
+import { useSession } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -99,7 +100,11 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
     () => pairs.map((p) => p.pair),
     [pairs],
   );
-  const { prices, isConnected } = usePriceStream(streamSymbols, token);
+  // Get token client-side via useSession (server-passed token isn't in RSC payload)
+  const { data: session } = useSession();
+  const clientToken = session?.accessToken ?? token;
+
+  const { prices, isConnected } = usePriceStream(streamSymbols, clientToken);
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();

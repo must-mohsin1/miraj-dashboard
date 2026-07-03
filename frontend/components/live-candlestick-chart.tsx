@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useSession } from "next-auth/react";
 
 import { CandlestickChart, type LivePrices } from "@/components/candlestick-chart";
 import { LivePriceBadge } from "@/components/live-price-badge";
@@ -49,8 +50,12 @@ export function LiveCandlestickChart({
   // Subscribe to a single symbol's live price stream.
   // useMemo keeps the array reference stable so the hook's debounce doesn't
   // fire on every render.
+  // Get token client-side via useSession (server-passed token isn't available in RSC payload)
+  const { data: session } = useSession();
+  const clientToken = session?.accessToken ?? token;
+
   const symbols = useMemo(() => [symbol], [symbol]);
-  const { prices, isConnected } = usePriceStream(symbols, token);
+  const { prices, isConnected } = usePriceStream(symbols, clientToken);
 
   const livePrices: LivePrices | null = isConnected && Object.keys(prices).length > 0
     ? prices
