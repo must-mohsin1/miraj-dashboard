@@ -457,24 +457,15 @@ export function CandlestickChart({
   // candle so it never re-creates the chart — it just calls series.update()
   // to mutate the last candle's close/high/low in place.
   useEffect(() => {
-    if (!livePrices) {
-      console.log("[chart] no livePrices");
-      return;
-    }
+    if (!livePrices) return;
     const sym = symbol.trim().toUpperCase();
     if (!sym) return;
     const tick = livePrices[sym];
-    if (!tick || typeof tick.price !== "number") {
-      console.log("[chart] no tick for symbol:", sym, "available keys:", Object.keys(livePrices));
-      return;
-    }
+    if (!tick || typeof tick.price !== "number") return;
 
     const series = candleSeriesRef.current;
     const last = lastCandleRef.current;
-    if (!series || !last) {
-      console.log("[chart] no series or last candle ref");
-      return;
-    }
+    if (!series || !last) return;
 
     const price = tick.price;
     const updated: CandlestickData = {
@@ -488,7 +479,6 @@ export function CandlestickChart({
     try {
       series.update(updated);
       lastCandleRef.current = updated;
-      console.log("[chart] series.update OK, price:", price);
     } catch (err) {
       console.debug("[chart] series.update failed:", err);
     }
