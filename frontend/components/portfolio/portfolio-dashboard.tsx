@@ -157,14 +157,22 @@ export function PortfolioDashboard({
 
     async function connect() {
       if (cancelled) return;
-      if (streamSymbols.length === 0) return;
+      if (streamSymbols.length === 0) {
+        console.log("[portfolio] No stream symbols — skipping SSE");
+        return;
+      }
+
+      console.log("[portfolio] Stream symbols:", streamSymbols);
 
       // Fetch token client-side (EventSource can't set Authorization header).
       try {
         const res = await fetch("/api/auth/session");
         const data = await res.json();
         const token = data?.user?.accessToken;
-        if (!token || cancelled) return;
+        if (!token || cancelled) {
+          console.log("[portfolio] No token for SSE");
+          return;
+        }
 
         const symParam = streamSymbols.map((s) => s.toUpperCase()).join(",");
         const url = `/api/v1/stream/prices?symbols=${encodeURIComponent(
