@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useSession } from "next-auth/react";
+import { useClientToken } from "@/hooks/use-client-token";
 
 import { CandlestickChart, type LivePrices } from "@/components/candlestick-chart";
 import { LivePriceBadge } from "@/components/live-price-badge";
@@ -47,18 +47,11 @@ export function LiveCandlestickChart({
   tradeLevels = null,
   token,
 }: LiveCandlestickChartProps) {
-  // Get token client-side via useSession.
-  // Server-passed token isn't available in RSC payload, so we need the client session.
-  const { data: session, status } = useSession();
-  const clientToken = session?.accessToken ?? token;
+  // Get token client-side via direct session fetch
+  const clientToken = useClientToken();
 
-  // symbols list for the price stream
   const symbols = useMemo(() => [symbol], [symbol]);
-  const { prices, isConnected } = usePriceStream(
-    symbols,
-    // Only pass token when session is loaded (not 'loading')
-    status === 'loading' ? null : clientToken,
-  );
+  const { prices, isConnected } = usePriceStream(symbols, clientToken ?? token);
 
   const livePrices: LivePrices | null = isConnected && Object.keys(prices).length > 0
     ? prices
