@@ -18,6 +18,7 @@ import { TradesTable } from "@/components/portfolio/trades-table";
 import { PositionHistoryTable } from "@/components/portfolio/position-history-table";
 import { OrderHistoryTable } from "@/components/portfolio/order-history-table";
 import { LivePortfolioHeader } from "@/components/portfolio/live-portfolio-header";
+import { AnalyticsDashboard } from "@/components/portfolio/analytics-dashboard";
 import type { PortfolioResponse } from "@/lib/types";
 import type { PriceMap } from "@/hooks/use-price-stream";
 
@@ -451,6 +452,9 @@ export function PortfolioDashboard({
           <TabsTrigger value="order-history">
             Order History ({orderHistory.length})
           </TabsTrigger>
+          <TabsTrigger value="analytics">
+            Analytics
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="balances">
           <BalancesTable balances={balances} livePrices={livePrices} />
@@ -466,6 +470,9 @@ export function PortfolioDashboard({
         </TabsContent>
         <TabsContent value="order-history">
           <OrderHistoryTable orders={orderHistory} />
+        </TabsContent>
+        <TabsContent value="analytics">
+          <AnalyticsDashboard token={token} exchange={exchange} />
         </TabsContent>
       </Tabs>
     </div>

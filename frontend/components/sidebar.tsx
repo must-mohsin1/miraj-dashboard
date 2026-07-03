@@ -6,6 +6,7 @@ import {
   BarChart3,
   Briefcase,
   History,
+  BookOpen,
   Settings,
   ChevronLeft,
 } from "lucide-react";

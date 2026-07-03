@@ -204,11 +204,82 @@ export interface PortfolioResponse {
   stale: boolean;
 }
 
-/** Response for `GET /api/v1/portfolio/{exchange}/history`. */
+/** Response envelope for `GET /api/v1/history`. */
 export interface HistoryResponse {
   exchange: string;
   position_history: PositionHistoryItem[];
   order_history: OrderHistoryItem[];
+}
+
+// ── Analytics (Phase 2) ────────────────────────────────────────────────────
+
+/** Response for `GET /api/v1/analytics/{exchange}/performance`. */
+export interface PerformanceMetrics {
+  /** Percentage of winning trades (0–100). */
+  win_rate: number;
+  /** Gross profit / gross loss. `null` when there are zero losing trades (∞). */
+  profit_factor: number | null;
+  /** Simplified per-trade Sharpe (mean/std*sqrt(n)). `null` when < 2 trades. */
+  sharpe_ratio: number | null;
+  /** Largest peak-to-trough decline in cumulative PnL (USD). */
+  max_drawdown: number;
+  /** Max drawdown as a percentage of the peak. `null` when peak is 0/negative. */
+  max_drawdown_percent: number | null;
+  /** Mean PnL of winning trades. */
+  average_win: number;
+  /** Mean PnL of losing trades. */
+  average_loss: number;
+  /** Total closed positions. */
+  total_trades: number;
+  /** Count of profitable trades. */
+  winning_trades: number;
+  /** Count of losing trades. */
+  losing_trades: number;
+  /** Best single trade PnL. */
+  best_trade: number;
+  /** Worst single trade PnL. */
+  worst_trade: number;
+  /** Total realised PnL. */
+  total_pnl: number;
+  /** Total realised PnL %. */
+  total_pnl_percent: number;
+}
+
+/** A single point on the equity curve. */
+export interface EquityCurvePoint {
+  timestamp: string;
+  total_value: number;
+}
+
+/** Response for `GET /api/v1/analytics/{exchange}/equity-curve`. */
+export interface EquityCurveResponse {
+  exchange: string;
+  points: EquityCurvePoint[];
+}
+
+/** A single day's PnL. */
+export interface DailyPnlPoint {
+  date: string;
+  pnl: number;
+}
+
+/** Response for `GET /api/v1/analytics/{exchange}/daily-pnl`. */
+export interface DailyPnlResponse {
+  exchange: string;
+  days: DailyPnlPoint[];
+}
+
+/** A single asset allocation entry. */
+export interface AllocationItem {
+  asset: string;
+  usd_value: number;
+  percentage: number;
+}
+
+/** Response for `GET /api/v1/analytics/{exchange}/allocation`. */
+export interface AllocationResponse {
+  exchange: string;
+  items: AllocationItem[];
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────
@@ -482,4 +553,97 @@ export interface ScanHistoryResponse {
   page: number;
   per_page: number;
   pages: number;
+}
+
+// ── Trading Journal (Phase 3) ──────────────────────────────────────────────
+
+/** A single trading-journal entry from `GET/POST /api/v1/journal`. */
+export interface TradeJournalEntry {
+  /** Database primary key. */
+  id: number;
+  user_id: number;
+  /** Exchange slug (e.g. "mexc"), or `null` for manual entries. */
+  exchange: string | null;
+  /** Trading pair symbol, e.g. "BTCUSDT". */
+  symbol: string;
+  /** Optional FK to a PositionHistory row. */
+  position_id: number | null;
+  /** Free-text trade notes. */
+  notes: string | null;
+  /** Comma-separated tags, e.g. "scalp,swing,breakout". */
+  tags: string | null;
+  /** Lessons learned / post-mortem notes. */
+  lessons: string | null;
+  /** JSON array of screenshot file paths. */
+  screenshots: string[];
+  /** Trade entry price (copied for quick reference). */
+  entry_price: number | null;
+  /** Trade exit price (copied for quick reference). */
+  exit_price: number | null;
+  /** Realised PnL for the trade (copied for quick reference). */
+  pnl: number | null;
+  /** ISO-8601 creation timestamp. */
+  created_at: string;
+  /** ISO-8601 last-update timestamp. */
+  updated_at: string;
+}
+
+/** Response envelope for `GET /api/v1/journal`. */
+export interface JournalListResponse {
+  total: number;
+  entries: TradeJournalEntry[];
+}
+
+/** Request body for `POST /api/v1/journal` (create entry). */
+export interface JournalEntryCreateRequest {
+  symbol: string;
+  exchange?: string | null;
+  position_id?: number | null;
+  notes?: string | null;
+  tags?: string | null;
+  lessons?: string | null;
+  entry_price?: number | null;
+  exit_price?: number | null;
+  pnl?: number | null;
+}
+
+/** Request body for `PUT /api/v1/journal/{id}` (update entry). */
+export interface JournalEntryUpdateRequest {
+  notes?: string | null;
+  tags?: string | null;
+  lessons?: string | null;
+}
+
+/** Per-tag aggregates inside the journal summary. */
+export interface JournalTagStat {
+  /** Number of entries with this tag. */
+  trade_count: number;
+  /** Sum of PnL across tagged entries. */
+  total_pnl: number;
+  /** Entries with PnL > 0. */
+  winning_trades: number;
+  /** Entries with PnL < 0. */
+  losing_trades: number;
+  /** Win rate (0–100) of decisive trades. */
+  win_rate: number;
+}
+
+/** Response for `GET /api/v1/analytics/{exchange}/journal-summary`. */
+export interface JournalSummaryResponse {
+  exchange: string;
+  total_entries: number;
+  tags: Record<string, JournalTagStat>;
+}
+
+/** Response for `POST /api/v1/journal/{id}/screenshot`. */
+export interface JournalScreenshotUploadResponse {
+  entry_id: number;
+  filename: string;
+  path: string;
+}
+
+/** Response for `GET /api/v1/journal/{id}/screenshots`. */
+export interface JournalScreenshotListResponse {
+  entry_id: number;
+  screenshots: string[];
 }

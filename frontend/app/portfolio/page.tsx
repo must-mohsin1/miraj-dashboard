@@ -16,7 +16,10 @@ import { TabsSkeleton } from "@/components/skeletons";
  * checks the connection status via `GET /api/v1/portfolio/{exchange}/keys`.
  * When connected, it additionally fetches the cached portfolio data via
  * `GET /api/v1/portfolio/{exchange}` and renders the tabbed dashboard
- * (Balances · Positions · Trades) with Refresh / Disconnect buttons.
+ * (Balances · Positions · Position History · Trades · Order History · Analytics)
+ * with Refresh / Disconnect buttons. The Analytics tab fetches performance
+ * metrics, equity curve, P&L heatmap, and allocation from the
+ * `/api/v1/analytics/{exchange}/*` endpoints.
  * When not connected, it renders the `ConnectForm`.
  *
  * The `ExchangeSelector` dropdown is rendered above both states so the user

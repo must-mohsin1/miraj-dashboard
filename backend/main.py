@@ -17,11 +17,14 @@ from backend.models import (  # noqa: F401 — imported for side effect (table r
     PortfolioSnapshot,
     PortfolioTrade,
     PositionHistory,
+    TradeJournalEntry,
 )
 from backend.routes import (
+    analytics_router,
     auth_router,
     charts_router,
     history_router,
+    journal_router,
     macro_router,
     portfolio_router,
     price_alerts_router,
@@ -150,6 +153,7 @@ app = FastAPI(
 )
 
 # ── Routers ─────────────────────────────────────────────────────────────────
+app.include_router(analytics_router)
 app.include_router(auth_router)
 app.include_router(history_router)
 app.include_router(macro_router)
@@ -161,6 +165,7 @@ app.include_router(watchlist_router)
 app.include_router(scan_router)
 app.include_router(portfolio_router)
 app.include_router(charts_router)
+app.include_router(journal_router)
 
 
 # ── Simple health / protected check ─────────────────────────────────────────

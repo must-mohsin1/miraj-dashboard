@@ -4,6 +4,7 @@ import datetime
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
+from sqlalchemy.types import JSON
 
 from backend.database import Base
 
@@ -30,6 +31,7 @@ class User(Base):
     portfolio_snapshots = relationship("PortfolioSnapshot", back_populates="user", cascade="all, delete-orphan")
     position_history = relationship("PositionHistory", back_populates="user", cascade="all, delete-orphan")
     order_history = relationship("OrderHistory", back_populates="user", cascade="all, delete-orphan")
+    journal_entries = relationship("TradeJournalEntry", back_populates="user", cascade="all, delete-orphan")
 
 
 class AlertChannel(Base):
@@ -325,3 +327,41 @@ class OrderHistory(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="order_history")
+
+
+class TradeJournalEntry(Base):
+    """Manual trading journal entry — notes, tags, lessons, screenshots.
+
+    A user can optionally link a journal entry to a closed position via
+    ``position_id`` (FK → ``position_history.id``). The trade metadata
+    (entry_price, exit_price, pnl) is copied at creation time for quick
+    reference so the journal survives even if the linked position is later
+    deleted; the fields are nullable to support manual entries that don't
+    map to a recorded position.
+    """
+
+    __tablename__ = "trade_journal_entries"
+    __table_args__ = (
+        Index("ix_journal_user_exchange", "user_id", "exchange"),
+        Index("ix_journal_user_symbol", "user_id", "symbol"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exchange = Column(String(32), nullable=True)  # e.g. "mexc" — nullable for manual entries
+    symbol = Column(String(40), nullable=False)  # e.g. "BTCUSDT"
+    position_id = Column(Integer, ForeignKey("position_history.id", ondelete="SET NULL"), nullable=True)
+
+    notes = Column(Text, nullable=True)
+    tags = Column(String(255), nullable=True)  # comma-separated: "scalp,swing,breakout"
+    lessons = Column(Text, nullable=True)
+    screenshots = Column(JSON, nullable=True)  # JSON array of file paths
+
+    entry_price = Column(Float, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    pnl = Column(Float, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="journal_entries")
