@@ -20,6 +20,7 @@ from backend.models import (  # noqa: F401 — imported for side effect (table r
 )
 from backend.routes import (
     auth_router,
+    charts_router,
     history_router,
     macro_router,
     portfolio_router,
@@ -159,6 +160,7 @@ app.include_router(stream_router)
 app.include_router(watchlist_router)
 app.include_router(scan_router)
 app.include_router(portfolio_router)
+app.include_router(charts_router)
 
 
 # ── Simple health / protected check ─────────────────────────────────────────

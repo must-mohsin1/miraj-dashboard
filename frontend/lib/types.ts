@@ -5,6 +5,8 @@
  * Server Components can fetch and render data in a type-safe way.
  */
 
+import type { UTCTimestamp } from "lightweight-charts";
+
 /** Shape of ``data`` inside the ``GET /api/v1/macro`` response. */
 export interface MacroData {
   /** BTC dominance as a percentage (e.g. 52.34). `null` when the source failed. */
@@ -345,7 +347,7 @@ export interface TradePlanFlat {
 export type CategoryScores = Record<string, number>;
 
 /**
- * Full response shape for `POST /api/v1/scan/{symbol}`.
+/** Full response shape for `POST /api/v1/scan/{symbol}`.
  *
  * Mirrors the backend `ScanResponse` Pydantic model. Optional fields are
  * nullable because any given pipeline step may fail and the backend
@@ -378,10 +380,86 @@ export interface ScanResult {
   order_blocks: OrderBlock[] | null;
   /** Fair-value-gap zones for the chart. */
   fvgs: FairValueGap[] | null;
+  /** MACD series (macd, signal, histogram arrays aligned to candles). */
+  macd: MacdData | null;
+  /** Volume Profile histogram buckets. */
+  volume_profile: VolumeProfileData | null;
+  /** Bollinger Bands series (upper, middle, lower arrays aligned to candles). */
+  bb: BollingerBandsData | null;
+  /** RSI series (last 100 values aligned to candles). */
+  rsi: number[] | null;
   /** `true` when the result is served from a stale cache. */
   stale: boolean;
   /** ISO-8601 timestamp the result was cached at, or `null`. */
   cached_at: string | null;
+}
+
+// ── Chart upgrades (Phase 1) ───────────────────────────────────────────────
+
+/** Accepted timeframe values. */
+export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d" | "1w";
+
+/** Response from `GET /api/v1/charts/{symbol}/candles?timeframe=...&limit=...`. */
+export interface CandlesResponse {
+  symbol: string;
+  timeframe: Timeframe;
+  candles: Candle[];
+  count?: number;
+}
+
+/**
+ * MACD indicator series. Arrays of the last N values aligned to the
+ * scan response candles array (same length, same order).
+ */
+export interface MacdData {
+  macd: number[];
+  signal: number[];
+  histogram: number[];
+}
+
+/**
+ * Bollinger Bands overlay series. Each array holds the last N values
+ * aligned 1-to-1 with the scan response candles.
+ */
+export interface BollingerBandsData {
+  upper: number[];
+  middle: number[];
+  lower: number[];
+}
+
+/**
+ * Volume Profile (VPVR-style) horizontal histogram. The parallel arrays
+ * describe price-level buckets and the volume traded in each.
+ */
+export interface VolumeProfileData {
+  price_levels: number[];
+  volumes: number[];
+  buy_volumes: number[];
+  sell_volumes: number[];
+}
+
+/** A single point in a time-value line series aligned to candles. */
+export interface TimeValuePoint {
+  time: UTCTimestamp;
+  value: number;
+}
+
+/**
+ * Normalised indicator series — each is an array of `{time, value}` points
+ * ready for lightweight-charts, aligned to the candle timestamps.
+ */
+export interface IndicatorSeries {
+  rsi?: TimeValuePoint[];
+  macd?: {
+    macd: TimeValuePoint[];
+    signal: TimeValuePoint[];
+    histogram: TimeValuePoint[];
+  };
+  bb?: {
+    upper: TimeValuePoint[];
+    middle: TimeValuePoint[];
+    lower: TimeValuePoint[];
+  };
 }
 
 // ── History (analyses list) ────────────────────────────────────────────────

@@ -60,6 +60,11 @@ class ScanResponse(BaseModel):
     order_blocks: Optional[list[dict[str, Any]]] = None
     fvgs: Optional[list[dict[str, Any]]] = None
     emas: Optional[dict[str, list[float]]] = None
+    # ── Full plottable indicator series (Phase 1 — chart upgrades) ──
+    macd: Optional[dict[str, Any]] = None
+    volume_profile: Optional[dict[str, Any]] = None
+    bb: Optional[dict[str, list[float]]] = None
+    rsi: Optional[list[float]] = None
     stale: bool = False
     cached_at: Optional[str] = None
 

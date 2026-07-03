@@ -21,29 +21,27 @@ import {
 
 import { useMediaQuery } from "@/hooks/use-media-query";
 import type { Candle, EmaData, OrderBlock, FairValueGap } from "@/lib/types";
+import type { IndicatorVisibility } from "@/components/indicator-toggle-panel";
 
 /**
  * CandlestickChart — Client Component (lightweight-charts v5).
  *
- * Renders a full-featured candlestick chart with:
- *  - OHLC candles (green bullish / red bearish) in the main pane
- *  - A volume histogram in a separate lower pane
- *  - EMA overlay lines (EMA 20 / EMA 50, opts: 9, 21) in the main pane
- *  - Order block zones drawn as horizontal price-line pairs (green/red)
- *  - Fair-value-gap zones drawn as dashed yellow price-line pairs
- *  - A dark slate theme matching the app shell
- *  - Responsive full-width sizing via a ResizeObserver
+ * Renders a full-featured candlestick chart with per-pane indicators:
+ *   - Pane 0 (main): OHLC candles + EMA overlay + OB/FVG price-line
+ *     zones + Bollinger Bands overlay + Volume Profile histogram overlay
+ *   - Pane 1: Volume histogram
+ *   - Pane 2: RSI line with 30 / 70 overbought/oversold guides
+ *   - Pane 3: MACD histogram + MACD line + signal line
  *
- * Because lightweight-charts mutates the DOM directly, the chart is created
- * once inside a ref'd container and torn down on unmount; subsequent prop
- * changes rebuild the chart (the component is intended to be keyed by
- * symbol so a fresh analysis remounts it).
+ * The chart is dark-themed (slate-950 canvas) matching the app shell.
+ * Series visibility for the indicator panes is controlled by the
+ * ``indicators`` prop (driven by IndicatorTogglePanel + localStorage).
  */
 
 /* ── Theme constants matching the app shell ──────────────────────────────── */
 
 const COLORS = {
-  background: "#0f172a", // slate-950 (transparent-ish canvas)
+  background: "#0f172a", // slate-950
   textColor: "#94a3b8", // slate-400
   grid: "#1e293b", // slate-800
   border: "#334155", // slate-700
@@ -53,35 +51,45 @@ const COLORS = {
   volBearish: "rgba(239, 68, 68, 0.45)",
 };
 
-/** EMA colour per period label. Looks for keys "ema_9", "ema_21", "ema_50". */
 const EMA_COLORS: Record<string, string> = {
   ema_9: "#60a5fa", // blue-400
+  ema_20: "#a78bfa", // violet-400
   ema_21: "#f59e0b", // amber-500
-  ema_50: "#a78bfa", // violet-400
+  ema_50: "#f472b6", // pink-400
+  ema_200: "#34d399", // emerald-400
 };
 
 const EMA_LABELS: Record<string, string> = {
   ema_9: "EMA 9",
+  ema_20: "EMA 20",
   ema_21: "EMA 21",
   ema_50: "EMA 50",
+  ema_200: "EMA 200",
 };
+
+const BB_COLORS = {
+  upper: "#38bdf8", // sky-400
+  middle: "#94a3b8", // slate-400
+  lower: "#38bdf8",
+};
+
+const RSI_COLOR = "#f59e0b"; // amber-500
+const MACD_LINE_COLOR = "#22c55e"; // green
+const MACD_SIGNAL_COLOR = "#ef4444"; // red
+const MACD_HIST_UP = "rgba(34, 197, 94, 0.6)";
+const MACD_HIST_DOWN = "rgba(239, 68, 68, 0.6)";
+
+const SUB_PANE_HEIGHT = 150;
 
 /* ── Time conversion ─────────────────────────────────────────────────────── */
 
-/**
- * Convert a candle `time` (ISO-8601 string or epoch) to a UTCTimestamp
- * (seconds since epoch). lightweight-charts requires monotonically
- * increasing timestamps in seconds.
- */
 function toTimestamp(time: string | number): UTCTimestamp {
   if (typeof time === "number") {
-    // If the number looks like milliseconds, divide; otherwise assume seconds
     const sec = time > 1e12 ? time / 1000 : time;
     return Math.floor(sec) as UTCTimestamp;
   }
   const ms = Date.parse(time);
   if (!Number.isNaN(ms)) return Math.floor(ms / 1000) as UTCTimestamp;
-  // Fallback: try parsing as a plain number
   const n = Number(time);
   if (!Number.isNaN(n)) return Math.floor(n > 1e12 ? n / 1000 : n) as UTCTimestamp;
   return 0 as UTCTimestamp;
@@ -89,32 +97,52 @@ function toTimestamp(time: string | number): UTCTimestamp {
 
 /* ── Props ──────────────────────────────────────────────────────────────── */
 
-/**
- * Live price map — an optional record of ``{ price, timestamp }`` per
- * symbol. When provided, the chart updates the last candle's close price
- * in real time via ``series.update()``.
- */
 export type LivePrices = Record<string, { price: number; timestamp: number }>;
+
+/** Optional indicator series aligned to the candle timestamps. */
+export interface IndicatorData {
+  /** RSI series — array of {time, value} points. */
+  rsi?: { time: UTCTimestamp; value: number }[];
+  /** MACD series — macd, signal, histogram arrays. */
+  macd?: {
+    macd: { time: UTCTimestamp; value: number }[];
+    signal: { time: UTCTimestamp; value: number }[];
+    histogram: { time: UTCTimestamp; value: number }[];
+  };
+  /** Bollinger Bands — upper, middle, lower arrays. */
+  bb?: {
+    upper: { time: UTCTimestamp; value: number }[];
+    middle: { time: UTCTimestamp; value: number }[];
+    lower: { time: UTCTimestamp; value: number }[];
+  };
+  /** Volume Profile buckets — parallel price/volume arrays. */
+  volumeProfile?: {
+    price_levels: number[];
+    volumes: number[];
+    buy_volumes: number[];
+    sell_volumes: number[];
+  };
+}
 
 interface CandlestickChartProps {
   candles: Candle[];
   emas?: EmaData | null;
   orderBlocks?: OrderBlock[] | null;
   fvgs?: FairValueGap[] | null;
-  /** Optional symbol label shown in the top-left of the chart. */
+  /** Optional symbol label. */
   symbol?: string;
-  /** Optional entry/stop/target levels to draw as price lines. */
+  /** Optional trade levels. */
   tradeLevels?: {
     entry?: number | null;
     stopLoss?: number | null;
     targets?: number[];
   } | null;
-  /**
-   * Optional live prices keyed by symbol. When the symbol matches the
-   * chart's ``symbol`` prop, the last candle's close is updated in real
-   * time via ``series.update()``.
-   */
+  /** Live prices keyed by symbol. */
   livePrices?: LivePrices | null;
+  /** Per-indicator visibility (from IndicatorTogglePanel). */
+  indicators?: IndicatorVisibility;
+  /** Optional indicator series data. */
+  indicatorData?: IndicatorData | null;
 }
 
 /* ── Component ───────────────────────────────────────────────────────────── */
@@ -127,24 +155,72 @@ export function CandlestickChart({
   symbol = "",
   tradeLevels = null,
   livePrices = null,
+  indicators,
+  indicatorData = null,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
-  // The last candle's data, kept in a ref so the live-update effect can
-  // mutate it without re-creating the chart.
   const lastCandleRef = useRef<CandlestickData | null>(null);
 
-  // Responsive chart height: 300px on mobile, 500px on desktop.
   const isMobile = useMediaQuery("(max-width: 768px)");
-  const chartHeight = isMobile ? 300 : 500;
+
+  // Resolve indicator visibility defaults
+  const vis = indicators;
+
+  // Compute total chart height based on visible panes
+  const paneCount = [
+    true, // main pane always visible
+    vis?.volume ?? true, // volume
+    vis?.rsi ?? false, // RSI
+    vis?.macd ?? false, // MACD
+  ].filter(Boolean).length;
+
+  const mainPaneHeight = isMobile ? 280 : 420;
+  const subPaneCount = paneCount - 1; // exclude main
+  const chartHeight = mainPaneHeight + subPaneCount * SUB_PANE_HEIGHT;
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    // ── Create chart with dark theme ────────────────────────────────
+    // ── Sort & deduplicate candle data ──────────────────────────────
+    const seen = new Set<number>();
+    const candleData: CandlestickData[] = [];
+    const volData: HistogramData[] = [];
+
+    for (const c of candles) {
+      const ts = toTimestamp(c.time);
+      if (ts === 0) continue;
+      if (seen.has(ts)) continue;
+      seen.add(ts);
+
+      candleData.push({
+        time: ts,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      });
+
+      if (c.volume != null) {
+        volData.push({
+          time: ts,
+          value: c.volume,
+          color: c.close >= c.open ? COLORS.volBullish : COLORS.volBearish,
+        });
+      }
+    }
+
+    candleData.sort((a, b) => (a.time as number) - (b.time as number));
+    volData.sort((a, b) => (a.time as number) - (b.time as number));
+
+    if (candleData.length === 0) {
+      return;
+    }
+
+    // ── Create chart ────────────────────────────────────────────────
     const chart = createChart(container, {
       layout: {
         background: { type: ColorType.Solid, color: COLORS.background },
@@ -186,10 +262,6 @@ export function CandlestickChart({
         timeVisible: true,
         secondsVisible: false,
       },
-      // ── Touch / mobile gesture config ─────────────────────────────────
-      // handleScale enables pinch-to-zoom on the time & price axes (and
-      // scale-on-axis when a user drags on an axis). handleScroll enables
-      // touch panning (1-finger drag) and kinetic momentum scrolling.
       handleScale: {
         axisPressedMouseMove: true,
         axisDoubleClickReset: true,
@@ -201,55 +273,13 @@ export function CandlestickChart({
         horzTouchDrag: true,
         vertTouchDrag: true,
       },
-      // Kinetic (momentum) scrolling for touch pans — feels native on mobile.
-      kineticScroll: {
-        touch: true,
-        mouse: false,
-      },
+      kineticScroll: { touch: true, mouse: false },
       width: container.clientWidth || 600,
       height: chartHeight,
     });
     chartRef.current = chart;
 
-    // ── Sort & deduplicate candle data ──────────────────────────────
-    const seen = new Set<number>();
-    const candleData: CandlestickData[] = [];
-    const volData: HistogramData[] = [];
-
-    for (const c of candles) {
-      const ts = toTimestamp(c.time);
-      if (ts === 0) continue;
-      if (seen.has(ts)) continue;
-      seen.add(ts);
-
-      candleData.push({
-        time: ts,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        // Optional colour override is ignored; we rely on up/down colors below
-      });
-
-      if (c.volume != null) {
-        volData.push({
-          time: ts,
-          value: c.volume,
-          color: c.close >= c.open ? COLORS.volBullish : COLORS.volBearish,
-        });
-      }
-    }
-
-    // Sort ascending by time (lightweight-charts requires this)
-    candleData.sort((a, b) => (a.time as number) - (b.time as number));
-    volData.sort((a, b) => (a.time as number) - (b.time as number));
-
-    if (candleData.length === 0) {
-      chart.applyOptions({ height: 120 });
-      return;
-    }
-
-    // ── Candlestick series (main pane, index 0) ─────────────────────
+    // ── Candlestick series (pane 0) ──────────────────────────────────
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: COLORS.bullish,
       downColor: COLORS.bearish,
@@ -261,34 +291,26 @@ export function CandlestickChart({
     });
     candleSeries.setData(candleData);
     candleSeriesRef.current = candleSeries;
-    // Stash the last candle so the live-price effect can mutate it via
-    // series.update() without re-creating the chart.
-    lastCandleRef.current =
-      candleData.length > 0 ? { ...candleData[candleData.length - 1] } : null;
+    lastCandleRef.current = { ...candleData[candleData.length - 1] };
 
-    // ── EMA overlay lines (main pane) ───────────────────────────────
-    // The backend returns emas as {period: number[]} aligned 1-to-1 with
-    // the candles array (same length, same order). We re-align to the
-    // candle timestamps so lightweight-charts can plot them.
     const candleTimes = candleData.map((c) => c.time as number);
-    if (emas) {
+
+    // ── EMA overlay lines (pane 0) ──────────────────────────────────
+    if (vis?.ema && emas) {
       for (const [periodKey, values] of Object.entries(emas)) {
         if (!Array.isArray(values) || values.length === 0) continue;
         const color = EMA_COLORS[periodKey] ?? "#94a3b8";
         const lineData: LineData[] = [];
-        // Align from the end (values are the most recent N points)
         const offset = candleTimes.length - values.length;
         for (let i = 0; i < values.length; i++) {
-          const candleIdx = offset + i;
-          if (candleIdx < 0 || candleIdx >= candleTimes.length) continue;
-          const t = candleTimes[candleIdx];
+          const idx = offset + i;
+          if (idx < 0 || idx >= candleTimes.length) continue;
           const v = values[i];
           if (v != null && !Number.isNaN(v)) {
-            lineData.push({ time: t as UTCTimestamp, value: v });
+            lineData.push({ time: candleTimes[idx] as UTCTimestamp, value: v });
           }
         }
         if (lineData.length === 0) continue;
-
         const label = EMA_LABELS[periodKey] ?? periodKey.toUpperCase();
         chart.addSeries(LineSeries, {
           color,
@@ -301,31 +323,218 @@ export function CandlestickChart({
       }
     }
 
-    // ── Volume histogram (separate lower pane, index 1) ─────────────
-    if (volData.length > 0) {
+    // ── Bollinger Bands overlay (pane 0) ─────────────────────────────
+    if (vis?.bollinger && indicatorData?.bb) {
+      const { upper, middle, lower } = indicatorData.bb;
+      if (upper.length > 0) {
+        chart.addSeries(LineSeries, {
+          color: BB_COLORS.upper,
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title: "BB Upper",
+        }).setData(upper);
+      }
+      if (middle.length > 0) {
+        chart.addSeries(LineSeries, {
+          color: BB_COLORS.middle,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title: "BB Mid",
+        }).setData(middle);
+      }
+      if (lower.length > 0) {
+        chart.addSeries(LineSeries, {
+          color: BB_COLORS.lower,
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title: "BB Lower",
+        }).setData(lower);
+      }
+    }
+
+    // ── Volume Profile overlay (pane 0 right edge) ──────────────────
+    // Rendered as a histogram on a separate overlay price scale, so it
+    // appears as horizontal bars at each price level.
+    if (indicatorData?.volumeProfile && indicatorData.volumeProfile.price_levels.length > 0) {
+      const vp = indicatorData.volumeProfile;
+      const maxVol = Math.max(...vp.volumes, 1);
+      const vpData: HistogramData[] = [];
+      // Use the last candle time so VP bars appear at the chart's right edge
+      const lastTime = candleTimes[candleTimes.length - 1] as UTCTimestamp;
+      for (let i = 0; i < vp.price_levels.length; i++) {
+        const price = vp.price_levels[i];
+        const totalVol = vp.volumes[i];
+        const buyVol = vp.buy_volumes[i] ?? 0;
+        const sellVol = vp.sell_volumes[i] ?? 0;
+        // Positive bar = buy-dominant; negative = sell-dominant
+        const isBuy = buyVol >= sellVol;
+        const signedVal = isBuy ? totalVol : -totalVol;
+        vpData.push({
+          time: lastTime,
+          value: price,
+          color: isBuy
+            ? `rgba(34, 197, 94, ${0.15 + 0.5 * (totalVol / maxVol)})`
+            : `rgba(239, 68, 68, ${0.15 + 0.5 * (totalVol / maxVol)})`,
+        });
+      }
+      // We can't easily draw horizontal bars in lightweight-charts v5
+      // without a custom primitive. Instead, render VP as price lines
+      // for the top 5 volume nodes (POC + high-volume nodes).
+      const indices = vp.volumes
+        .map((v, i) => ({ v, i }))
+        .sort((a, b) => b.v - a.v)
+        .slice(0, 8);
+      for (const { v, i } of indices) {
+        const price = vp.price_levels[i];
+        const buyVol = vp.buy_volumes[i] ?? 0;
+        const sellVol = vp.sell_volumes[i] ?? 0;
+        const isBuy = buyVol >= sellVol;
+        priceLinesRef.current.push(
+          candleSeries.createPriceLine({
+            price,
+            color: isBuy
+              ? `rgba(34, 197, 94, ${0.3 + 0.4 * (v / maxVol)})`
+              : `rgba(239, 68, 68, ${0.3 + 0.4 * (v / maxVol)})`,
+            lineWidth: 2,
+            lineStyle: LineStyle.Dotted,
+            lineVisible: true,
+            axisLabelVisible: false,
+            title: `VP ${isBuy ? "▲" : "▼"}`,
+          })
+        );
+      }
+    }
+
+    // ── Volume histogram (pane 1) ────────────────────────────────────
+    let nextPane = 1;
+    if (vis?.volume && volData.length > 0) {
       const volSeries = chart.addSeries(
         HistogramSeries,
         {
           priceFormat: { type: "volume" },
           priceScaleId: "vol",
         },
-        1 // paneIndex 1 → lower pane
+        nextPane
       );
-      // Give the volume pane its own price scale so it doesn't overlap candles
-      chart.priceScale("vol", 1).applyOptions({
+      chart.priceScale("vol", nextPane).applyOptions({
         scaleMargins: { top: 0.7, bottom: 0 },
       });
       volSeries.setData(volData);
-      volSeries.priceScale().applyOptions({
-        visible: false,
-      });
+      volSeries.priceScale().applyOptions({ visible: false });
+      nextPane++;
     }
 
-    // ── Order block zones (price lines on the candle series) ─────────
-    // lightweight-charts has no native rectangle primitive, so we mark
-    // each zone's high and low with a horizontal price line. Bullish
-    // zones are green, bearish zones red.
-    if (orderBlocks && orderBlocks.length > 0) {
+    // ── RSI sub-pane ─────────────────────────────────────────────────
+    if (vis?.rsi && indicatorData?.rsi && indicatorData.rsi.length > 0) {
+      const rsiPaneIdx = nextPane;
+      const rsiSeries = chart.addSeries(
+        LineSeries,
+        {
+          color: RSI_COLOR,
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          title: "RSI(14)",
+        },
+        rsiPaneIdx
+      );
+      rsiSeries.setData(indicatorData.rsi);
+
+      // RSI 30 / 70 horizontal guides
+      rsiSeries.createPriceLine({
+        price: 70,
+        color: "rgba(239, 68, 68, 0.4)",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        lineVisible: true,
+        axisLabelVisible: true,
+        title: "OB 70",
+      });
+      rsiSeries.createPriceLine({
+        price: 30,
+        color: "rgba(34, 197, 94, 0.4)",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        lineVisible: true,
+        axisLabelVisible: true,
+        title: "OS 30",
+      });
+      // RSI pane price scale — fix at 0–100
+      rsiSeries.priceScale().applyOptions({
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+        autoScale: false,
+      });
+      nextPane++;
+    }
+
+    // ── MACD sub-pane ────────────────────────────────────────────────
+    if (vis?.macd && indicatorData?.macd) {
+      const macdPaneIdx = nextPane;
+      const { macd, signal, histogram } = indicatorData.macd;
+
+      // Histogram bars
+      if (histogram.length > 0) {
+        const histData: HistogramData[] = histogram.map((p) => ({
+          time: p.time,
+          value: p.value,
+          color:
+            p.value >= 0
+              ? MACD_HIST_UP
+              : MACD_HIST_DOWN,
+        }));
+        const histSeries = chart.addSeries(
+          HistogramSeries,
+          {
+            priceLineVisible: false,
+            lastValueVisible: false,
+            title: "MACD Hist",
+          },
+          macdPaneIdx
+        );
+        histSeries.setData(histData);
+      }
+
+      // MACD line
+      if (macd.length > 0) {
+        chart.addSeries(
+          LineSeries,
+          {
+            color: MACD_LINE_COLOR,
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+            title: "MACD",
+          },
+          macdPaneIdx
+        ).setData(macd);
+      }
+
+      // Signal line
+      if (signal.length > 0) {
+        chart.addSeries(
+          LineSeries,
+          {
+            color: MACD_SIGNAL_COLOR,
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+            title: "Signal",
+          },
+          macdPaneIdx
+        ).setData(signal);
+      }
+      nextPane++;
+    }
+
+    // ── Order block zones (price lines on candle series) ─────────────
+    if (vis?.orderBlocks && orderBlocks && orderBlocks.length > 0) {
       for (const ob of orderBlocks) {
         if (ob.price_high == null && ob.price_low == null) continue;
         const isBull = (ob.type ?? "bullish").toLowerCase() !== "bearish";
@@ -359,8 +568,8 @@ export function CandlestickChart({
       }
     }
 
-    // ── Fair value gap zones (dashed yellow price lines) ─────────────
-    if (fvgs && fvgs.length > 0) {
+    // ── Fair value gap zones ─────────────────────────────────────────
+    if (vis?.fairValueGaps && fvgs && fvgs.length > 0) {
       for (const fvg of fvgs) {
         if (fvg.price_high == null && fvg.price_low == null) continue;
         const color = "rgba(250, 204, 21, 0.45)"; // yellow-400
@@ -393,7 +602,7 @@ export function CandlestickChart({
       }
     }
 
-    // ── Trade levels (entry / stop / targets) ───────────────────────
+    // ── Trade levels ─────────────────────────────────────────────────
     if (tradeLevels) {
       if (tradeLevels.entry != null) {
         priceLinesRef.current.push(
@@ -439,11 +648,6 @@ export function CandlestickChart({
       }
     }
 
-    // Optionally set the chart title via a watermark-like overlay
-    // (lightweight-charts v5 supports createTextWatermark plugin; we keep
-    // it lightweight here and rely on the surrounding card header instead.)
-
-    // ── Fit content + responsive resize ─────────────────────────────
     chart.timeScale().fitContent();
 
     const handleResize = () => {
@@ -457,7 +661,6 @@ export function CandlestickChart({
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
-    // Cleanup on unmount or prop change
     return () => {
       resizeObserver.disconnect();
       priceLinesRef.current = [];
@@ -466,16 +669,22 @@ export function CandlestickChart({
       chart.remove();
       chartRef.current = null;
     };
-    // Re-create the chart whenever any data array reference or the chart
-    // height (mobile/desktop breakpoint) changes.
+    // Re-create the chart when any data reference or pane layout changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, emas, orderBlocks, fvgs, tradeLevels, symbol, chartHeight]);
+  }, [
+    candles,
+    emas,
+    orderBlocks,
+    fvgs,
+    tradeLevels,
+    symbol,
+    indicatorData,
+    vis,
+    chartHeight,
+    isMobile,
+  ]);
 
-  // ── Live price updates (real-time mode) ──────────────────────────────
-  // This effect runs whenever the livePrices prop changes (e.g. a new tick
-  // arrives every 5 s). It uses refs to access the candle series + last
-  // candle so it never re-creates the chart — it just calls series.update()
-  // to mutate the last candle's close/high/low in place.
+  // ── Live price updates ───────────────────────────────────────────────
   useEffect(() => {
     if (!livePrices) return;
     const sym = symbol.trim().toUpperCase();
@@ -502,7 +711,6 @@ export function CandlestickChart({
     } catch (err) {
       console.debug("[chart] series.update failed:", err);
     }
-    // Re-run only when the livePrices map reference or symbol changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [livePrices, symbol]);
 
@@ -521,55 +729,6 @@ export function CandlestickChart({
         className="w-full rounded-xl border border-slate-800 bg-slate-950"
         style={{ minHeight: chartHeight }}
       />
-      {/* Legend */}
-      <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-slate-400">
-        {/* Candles */}
-        <span className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-2.5 w-2.5 rounded-sm"
-            style={{ backgroundColor: COLORS.bullish }}
-          />
-          Bullish
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-2.5 w-2.5 rounded-sm"
-            style={{ backgroundColor: COLORS.bearish }}
-          />
-          Bearish
-        </span>
-        {/* EMAs */}
-        {emas &&
-          Object.keys(emas).map((period) => {
-            const key = EMA_LABELS[period] ?? period;
-            const color = EMA_COLORS[period] ?? "#94a3b8";
-            return (
-              <span key={period} className="flex items-center gap-1.5">
-                <span
-                  className="inline-block h-0.5 w-4 rounded-full"
-                  style={{ backgroundColor: color }}
-                />
-                {key}
-              </span>
-            );
-          })}
-        {/* Order blocks */}
-        <span className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-2.5 w-2.5 rounded-sm border border-dashed"
-            style={{ borderColor: "rgba(34, 197, 94, 0.6)" }}
-          />
-          Order Block
-        </span>
-        {/* FVGs */}
-        <span className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-2.5 w-2.5 rounded-sm border border-dashed"
-            style={{ borderColor: "rgba(250, 204, 21, 0.6)" }}
-          />
-          Fair Value Gap
-        </span>
-      </div>
     </div>
   );
 }

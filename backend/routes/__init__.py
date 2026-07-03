@@ -1,5 +1,6 @@
 """API route registration."""
 from backend.routes.auth import router as auth_router
+from backend.routes.charts import router as charts_router
 from backend.routes.history import router as history_router
 from backend.routes.macro import router as macro_router
 from backend.routes.portfolio import router as portfolio_router
@@ -11,7 +12,7 @@ from backend.routes.stream import router as stream_router
 from backend.routes.watchlist import router as watchlist_router
 
 __all__ = [
-    "auth_router", "history_router", "macro_router",
+    "auth_router", "charts_router", "history_router", "macro_router",
     "portfolio_router", "price_alerts_router",
     "results_router", "scan_router", "settings_router", "stream_router",
     "watchlist_router",

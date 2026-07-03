@@ -234,6 +234,19 @@ def run_scan(symbol: str) -> dict[str, Any]:
         data["candles"] = []
         data["emas"] = {}
 
+    # Add full plottable indicator series for the chart (daily TF)
+    daily_ind = ind_results.get("daily")
+    if isinstance(daily_ind, dict) and not daily_ind.get("error"):
+        data["macd"] = _build_macd_series(daily_ind.get("macd"))
+        data["volume_profile"] = daily_ind.get("volume_profile")
+        data["bb"] = _build_bb_series(daily_ind.get("bb"))
+        data["rsi"] = _build_rsi_series(daily_ind.get("rsi"))
+    else:
+        data["macd"] = None
+        data["volume_profile"] = None
+        data["bb"] = None
+        data["rsi"] = None
+
     # Add order blocks and FVGs from SMC result
     if isinstance(smc_result, dict):
         data["order_blocks"] = _normalize_obs(smc_result.get("order_blocks", []))
@@ -622,6 +635,77 @@ def _build_ema_dict(ind_data: Any) -> dict[str, list[float]]:
             elif isinstance(series, list):
                 emas[str(period)] = [round(float(v), 2) for v in series[-100:]]
     return emas
+
+
+def _build_macd_series(macd_data: Any) -> dict[str, list[float]]:
+    """Build {macd, signal, histogram: [values]} from compute_macd result."""
+    if not isinstance(macd_data, dict):
+        return {}
+    out: dict[str, list[float]] = {}
+    for key in ("macd", "signal", "histogram"):
+        series = macd_data.get(key)
+        if series is None:
+            out[key] = []
+        elif hasattr(series, "tail"):
+            out[key] = [
+                round(float(v), 6)
+                for v in series.tail(100)
+                if v is not None and not (isinstance(v, float) and v != v)
+            ]
+        elif isinstance(series, list):
+            out[key] = [
+                round(float(v), 6)
+                for v in series[-100:]
+                if v is not None and not (isinstance(v, float) and v != v)
+            ]
+        else:
+            out[key] = []
+    return out
+
+
+def _build_bb_series(bb_data: Any) -> dict[str, list[float]]:
+    """Build {upper, middle, lower: [values]} from compute_bollinger_bands result."""
+    if not isinstance(bb_data, dict):
+        return {}
+    out: dict[str, list[float]] = {}
+    for key in ("upper", "middle", "lower"):
+        series = bb_data.get(key)
+        if series is None:
+            out[key] = []
+        elif hasattr(series, "tail"):
+            out[key] = [
+                round(float(v), 2)
+                for v in series.tail(100)
+                if v is not None and not (isinstance(v, float) and v != v)
+            ]
+        elif isinstance(series, list):
+            out[key] = [
+                round(float(v), 2)
+                for v in series[-100:]
+                if v is not None and not (isinstance(v, float) and v != v)
+            ]
+        else:
+            out[key] = []
+    return out
+
+
+def _build_rsi_series(rsi_data: Any) -> list[float]:
+    """Build [values] from an RSI pandas.Series, last 100 bars."""
+    if rsi_data is None:
+        return []
+    if hasattr(rsi_data, "tail"):
+        return [
+            round(float(v), 2)
+            for v in rsi_data.tail(100)
+            if v is not None and not (isinstance(v, float) and v != v)
+        ]
+    if isinstance(rsi_data, list):
+        return [
+            round(float(v), 2)
+            for v in rsi_data[-100:]
+            if v is not None and not (isinstance(v, float) and v != v)
+        ]
+    return []
 
 
 def _normalize_obs(obs: Any) -> list[dict[str, Any]]:

@@ -126,6 +126,90 @@ def bull_market_support_band(
     return {"sma20": sma20, "ema21": ema21}
 
 
+def compute_macd(
+    close: pd.Series,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> dict[str, pd.Series]:
+    """Compute MACD (Moving Average Convergence Divergence).
+
+    Standard EMA-based MACD: subtract the slow EMA from the fast EMA to get
+    the MACD line, then EMA-signal the MACD line for the trigger.
+
+    Returns a dict with ``macd``, ``signal``, and ``histogram`` Series,
+    all aligned to *close*.  Early values are ``NaN`` until enough data
+    is available.
+    """
+    ema_fast = close.ewm(span=fast, min_periods=fast).mean()
+    ema_slow = close.ewm(span=slow, min_periods=slow).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, min_periods=signal).mean()
+    histogram = macd_line - signal_line
+    return {
+        "macd": macd_line,
+        "signal": signal_line,
+        "histogram": histogram,
+    }
+
+
+def compute_volume_profile(
+    df: pd.DataFrame,
+    num_bins: int = 20,
+    price_range: tuple[float, float] | None = None,
+) -> dict[str, list]:
+    """Compute Volume Profile (VPVR-style horizontal histogram).
+
+    Buckets trades by price level into *num_bins* bins.  Volume in each
+    bin is split into buy/sell using the candle direction
+    (``close >= open`` → buy, else sell).
+
+    Returns a dict with parallel lists:
+        ``price_levels`` — midpoint price of each bin
+        ``volumes``      — total volume in each bin
+        ``buy_volumes``  — volume from bullish candles per bin
+        ``sell_volumes`` — volume from bearish candles per bin
+    """
+    close = df["Close"]
+    open_ = df["Open"]
+    volume = df["Volume"]
+
+    if len(close) == 0 or volume.sum() == 0:
+        return {"price_levels": [], "volumes": [], "buy_volumes": [], "sell_volumes": []}
+
+    lo = price_range[0] if price_range else float(close.min())
+    hi = price_range[1] if price_range else float(close.max())
+    if hi <= lo:
+        hi = lo + 1.0
+
+    bins = np.linspace(lo, hi, num_bins + 1)
+    bin_centers = (bins[:-1] + bins[1:]) / 2.0
+
+    # Classify each bar as bullish/bearish
+    is_buy = (close >= open_).fillna(False).to_numpy()
+    vol = volume.fillna(0).to_numpy()
+    prices = close.to_numpy()
+
+    # Digitize prices into bins
+    indices = np.digitize(prices, bins, right=False) - 1
+    indices = np.clip(indices, 0, num_bins - 1)
+
+    total_vol = np.zeros(num_bins)
+    buy_vol = np.zeros(num_bins)
+    sell_vol = np.zeros(num_bins)
+
+    np.add.at(total_vol, indices, vol)
+    np.add.at(buy_vol, indices, np.where(is_buy, vol, 0.0))
+    np.add.at(sell_vol, indices, np.where(~is_buy, vol, 0.0))
+
+    return {
+        "price_levels": [round(float(p), 6) for p in bin_centers],
+        "volumes": [round(float(v), 6) for v in total_vol],
+        "buy_volumes": [round(float(v), 6) for v in buy_vol],
+        "sell_volumes": [round(float(v), 6) for v in sell_vol],
+    }
+
+
 def compute_atr(
     df: pd.DataFrame,
     period: int = config.ATR_PERIOD,
@@ -174,6 +258,8 @@ def compute_all(
     cross = detect_golden_death_cross(close)
     bmsb = bull_market_support_band(close)
     squeeze = is_bb_squeeze(close)
+    macd = compute_macd(close)
+    volume_profile = compute_volume_profile(df)
 
     return {
         "rsi": rsi,
@@ -183,4 +269,6 @@ def compute_all(
         "golden_death_cross": cross,
         "bmsb": bmsb,
         "bb_squeeze": squeeze,
+        "macd": macd,
+        "volume_profile": volume_profile,
     }
