@@ -75,14 +75,18 @@ function balanceSymbol(asset: string): string {
 
 /**
  * Convert a position symbol (e.g. "BTC/USDT:USDT" or "BTC-USDT") to the SSE
- * symbol format ("BTC-USDT").
+ * symbol format that matches the user's watchlist ("BTC-USD").
+ * Uses -USD suffix for USDT-quoted pairs so the watchlist filter passes.
  */
 function positionSymbol(symbol: string): string {
   const s = symbol.toUpperCase();
   // ccxt futures style "BTC/USDT:USDT" → base "BTC", quote "USDT"
-  const base = s.split(":")[0];
-  // "BTC/USDT" or "BTC-USDT" → "BTC-USDT"
-  return base.replace("/", "-");
+  const base = s.split(":")[0].replace("/", "-");
+  // "BTC-USDT" → convert USDT to USD for watchlist compatibility
+  if (base.endsWith("-USDT")) {
+    return base.slice(0, -5) + "-USD";
+  }
+  return base;
 }
 
 /** Build the sorted, de-duplicated SSE symbol list from balances + positions. */
