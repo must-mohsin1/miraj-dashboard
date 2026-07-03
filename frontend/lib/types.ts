@@ -129,6 +129,7 @@ export interface PositionItem {
   leverage: number;
   liquidation_price: number | null;
   margin: number;
+  contract_size?: number | null;
 }
 
 /** A single trade row. */

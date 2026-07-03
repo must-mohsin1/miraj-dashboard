@@ -113,6 +113,7 @@ class PositionItem(BaseModel):
     leverage: float
     liquidation_price: Optional[float] = None
     margin: float
+    contract_size: Optional[float] = None
 
 
 class TradeItem(BaseModel):

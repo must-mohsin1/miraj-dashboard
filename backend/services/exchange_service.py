@@ -464,6 +464,7 @@ def _fetch_positions(
             "leverage": leverage,
             "liquidation_price": liq_price,
             "margin": margin,
+            "contract_size": float(pos.get("contractSize", 1) or 1),
         })
 
     return result
