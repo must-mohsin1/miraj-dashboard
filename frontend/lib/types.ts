@@ -194,6 +194,30 @@ export interface AlertChannelListResponse {
   channels: AlertChannel[];
 }
 
+// ── Price Alerts ───────────────────────────────────────────────────────────
+
+/** A single price alert row from `GET /api/v1/alerts/price`. */
+export interface PriceAlertResponse {
+  id: number;
+  user_id: number;
+  symbol: string;
+  alert_type: string;
+  direction: string;
+  price_level: number;
+  current_price: number | null;
+  message: string | null;
+  status: string;
+  triggered_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Response envelope for `GET /api/v1/alerts/price`. */
+export interface PriceAlertListResponse {
+  total: number;
+  alerts: PriceAlertResponse[];
+}
+
 /** A single per-source error reported by the macro endpoint. */
 export interface MacroSourceError {
   field: string;
