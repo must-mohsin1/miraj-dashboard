@@ -196,8 +196,6 @@ export interface PortfolioResponse {
   last_refreshed: string | null;
   stale: boolean;
 }
-  stale: boolean;
-}
 
 /** Response for `GET /api/v1/portfolio/{exchange}/history`. */
 export interface HistoryResponse {

@@ -16,13 +16,8 @@ import type { PositionHistoryItem } from "@/lib/types";
 /**
  * PositionHistoryTable — Client Component.
  *
- * Renders closed/historical futures positions, sorted by close_time
- * descending (most recent first). The Side column shows a coloured badge
- * (green for long, red for short). PnL and PnL% are coloured green for
- * profit, red for loss. The Close Reason column shows a badge:
- *  - liquidated → red
- *  - closed     → gray
- *  - manual     → blue
+ * Renders closed/historical futures positions sorted by close time descending.
+ * PnL and PnL% are coloured green for profit, red for loss.
  */
 
 interface PositionHistoryTableProps {
@@ -35,62 +30,50 @@ function sideMeta(side: string) {
     return {
       label: "LONG",
       className: "bg-emerald-500/10 text-emerald-400 border-emerald-700/50",
+      arrow: "▲" as const,
     };
   }
   if (s === "SHORT" || s === "SELL") {
     return {
       label: "SHORT",
       className: "bg-red-500/10 text-red-400 border-red-700/50",
+      arrow: "▼" as const,
     };
   }
   return {
     label: side || "—",
     className: "bg-slate-500/10 text-slate-400 border-slate-700/50",
+    arrow: "■" as const,
   };
 }
 
-function closeReasonMeta(reason: string | null) {
+function closeBadge(reason: string | null) {
   const r = (reason ?? "").toLowerCase();
   if (r === "liquidated") {
-    return {
-      label: "Liquidated",
-      className: "bg-red-500/10 text-red-400 border-red-700/50",
-    };
+    return { label: "Liquidated", className: "bg-red-500/10 text-red-400 border-red-700/50" };
   }
   if (r === "manual") {
-    return {
-      label: "Manual",
-      className: "bg-sky-500/10 text-sky-400 border-sky-700/50",
-    };
+    return { label: "Manual", className: "bg-amber-500/10 text-amber-400 border-amber-700/50" };
   }
-  if (r === "closed") {
-    return {
-      label: "Closed",
-      className: "bg-slate-500/10 text-slate-400 border-slate-700/50",
-    };
-  }
-  return {
-    label: reason || "—",
-    className: "bg-slate-500/10 text-slate-400 border-slate-700/50",
-  };
+  return { label: "Closed", className: "bg-sky-500/10 text-sky-400 border-sky-700/50" };
 }
 
 export function PositionHistoryTable({ positions }: PositionHistoryTableProps) {
-  // Sort by close_time descending (most recent first), falling back to open_time.
+  // Sort by close time descending (most recent first).
   const sorted = useMemo(
     () =>
       [...positions].sort((a, b) => {
-        const ta = new Date(a.close_time ?? a.open_time ?? 0).getTime();
-        const tb = new Date(b.close_time ?? b.open_time ?? 0).getTime();
+        const ta = a.close_time ? new Date(a.close_time).getTime() : 0;
+        const tb = b.close_time ? new Date(b.close_time).getTime() : 0;
         return tb - ta;
       }),
-    [positions],
+    [positions]
   );
 
   if (sorted.length === 0) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-sm text-slate-400">
-        No closed positions.
+        No closed position history.
       </div>
     );
   }
@@ -100,35 +83,37 @@ export function PositionHistoryTable({ positions }: PositionHistoryTableProps) {
       <Table>
         <TableHeader>
           <TableRow className="border-slate-800 hover:bg-transparent">
+            <TableHead className="text-slate-500">Close Time</TableHead>
             <TableHead className="text-slate-500">Symbol</TableHead>
             <TableHead className="text-slate-500">Side</TableHead>
             <TableHead className="text-right text-slate-500">Size</TableHead>
-            <TableHead className="text-right text-slate-500">Entry Price</TableHead>
-            <TableHead className="text-right text-slate-500">Exit Price</TableHead>
+            <TableHead className="text-right text-slate-500">Entry</TableHead>
+            <TableHead className="text-right text-slate-500">Exit</TableHead>
             <TableHead className="text-right text-slate-500">PnL (USD)</TableHead>
             <TableHead className="text-right text-slate-500">PnL %</TableHead>
-            <TableHead className="hidden text-right text-slate-500 md:table-cell">Leverage</TableHead>
-            <TableHead className="hidden text-slate-500 md:table-cell">Open Time</TableHead>
-            <TableHead className="hidden text-slate-500 md:table-cell">Close Time</TableHead>
-            <TableHead className="text-slate-500">Close Reason</TableHead>
+            <TableHead className="hidden text-right text-slate-500 md:table-cell">Lvg</TableHead>
+            <TableHead className="hidden text-slate-500 md:table-cell">Reason</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {sorted.map((p, i) => {
             const meta = sideMeta(p.side);
-            const reasonMeta = closeReasonMeta(p.close_reason);
+            const badge = closeBadge(p.close_reason);
             const pnlPositive = p.pnl >= 0;
             return (
               <TableRow
-                key={`${p.symbol}-${p.close_time ?? i}-${i}`}
+                key={`${p.symbol}-${p.close_time ?? p.open_time}-${i}`}
                 className="border-slate-800/60 transition-colors last:border-0 hover:bg-slate-800/30"
               >
+                <TableCell className="text-slate-400 tabular-nums">
+                  {p.close_time ? formatTime(p.close_time) : "—"}
+                </TableCell>
                 <TableCell className="font-medium text-slate-100">
                   {p.symbol}
                 </TableCell>
                 <TableCell>
                   <Badge variant="outline" className={meta.className}>
-                    {meta.label}
+                    {meta.arrow} {meta.label}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-right text-slate-300 tabular-nums">
@@ -159,15 +144,9 @@ export function PositionHistoryTable({ positions }: PositionHistoryTableProps) {
                 <TableCell className="hidden text-right text-slate-300 tabular-nums md:table-cell">
                   {p.leverage}x
                 </TableCell>
-                <TableCell className="hidden text-slate-400 tabular-nums md:table-cell">
-                  {p.open_time ? formatTime(p.open_time) : "—"}
-                </TableCell>
-                <TableCell className="hidden text-slate-400 tabular-nums md:table-cell">
-                  {p.close_time ? formatTime(p.close_time) : "—"}
-                </TableCell>
-                <TableCell>
-                  <Badge variant="outline" className={reasonMeta.className}>
-                    {reasonMeta.label}
+                <TableCell className="hidden md:table-cell">
+                  <Badge variant="outline" className={badge.className}>
+                    {badge.label}
                   </Badge>
                 </TableCell>
               </TableRow>
