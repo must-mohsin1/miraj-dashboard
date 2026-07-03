@@ -8,7 +8,9 @@ import {
   History,
   BookOpen,
   Settings,
+  CandlestickChart,
   ChevronLeft,
+  NotebookPen,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -41,6 +43,8 @@ export const navItems: NavItem[] = [
   { href: "/scanner", label: "Scanner", icon: Search },
   { href: "/analysis", label: "Analysis", icon: BarChart3 },
   { href: "/portfolio", label: "Portfolio", icon: Briefcase },
+  { href: "/trading", label: "Trading", icon: CandlestickChart },
+  { href: "/journal", label: "Journal", icon: NotebookPen },
   { href: "/history", label: "History", icon: History },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

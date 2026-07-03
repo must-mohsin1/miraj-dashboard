@@ -11,11 +11,12 @@ from backend.routes.results import router as results_router
 from backend.routes.scan import router as scan_router
 from backend.routes.settings import router as settings_router
 from backend.routes.stream import router as stream_router
+from backend.routes.trading import router as trading_router
 from backend.routes.watchlist import router as watchlist_router
 
 __all__ = [
     "analytics_router", "auth_router", "charts_router", "history_router",
     "journal_router", "macro_router", "portfolio_router", "price_alerts_router",
     "results_router", "scan_router", "settings_router", "stream_router",
-    "watchlist_router",
+    "trading_router", "watchlist_router",
 ]

@@ -32,6 +32,7 @@ from backend.routes import (
     scan_router,
     settings_router,
     stream_router,
+    trading_router,
     watchlist_router,
 )
 
@@ -166,6 +167,7 @@ app.include_router(scan_router)
 app.include_router(portfolio_router)
 app.include_router(charts_router)
 app.include_router(journal_router)
+app.include_router(trading_router)
 
 
 # ── Simple health / protected check ─────────────────────────────────────────

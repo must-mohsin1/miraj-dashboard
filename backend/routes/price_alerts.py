@@ -45,7 +45,7 @@ class PriceAlertCreateRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=20, description="Trading symbol (e.g. BTC-USD)")
     price_level: float = Field(..., gt=0, description="Trigger price level")
     direction: str = Field(..., pattern="^(above|below)$", description="Trigger direction: 'above' or 'below'")
-    alert_type: str = Field("price", pattern="^(price|target|stop)$")
+    alert_type: str = Field("price", pattern="^(price|target|stop|rsi|ema_cross|volume_spike)$")
     message: Optional[str] = Field(None, max_length=500, description="Optional custom message")
 
 

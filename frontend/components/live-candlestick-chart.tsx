@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickChart, type LivePrices } from "@/components/candlestick-chart";
 import { LivePriceBadge } from "@/components/live-price-badge";
+import { IndicatorTogglePanel, DEFAULT_INDICATOR_VISIBILITY, type IndicatorVisibility } from "@/components/indicator-toggle-panel";
 import type { Candle, EmaData, FairValueGap, OrderBlock } from "@/lib/types";
 
 interface LiveCandlestickChartProps {
@@ -30,6 +31,7 @@ export function LiveCandlestickChart({
 }: LiveCandlestickChartProps) {
   const [prices, setPrices] = useState<Record<string, { price: number; timestamp: number }>>({});
   const [isConnected, setIsConnected] = useState(false);
+  const [indicators, setIndicators] = useState<IndicatorVisibility>(DEFAULT_INDICATOR_VISIBILITY);
   const esRef = useRef<EventSource | null>(null);
 
   const symbols = useMemo(() => [symbol], [symbol]);
@@ -134,6 +136,8 @@ export function LiveCandlestickChart({
         </div>
       </div>
 
+      <IndicatorTogglePanel visibility={indicators} onChange={setIndicators} />
+
       <CandlestickChart
         candles={candles}
         emas={emas}
@@ -142,6 +146,7 @@ export function LiveCandlestickChart({
         symbol={symbol}
         tradeLevels={tradeLevels}
         livePrices={livePrices}
+        indicators={indicators}
       />
     </div>
   );

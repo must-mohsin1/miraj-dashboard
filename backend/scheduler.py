@@ -22,9 +22,10 @@ from typing import Any, Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_session_factory
-from backend.models import Analysis, ExchangeKey, ScanRun, WatchlistPair
+from backend.models import Analysis, ExchangeKey, PriceAlert, ScanRun, WatchlistPair
 from backend.obsidian import get_vault_path, is_sync_enabled, sync_scan_result
 from backend.services.analysis_service import run_scan
 
@@ -363,6 +364,192 @@ async def refresh_all_portfolios_job() -> None:
         )
 
 
+# ── Advanced alerts (RSI / EMA cross / volume spike) ────────────────────────
+
+
+async def check_advanced_alerts_job() -> None:
+    """APScheduler job callback — check advanced technical-signal alerts.
+
+    For every user who has an active ``rsi``, ``ema_cross``, or
+    ``volume_spike`` price alert, fetches the latest candles for the alert's
+    symbol, runs the signal detectors, and when a signal is detected:
+      1. Updates the alert's ``current_price`` with the last close.
+      2. Sends a notification via the user's enabled alert channels.
+      3. Marks the alert as triggered (with cooldown dedup).
+
+    Designed to run every 5 minutes. Candles are fetched from a public
+    exchange (no API keys needed for OHLCV).
+    """
+    logger.info("Advanced alert check: starting")
+
+    from backend.services.signal_detector import (
+        detect_all_signals,
+        detect_ema_cross,
+        detect_rsi_signals,
+        detect_volume_spike,
+    )
+    from backend.models import WatchlistPair
+
+    factory = get_session_factory()
+    async with factory() as session:
+        try:
+            # Find all active advanced alerts (non-price types).
+            result = await session.execute(
+                select(PriceAlert).where(
+                    PriceAlert.status == "active",
+                    PriceAlert.alert_type.in_(
+                        ["rsi", "ema_cross", "volume_spike"],
+                    ),
+                )
+            )
+            alerts = list(result.scalars().all())
+
+            if not alerts:
+                logger.debug("Advanced alert check: no active advanced alerts")
+                return
+
+            logger.info(
+                "Advanced alert check: %d active advanced alerts", len(alerts),
+            )
+
+            # Group by symbol to avoid redundant candle fetches.
+            from collections import defaultdict
+
+            by_symbol: dict[str, list[PriceAlert]] = defaultdict(list)
+            for alert in alerts:
+                by_symbol[alert.symbol].append(alert)
+
+            # Get a public exchange instance for fetching OHLCV.
+            from backend.services.exchange_service import is_ccxt_available
+
+            if not is_ccxt_available():
+                logger.info("Advanced alert check: ccxt not installed — skipping")
+                return
+
+            import ccxt  # noqa: PLC0415
+
+            public_exchange = ccxt.binance({"enableRateLimit": True})
+
+            import asyncio as _asyncio
+
+            for symbol, symbol_alerts in by_symbol.items():
+                # Normalize the symbol to ccxt format (BTCUSDT → BTC/USDT).
+                ccxt_symbol = _normalize_ccxt_symbol(symbol)
+
+                try:
+                    candles = await _asyncio.to_thread(
+                        public_exchange.fetch_ohlcv,
+                        symbol=ccxt_symbol,
+                        timeframe="1h",
+                        limit=100,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Advanced alert check: failed to fetch candles for %s: %s",
+                        symbol, exc,
+                    )
+                    continue
+
+                if not candles or len(candles) < 20:
+                    continue
+
+                # Convert to dict format expected by the detectors.
+                candle_dicts = [
+                    {
+                        "time": c[0],
+                        "open": c[1],
+                        "high": c[2],
+                        "low": c[3],
+                        "close": c[4],
+                        "volume": c[5],
+                    }
+                    for c in candles
+                ]
+
+                signals = detect_all_signals(symbol, candle_dicts)
+
+                if not signals:
+                    continue
+
+                # Map signal types to alert types.
+                signal_by_type: dict[str, Any] = {}
+                for sig in signals:
+                    if sig["type"].startswith("rsi") and "rsi" in by_symbol:
+                        signal_by_type.setdefault("rsi", []).append(sig)
+                    elif sig["type"].startswith("ema_cross") and "ema_cross" in by_symbol:
+                        signal_by_type.setdefault("ema_cross", []).append(sig)
+                    elif sig["type"] == "volume_spike" and "volume_spike" in by_symbol:
+                        signal_by_type.setdefault("volume_spike", []).append(sig)
+
+                for alert in symbol_alerts:
+                    if alert.alert_type not in signal_by_type:
+                        continue
+                    if _is_advanced_alert_in_cooldown(alert):
+                        continue
+
+                    matching_signals = signal_by_type[alert.alert_type]
+                    for sig in matching_signals:
+                        await _trigger_advanced_alert(
+                            session, alert, sig, candle_dicts[-1]["close"],
+                        )
+
+        except Exception as exc:
+            logger.exception("Advanced alert check failed: %s", exc)
+
+
+def _normalize_ccxt_symbol(symbol: str) -> str:
+    """Normalize a dashboard symbol to ccxt format.
+
+    Accepts: BTCUSDT, BTC-USDT, BTC/USDT, BTC-USD
+    Returns: BTC/USDT
+    """
+    s = symbol.upper().strip()
+    # Already ccxt format.
+    if "/" in s:
+        return s
+    # Strip common suffixes.
+    if s.endswith("USDT"):
+        base = s[:-4]
+        return f"{base}/USDT"
+    if s.endswith("USD"):
+        base = s[:-3]
+        return f"{base}/USDT"
+    # Fallback: try with the symbol as-is.
+    return s
+
+
+def _is_advanced_alert_in_cooldown(alert: PriceAlert) -> bool:
+    """Return True if the advanced alert was triggered within the cooldown."""
+    if alert.triggered_at is None:
+        return False
+    try:
+        from datetime import timedelta
+
+        last = alert.triggered_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - last < timedelta(hours=COOLDOWN_HOURS)
+    except Exception:
+        return False
+
+
+async def _trigger_advanced_alert(
+    session: AsyncSession,
+    alert: PriceAlert,
+    signal: dict[str, Any],
+    current_price: float,
+) -> None:
+    """Mark an advanced alert as triggered and send notifications."""
+    from backend.services.price_alert_service import _trigger_alert
+
+    # Reuse the existing trigger handler which sends to all enabled channels.
+    await _trigger_alert(session, alert, current_price)
+    logger.info(
+        "Advanced alert triggered: id=%d type=%s symbol=%s — %s",
+        alert.id, alert.alert_type, alert.symbol, signal.get("message", ""),
+    )
+
+
 # ── Lifecycle helpers ──────────────────────────────────────────────────────
 
 
@@ -391,6 +578,13 @@ def setup_scheduler(app) -> AsyncIOScheduler:
         trigger=CronTrigger(minute="*/5"),  # every 5 minutes
         id="portfolio_auto_refresh",
         name="Portfolio auto-refresh (every 5m)",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        check_advanced_alerts_job,
+        trigger=CronTrigger(minute="*/5"),  # every 5 minutes
+        id="check_advanced_alerts",
+        name="Advanced alerts — RSI/EMA/volume (every 5m)",
         replace_existing=True,
     )
     # Register the daily digest job

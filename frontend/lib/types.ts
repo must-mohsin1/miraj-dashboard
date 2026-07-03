@@ -465,7 +465,42 @@ export interface ScanResult {
   cached_at: string | null;
 }
 
-// ── Chart upgrades (Phase 1) ───────────────────────────────────────────────
+// ── Trading (Phase 4) ─────────────────────────────────────────────────────
+
+/** Body for POST /api/v1/trading/{exchange}/order. */
+export interface PlaceOrderRequest {
+  symbol: string;
+  type: "limit" | "market";
+  side: "buy" | "sell";
+  amount: number;
+  price?: number | null;
+  reduce_only?: boolean;
+  leverage?: number | null;
+}
+
+/** Response from order placement / cancellation. */
+export interface OrderResponse {
+  id: string;
+  symbol: string;
+  type: string;
+  side: string;
+  amount: number;
+  price?: number | null;
+  filled: number;
+  remaining: number;
+  status: string;
+  reduce_only?: boolean | null;
+  timestamp?: number | null;
+  cost?: number | null;
+  fee?: Record<string, unknown> | null;
+}
+
+/** Response for the trading status endpoint. */
+export interface TradingStatusResponse {
+  enabled: boolean;
+}
+
+/** ── Chart upgrades (Phase 1) ──────────────────────────────────────────── */
 
 /** Accepted timeframe values. */
 export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d" | "1w";
