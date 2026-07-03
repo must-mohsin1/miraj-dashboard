@@ -1,40 +1,21 @@
 "use client";
 
-import { useMemo } from "react";
-import { useClientToken } from "@/hooks/use-client-token";
-
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickChart, type LivePrices } from "@/components/candlestick-chart";
 import { LivePriceBadge } from "@/components/live-price-badge";
-import { usePriceStream } from "@/hooks/use-price-stream";
 import type { Candle, EmaData, FairValueGap, OrderBlock } from "@/lib/types";
 
-/**
- * LiveCandlestickChart — Client Component wrapper around CandlestickChart.
- *
- * Adds real-time price streaming to the static candlestick chart by passing
- * the current live prices from ``usePriceStream`` into the chart's
- * ``livePrices`` prop. Also renders a ``LivePriceBadge`` + "LIVE" pill in the
- * chart header when the SSE connection is active.
- *
- * This wrapper exists so the analysis detail page (a Server Component) can
- * embed the chart without itself needing to be a client component — server
- * components can't call hooks.
- */
-
 interface LiveCandlestickChartProps {
-  /** The trading pair symbol being analysed (e.g. "BTC-USD"). */
   symbol: string;
   candles: Candle[];
   emas?: EmaData | null;
   orderBlocks?: OrderBlock[] | null;
   fvgs?: FairValueGap[] | null;
-  /** Optional entry/stop/target levels to draw as price lines. */
   tradeLevels?: {
     entry?: number | null;
     stopLoss?: number | null;
     targets?: number[];
   } | null;
-  /** Signed-in user's JWT access token (null when unauthenticated). */
   token: string | null | undefined;
 }
 
@@ -45,13 +26,83 @@ export function LiveCandlestickChart({
   orderBlocks = null,
   fvgs = null,
   tradeLevels = null,
-  token,
+  token: _serverToken,
 }: LiveCandlestickChartProps) {
-  // Get token client-side via direct session fetch
-  const clientToken = useClientToken();
+  const [prices, setPrices] = useState<Record<string, { price: number; timestamp: number }>>({});
+  const [isConnected, setIsConnected] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
 
   const symbols = useMemo(() => [symbol], [symbol]);
-  const { prices, isConnected } = usePriceStream(symbols, clientToken ?? token);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function connect() {
+      if (cancelled) return;
+
+      // Fetch token client-side
+      try {
+        const res = await fetch("/api/auth/session");
+        const data = await res.json();
+        const token = data?.user?.accessToken;
+        if (!token || cancelled) return;
+
+        const symParam = symbols.map((s) => s.toUpperCase()).join(",");
+        const url = `/api/v1/stream/prices?symbols=${encodeURIComponent(symParam)}&token=${encodeURIComponent(token)}`;
+
+        // Close old connection
+        if (esRef.current) {
+          esRef.current.close();
+        }
+
+        const es = new EventSource(url);
+        esRef.current = es;
+
+        es.onopen = () => {
+          if (!cancelled) setIsConnected(true);
+        };
+
+        es.onmessage = (event) => {
+          if (cancelled) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.symbol && typeof data.price === "number") {
+              const sym = data.symbol.toUpperCase();
+              setPrices((prev) => ({
+                ...prev,
+                [sym]: { price: data.price, timestamp: data.timestamp },
+              }));
+            }
+          } catch {}
+        };
+
+        es.onerror = () => {
+          if (!cancelled) setIsConnected(false);
+          es.close();
+          // Reconnect after 3s
+          setTimeout(() => {
+            if (!cancelled) connect();
+          }, 3000);
+        };
+      } catch {
+        if (!cancelled) {
+          setTimeout(() => {
+            if (!cancelled) connect();
+          }, 3000);
+        }
+      }
+    }
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (esRef.current) {
+        esRef.current.close();
+        esRef.current = null;
+      }
+    };
+  }, [symbols]);
 
   const livePrices: LivePrices | null = isConnected && Object.keys(prices).length > 0
     ? prices
@@ -61,7 +112,6 @@ export function LiveCandlestickChart({
 
   return (
     <div className="w-full">
-      {/* Header row: chart title + live badge */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium text-slate-300">
           Price Chart — {symbol}
@@ -74,14 +124,8 @@ export function LiveCandlestickChart({
           />
           {isConnected && (
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-700/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400">
-              <span
-                className="relative flex h-2 w-2"
-                aria-hidden
-              >
-                <span
-                  className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
-                  style={{ animationDuration: "1.5s" }}
-                />
+              <span className="relative flex h-2 w-2" aria-hidden>
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" style={{ animationDuration: "1.5s" }} />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
               </span>
               Live
