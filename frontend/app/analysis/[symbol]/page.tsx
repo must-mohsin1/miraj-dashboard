@@ -15,9 +15,11 @@ import type { ScanResult, TradePlanFlat } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { ScoreGauge } from "@/components/score-gauge";
 import { TradePlan } from "@/components/trade-plan";
-import { KillZoneClock } from "@/components/kill-zone-clock";
 import { LiveCandlestickChart } from "@/components/live-candlestick-chart";
 import { TradingGlossary } from "@/components/trading-glossary";
+import { KillZoneClock } from "@/components/kill-zone-clock";
+import { QqeSignalPanel } from "@/components/qqe-signal-panel";
+import { StructurePanel } from "@/components/structure-panel";
 import { ChartSkeleton } from "@/components/skeletons";
 
 /**

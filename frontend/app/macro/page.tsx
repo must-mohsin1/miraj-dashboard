@@ -101,6 +101,15 @@ export default async function MacroPage() {
         </Suspense>
       </section>
 
+      {/* Funding rates + CME gaps */}
+      <section
+        aria-label="Funding rates and CME gaps"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2"
+      >
+        <FundingRatesCard rates={data?.funding_rates ?? null} />
+        <CMEGapsCard gaps={data?.cme_gaps ?? null} />
+      </section>
+
       {/* Charts */}
       <section aria-label="Macro charts">
         <MacroChart data={data} />
