@@ -142,6 +142,11 @@ async def scan_symbol(
         ) from exc
 
     # ── Persist to analyses table ──────────────────────────────────
+    # Persist the FULL scan result dict (not just 3 fields) so the diff
+    # endpoint can compare QQE flips, structure changes, patterns, and
+    # indicator states across scans. Old rows (pre-A0) only have
+    # {confluence_score, trade_plan, score_breakdown} — they still parse,
+    # they just won't have the extra fields to diff against.
     try:
         # Extract score from full result for the indexable column
         score_val: float | None = (
@@ -153,11 +158,9 @@ async def scan_symbol(
             analysis_type="scan",
             score=score_val,
             parameters=json.dumps({"symbol": symbol}),
-            result=json.dumps({
-                "confluence_score": result.get("confluence_score"),
-                "trade_plan": result.get("trade_plan"),
-                "score_breakdown": result.get("score_breakdown"),
-            }),
+            # `default=str` guards against non-natively-serializable values
+            # (e.g. numpy scalars) from the indicator pipeline.
+            result=json.dumps(result, default=str),
         )
         session.add(analysis)
     except Exception as exc:

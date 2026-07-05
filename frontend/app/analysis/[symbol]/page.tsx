@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   BarChart3,
+  ChevronRight,
   Clock,
   RefreshCw,
 } from "lucide-react";
@@ -20,6 +21,8 @@ import { TradingGlossary } from "@/components/trading-glossary";
 import { KillZoneClock } from "@/components/kill-zone-clock";
 import { QqeSignalPanel } from "@/components/qqe-signal-panel";
 import { StructurePanel } from "@/components/structure-panel";
+import { SignalChangesPanel } from "@/components/signal-changes-panel";
+import { ScoreProgressionChart } from "@/components/score-progression-chart";
 import { ChartSkeleton } from "@/components/skeletons";
 
 /**
@@ -338,6 +341,40 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
             }
           )}
         </div>
+      </section>
+
+      {/* ── Signal Changes (last 5 between the two most recent scans) ── */}
+      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-medium text-slate-300">
+            Signal Changes
+          </h3>
+          <Link
+            href={`/analysis/${encodeURIComponent(result.symbol)}/changes`}
+            className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300"
+          >
+            View Full History
+            <ChevronRight className="h-3 w-3" />
+          </Link>
+        </div>
+        <SignalChangesPanel
+          symbol={result.symbol}
+          token={token}
+          limit={5}
+          variant="compact"
+        />
+      </section>
+
+      {/* ── Score Progression Chart ── */}
+      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+        <h3 className="mb-4 text-sm font-medium text-slate-300">
+          Score Progression
+        </h3>
+        <ScoreProgressionChart symbol={result.symbol} token={token} />
+        <p className="mt-3 text-xs text-slate-500">
+          Confluence score (0–30) across recent scans. Green zone ≥ 20
+          indicates a valid trade setup; red zone &lt; 10 indicates no trade.
+        </p>
       </section>
     </div>
   );

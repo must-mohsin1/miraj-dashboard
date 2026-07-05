@@ -654,6 +654,72 @@ export interface ScanHistoryResponse {
   pages: number;
 }
 
+// ── Signal Changes / Diff ──────────────────────────────────────────────────
+
+/** Severity level for a single signal change. */
+export type Severity = "major" | "minor" | "info";
+
+/** A single field-level change between two scans (from the diff endpoint). */
+export interface ScanDiffEntry {
+  /** Dotted path, e.g. "qqe_signals.4h", "score.total". */
+  field: string;
+  /** Human-readable change description, e.g. "GREEN-STRONG → RED". */
+  change: string;
+  /** "major" | "minor" | "info" — drives the colour coding. */
+  severity: Severity;
+  /** Previous value (any JSON type, or null). */
+  old_value: string | number | boolean | null;
+  /** New value (any JSON type, or null). */
+  new_value: string | number | boolean | null;
+  /** ISO-8601 timestamp of the newer scan (the one that changed). */
+  timestamp: string;
+}
+
+/** Response for `GET /api/v1/scan/{symbol}/diff` — last 2 scans. */
+export interface ScanDiff {
+  changes: ScanDiffEntry[];
+  old_scan: { timestamp: string; score: number };
+  new_scan: { timestamp: string; score: number };
+}
+
+/** Full ScanDiffResponse shape (richer, from the backend). Used by the
+ * compact panel which keys on the same shape via the /diff endpoint. */
+export interface ScanDiffResponse {
+  symbol: string;
+  previous_scan_at: string;
+  latest_scan_at: string;
+  previous_score: number | null;
+  latest_score: number | null;
+  changes: ScanDiffEntry[];
+  summary: Record<Severity, number>;
+}
+
+/** A single point on the score progression series. */
+export interface ScorePoint {
+  timestamp: string;
+  confluence_score: number | null;
+  overall_score: number | null;
+  direction: string | null;
+  trade_decision: boolean | null;
+}
+
+/** One group of changes (per adjacent scan pair) in the timeline. */
+export interface TimelineGroup {
+  scan_at: string;
+  score_before: number | null;
+  score_after: number | null;
+  changes: ScanDiffEntry[];
+}
+
+/** Response for `GET /api/v1/scan/{symbol}/changes` — full timeline. */
+export interface ScanChangesTimelineResponse {
+  symbol: string;
+  total_scans: number;
+  score_progression: ScorePoint[];
+  timeline: TimelineGroup[];
+  summary: Record<Severity, number>;
+}
+
 // ── Trading Journal (Phase 3) ──────────────────────────────────────────────
 
 /** A single trading-journal entry from `GET/POST /api/v1/journal`. */
