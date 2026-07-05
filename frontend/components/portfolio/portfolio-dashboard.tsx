@@ -19,7 +19,9 @@ import { PositionHistoryTable } from "@/components/portfolio/position-history-ta
 import { OrderHistoryTable } from "@/components/portfolio/order-history-table";
 import { LivePortfolioHeader } from "@/components/portfolio/live-portfolio-header";
 import { AnalyticsDashboard } from "@/components/portfolio/analytics-dashboard";
-import type { PortfolioResponse } from "@/lib/types";
+import { PositionAlertsPanel } from "@/components/portfolio/position-alerts-panel";
+import { RiskMetricsPanel } from "@/components/portfolio/risk-metrics-panel";
+import type { PortfolioResponse, PositionAlertItem, PositionAlertsResponse } from "@/lib/types";
 import type { PriceMap } from "@/hooks/use-price-stream";
 
 /**
@@ -144,6 +146,9 @@ export function PortfolioDashboard({
   const [isConnected, setIsConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
+  // Position alerts state (fetched every 5 min for badges + panel).
+  const [alertsMap, setAlertsMap] = useState<Record<string, PositionAlertItem>>({});
+
   const exchangeName = titleCase(exchange);
 
   const balances = portfolio?.balances ?? [];
@@ -254,6 +259,46 @@ export function PortfolioDashboard({
     }, AUTO_REFRESH_MS);
     return () => clearInterval(interval);
   }, [router]);
+
+  // Fetch position alerts every 5 minutes (and on mount / exchange change).
+  // The alerts power both the PositionAlertsPanel and the warning badges in
+  // the PositionsTable.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchAlerts() {
+      try {
+        const headers: HeadersInit = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const res = await fetch(
+          `/api/v1/portfolio/${exchange}/position-alerts`,
+          { headers },
+        );
+        if (!res.ok) return;
+        const json: PositionAlertsResponse = await res.json();
+        if (cancelled) return;
+        // Build a symbol → alert map for the PositionsTable badges.
+        const map: Record<string, PositionAlertItem> = {};
+        for (const item of json.positions) {
+          map[item.symbol] = item;
+          // Also index by the base symbol (strip ":USDT" settlement suffix)
+          // so positions like "BTC/USDT:USDT" match "BTC/USDT".
+          const base = item.symbol.split(":")[0];
+          if (base !== item.symbol) map[base] = item;
+        }
+        setAlertsMap(map);
+      } catch {
+        // Non-fatal — badges just won't show.
+      }
+    }
+
+    fetchAlerts();
+    const interval = setInterval(fetchAlerts, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [exchange, token]);
 
   // The price map is only "live" once the stream is open and we have data.
   const livePrices: PriceMap | null =
@@ -427,12 +472,22 @@ export function PortfolioDashboard({
       )}
 
       {/* Live portfolio summary header — recalculates total value + PnL in real-time */}
-      <LivePortfolioHeader
-        balances={balances}
-        positions={positions}
-        livePrices={livePrices}
-        isConnected={isConnected}
-      />
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch">
+        <div className="flex-1">
+          <LivePortfolioHeader
+            balances={balances}
+            positions={positions}
+            livePrices={livePrices}
+            isConnected={isConnected}
+          />
+        </div>
+        <div className="xl:flex-none xl:basis-[420px]">
+          <RiskMetricsPanel token={token} exchange={exchange} />
+        </div>
+      </div>
+
+      {/* Position alerts panel (Miraj cross-reference) — above tabs */}
+      <PositionAlertsPanel token={token} exchange={exchange} />
 
       {/* Tabs */}
       <Tabs defaultValue="balances" className="w-full">
@@ -460,7 +515,11 @@ export function PortfolioDashboard({
           <BalancesTable balances={balances} livePrices={livePrices} />
         </TabsContent>
         <TabsContent value="positions">
-          <PositionsTable positions={positions} livePrices={livePrices} />
+          <PositionsTable
+            positions={positions}
+            livePrices={livePrices}
+            alertsMap={alertsMap}
+          />
         </TabsContent>
         <TabsContent value="position-history">
           <PositionHistoryTable positions={positionHistory} />

@@ -550,6 +550,169 @@ async def _trigger_advanced_alert(
     )
 
 
+# ── Position alert check job (cross-reference positions with Miraj scan) ──
+
+
+# In-memory dedup store: {(user_id, symbol, alert_type): last_sent_ts}
+_position_alert_dedup: dict[tuple[int, str, str], float] = {}
+_POSITION_ALERT_DEDUP_SECONDS = 3600  # 1 hour
+
+
+async def check_position_alerts_job() -> None:
+    """APScheduler job callback — check open positions against the Miraj scan.
+
+    For every connected ``(user_id, exchange)`` pair:
+      1. Loads the cached open positions.
+      2. Runs the position-alert service (which fetches/caches scans).
+      3. For any DANGER alert, sends a Telegram notification (1-hour dedup).
+
+    Runs every 10 minutes.
+    """
+    logger.info("Position alert check: starting")
+
+    from backend.routes.portfolio import _load_positions, _serialise_position
+    from backend.services.position_alert_service import compute_position_alerts
+    from backend.services.exchange_service import is_ccxt_available
+
+    if not is_ccxt_available():
+        logger.info("Position alert check: ccxt not installed — skipping")
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        try:
+            # Find every connected (user, exchange) pair
+            result = await session.execute(select(ExchangeKey))
+            key_rows = result.scalars().all()
+
+            if not key_rows:
+                logger.info("Position alert check: no connected users — skipping")
+                return
+
+            import time as _time
+
+            now_ts = _time.time()
+            sent_count = 0
+
+            for row in key_rows:
+                user_id = row.user_id
+                exchange_slug = row.exchange
+
+                try:
+                    positions = await _load_positions(
+                        session, user_id, exchange_slug,
+                    )
+                    if not positions:
+                        continue
+
+                    position_dicts = [_serialise_position(p) for p in positions]
+                    alert_items = await compute_position_alerts(position_dicts)
+
+                    if not alert_items:
+                        continue
+
+                    # ── Collect DANGER alerts for Telegram ───────────
+                    danger_alerts = [
+                        item for item in alert_items
+                        if item.get("max_severity") == "DANGER"
+                    ]
+                    if not danger_alerts:
+                        continue
+
+                    # Fetch the user's Telegram chat id
+                    from backend.models import AlertChannel
+
+                    channel_result = await session.execute(
+                        select(AlertChannel).where(
+                            AlertChannel.user_id == user_id,
+                            AlertChannel.channel_type == "telegram",
+                            AlertChannel.enabled == 1,
+                        )
+                    )
+                    telegram_channel = channel_result.scalar_one_or_none()
+                    if telegram_channel is None:
+                        logger.debug(
+                            "Position alert: user %d has no Telegram channel — skipping",
+                            user_id,
+                        )
+                        continue
+
+                    # Parse chat_id from config JSON
+                    import json as _json
+
+                    chat_id: Optional[str] = None
+                    try:
+                        config = _json.loads(telegram_channel.config or "{}")
+                        chat_id = str(config.get("chat_id", "")).strip() or None
+                    except (ValueError, TypeError):
+                        chat_id = None
+
+                    if not chat_id:
+                        logger.debug(
+                            "Position alert: user %d Telegram channel has no chat_id",
+                            user_id,
+                        )
+                        continue
+
+                    # ── Send each DANGER alert (dedup'd per hour) ────
+                    from backend.alerts.telegram import send_alert
+
+                    for item in danger_alerts:
+                        symbol = item.get("symbol", "?")
+                        for alert in item.get("alerts", []):
+                            if alert.get("severity") != "DANGER":
+                                continue
+                            alert_type = alert.get("type", "UNKNOWN")
+                            dedup_key = (user_id, symbol, alert_type)
+                            last_sent = _position_alert_dedup.get(dedup_key)
+                            if (
+                                last_sent is not None
+                                and (now_ts - last_sent)
+                                < _POSITION_ALERT_DEDUP_SECONDS
+                            ):
+                                continue  # dedup: skip within 1 hour
+
+                            message = (
+                                f"\U0001f6a8 *DANGER* — Position Alert\n"
+                                f"\U0001f3f7 *{symbol}* ({item.get('position_side', '')})\n"
+                                f"\U0001f4cc {alert.get('message', '')}\n"
+                                f"\U0001f4a1 Action: {alert.get('action', 'Review position')}"
+                            )
+                            sent = await send_alert(chat_id, message)
+                            if sent:
+                                sent_count += 1
+                                _position_alert_dedup[dedup_key] = now_ts
+                                logger.info(
+                                    "Position alert: sent DANGER alert to user %d "
+                                    "for %s (%s)",
+                                    user_id, symbol, alert_type,
+                                )
+
+                except Exception as exc:
+                    logger.warning(
+                        "Position alert check: error for user %d / %s: %s",
+                        user_id, exchange_slug, exc,
+                    )
+                    continue
+
+            # ── Purge stale dedup entries (older than 2h) ──────────
+            stale_cutoff = now_ts - (2 * _POSITION_ALERT_DEDUP_SECONDS)
+            stale_keys = [
+                k for k, ts in _position_alert_dedup.items()
+                if ts < stale_cutoff
+            ]
+            for k in stale_keys:
+                _position_alert_dedup.pop(k, None)
+
+            logger.info(
+                "Position alert check: complete — %d DANGER alerts sent",
+                sent_count,
+            )
+
+        except Exception as exc:
+            logger.exception("Position alert check failed: %s", exc)
+
+
 # ── Lifecycle helpers ──────────────────────────────────────────────────────
 
 
@@ -585,6 +748,13 @@ def setup_scheduler(app) -> AsyncIOScheduler:
         trigger=CronTrigger(minute="*/5"),  # every 5 minutes
         id="check_advanced_alerts",
         name="Advanced alerts — RSI/EMA/volume (every 5m)",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        check_position_alerts_job,
+        trigger=CronTrigger(minute="*/10"),  # every 10 minutes
+        id="check_position_alerts",
+        name="Position alert check (every 10m)",
         replace_existing=True,
     )
     # Register the daily digest job

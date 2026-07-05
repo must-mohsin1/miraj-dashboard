@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { AlertTriangle, ShieldAlert } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -11,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { PositionItem } from "@/lib/types";
+import type { PositionItem, PositionAlertItem } from "@/lib/types";
 import type { PriceMap } from "@/hooks/use-price-stream";
 
 /**
@@ -55,6 +57,8 @@ interface PositionsTableProps {
   positions: PositionItem[];
   /** Live prices keyed in SSE format (e.g. "BTC-USDT"). null when not streaming. */
   livePrices?: PriceMap | null;
+  /** Optional position alerts keyed by symbol (from /position-alerts endpoint). */
+  alertsMap?: Record<string, PositionAlertItem> | null;
 }
 
 function sideMeta(side: string) {
@@ -80,7 +84,11 @@ function sideMeta(side: string) {
   };
 }
 
-export function PositionsTable({ positions, livePrices = null }: PositionsTableProps) {
+export function PositionsTable({
+  positions,
+  livePrices = null,
+  alertsMap = null,
+}: PositionsTableProps) {
   if (positions.length === 0) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-sm text-slate-400">
@@ -115,7 +123,7 @@ export function PositionsTable({ positions, livePrices = null }: PositionsTableP
 
             // Use live mark price for display + flash
             const markPrice = liveMark ?? p.mark_price;
-            // Calculate real-time PnL using contract_size multiplier
+            // Calculate real-time PnL using contract size multiplier
             // Formula: (liveMark - entry) * contracts * contractSize * dir
             const contractSize = p.contract_size ?? 1;
             const pnl =
@@ -131,6 +139,13 @@ export function PositionsTable({ positions, livePrices = null }: PositionsTableP
                 : p.pnl_percent;
             const pnlPositive = pnl >= 0;
 
+            // Look up alerts for this symbol (keyed by exact position symbol).
+            // Fallback to a normalized lookup (strip quote/settlement suffixes).
+            const symbolAlert =
+              alertsMap?.[p.symbol] ??
+              alertsMap?.[p.symbol.split(":")[0]] ??
+              null;
+
             return (
               <PositionRow
                 key={`${p.symbol}-${i}`}
@@ -142,6 +157,7 @@ export function PositionsTable({ positions, livePrices = null }: PositionsTableP
                 pnl={pnl}
                 pnlPercent={pnlPercent}
                 pnlPositive={pnlPositive}
+                alert={symbolAlert}
               />
             );
           })}
@@ -164,6 +180,7 @@ interface PositionRowProps {
   pnl: number;
   pnlPercent: number;
   pnlPositive: boolean;
+  alert?: PositionAlertItem | null;
 }
 
 function PositionRow({
@@ -175,8 +192,10 @@ function PositionRow({
   pnl,
   pnlPercent,
   pnlPositive,
+  alert = null,
 }: PositionRowProps) {
   const [flash, setFlash] = useState<"up" | "down" | null>(null);
+  const [showAlertTooltip, setShowAlertTooltip] = useState(false);
   const prevMarkRef = useRef<number | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -208,6 +227,17 @@ function PositionRow({
         ? "text-red-400"
         : "text-slate-300";
 
+  const hasAlert = alert && alert.alerts && alert.alerts.length > 0;
+  const isDanger = alert?.max_severity === "DANGER";
+  const alertTooltip = hasAlert
+    ? alert!.alerts
+        .map(
+          (a) =>
+            `[${a.severity}] ${a.type.replace("_", " ")}: ${a.message}${a.action ? ` → ${a.action}` : ""}`,
+        )
+        .join("\n")
+    : "";
+
   return (
     <TableRow
       className="border-slate-800/60 transition-colors last:border-0 hover:bg-slate-800/30"
@@ -222,6 +252,41 @@ function PositionRow({
                 style={{ animationDuration: "1.5s" }}
               />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            </span>
+          )}
+          {hasAlert && (
+            <span
+              className="relative inline-flex cursor-help"
+              onMouseEnter={() => setShowAlertTooltip(true)}
+              onMouseLeave={() => setShowAlertTooltip(false)}
+              onFocus={() => setShowAlertTooltip(true)}
+              onBlur={() => setShowAlertTooltip(false)}
+              tabIndex={0}
+              role="button"
+              aria-label={`${alert!.alerts.length} position alert${alert!.alerts.length > 1 ? "s" : ""}`}
+            >
+              {isDanger ? (
+                <ShieldAlert className="h-4 w-4 text-red-400" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 text-amber-400" />
+              )}
+              <span
+                className={`absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-[9px] font-bold ${
+                  isDanger
+                    ? "bg-red-500 text-white"
+                    : "bg-amber-500 text-black"
+                }`}
+              >
+                {alert!.alerts.length}
+              </span>
+              {showAlertTooltip && (
+                <span
+                  className="absolute left-full top-0 z-50 ml-2 w-64 whitespace-pre-line rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 shadow-xl"
+                  role="tooltip"
+                >
+                  {alertTooltip}
+                </span>
+              )}
             </span>
           )}
         </span>

@@ -812,3 +812,51 @@ export interface JournalScreenshotListResponse {
   entry_id: number;
   screenshots: string[];
 }
+
+// ── Position alerts (Miraj cross-reference) ───────────────────────────────
+
+/** A single alert on an open position (QQE flip, structure conflict, etc.). */
+export interface PositionAlert {
+  /** QQE_FLIP | STRUCTURE | CONFLUENCE | LIQ_DISTANCE */
+  type: string;
+  /** WARNING | DANGER */
+  severity: string;
+  message: string;
+  action?: string | null;
+}
+
+/** Aggregated alerts for a single open position. */
+export interface PositionAlertItem {
+  symbol: string;
+  position_side: string;
+  position_size: number;
+  max_severity: string | null;
+  alerts: PositionAlert[];
+}
+
+/** Response for `GET /api/v1/portfolio/{exchange}/position-alerts`. */
+export interface PositionAlertsResponse {
+  exchange: string;
+  total_alerts: number;
+  danger_count: number;
+  warning_count: number;
+  positions: PositionAlertItem[];
+}
+
+// ── Risk metrics ────────────────────────────────────────────────────────────
+
+/** Response for `GET /api/v1/analytics/{exchange}/risk`. */
+export interface RiskMetrics {
+  exchange: string;
+  total_exposure_usd: number;
+  net_exposure_usd: number;
+  long_exposure_usd: number;
+  short_exposure_usd: number;
+  avg_liquidation_distance_pct: number | null;
+  margin_usage_pct: number;
+  total_margin_used: number;
+  total_balance_usd: number | null;
+  open_positions: number;
+  /** 0–100 (higher = more risk). */
+  risk_score: number;
+}

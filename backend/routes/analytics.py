@@ -13,7 +13,7 @@ All endpoints require JWT auth (``Depends(get_current_user)``).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -90,6 +90,27 @@ class AllocationItem(BaseModel):
 class AllocationResponse(BaseModel):
     exchange: str
     items: List[AllocationItem]
+
+
+# ── Risk metrics ─────────────────────────────────────────────────────────
+
+
+class RiskMetricsResponse(BaseModel):
+    """Response for GET /api/v1/analytics/{exchange}/risk."""
+
+    exchange: str
+    total_exposure_usd: float = Field(description="Sum of position notional value × leverage exposure")
+    net_exposure_usd: float = Field(description="Long USD − Short USD (positive = net long)")
+    long_exposure_usd: float
+    short_exposure_usd: float
+    avg_liquidation_distance_pct: Optional[float] = Field(
+        None, description="Average % distance from mark price to liquidation price"
+    )
+    margin_usage_pct: float = Field(description="Total margin used / total balance (0–100)")
+    total_margin_used: float
+    total_balance_usd: Optional[float] = None
+    open_positions: int
+    risk_score: float = Field(description="0–100, higher = more risk")
 
 
 # ── Journal analytics ──────────────────────────────────────────────────────
@@ -236,6 +257,184 @@ async def get_allocation(
         exchange=exchange_slug,
         items=[AllocationItem(**i) for i in items],
     )
+
+
+@router.get(
+    "/{exchange}/risk",
+    response_model=RiskMetricsResponse,
+    summary="Portfolio risk metrics",
+)
+async def get_risk_metrics(
+    exchange: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> RiskMetricsResponse:
+    """Compute real-time risk metrics from open positions + balances.
+
+    Returns total leverage exposure, net long/short exposure, average
+    liquidation distance, margin usage, and a 0–100 risk score.
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+
+    from sqlalchemy import select
+
+    from backend.models import (
+        PortfolioBalance,
+        PortfolioPosition,
+        PortfolioSnapshot,
+    )
+
+    # ── Load positions ──────────────────────────────────────────────
+    result = await session.execute(
+        select(PortfolioPosition).where(
+            PortfolioPosition.user_id == current_user.id,
+            PortfolioPosition.exchange == exchange_slug,
+        )
+    )
+    positions = list(result.scalars().all())
+
+    # ── Load balances (for margin-usage denominator) ────────────────
+    bal_result = await session.execute(
+        select(PortfolioBalance).where(
+            PortfolioBalance.user_id == current_user.id,
+            PortfolioBalance.exchange == exchange_slug,
+        )
+    )
+    balances = list(bal_result.scalars().all())
+
+    # ── Compute exposure metrics ────────────────────────────────────
+    long_exposure = 0.0
+    short_exposure = 0.0
+    total_margin_used = 0.0
+    liq_distances: list[float] = []
+
+    for p in positions:
+        side = (p.side or "").upper()
+        # Notional position value in USD (mark price × size × contract size)
+        contract_size = float(p.contract_size or 1.0)
+        size = float(p.size or 0.0)
+        mark = float(p.mark_price or 0.0)
+        notional = abs(size) * abs(mark) * contract_size
+        margin = float(p.margin or 0.0)
+        total_margin_used += margin
+
+        if side in ("LONG", "BUY"):
+            long_exposure += notional
+        elif side in ("SHORT", "SELL"):
+            short_exposure += notional
+
+        # Liquidation distance
+        liq = p.liquidation_price
+        if liq is not None and mark > 0:
+            liq_f = float(liq)
+            if liq_f > 0:
+                distance_pct = abs(mark - liq_f) / mark * 100.0
+                liq_distances.append(distance_pct)
+
+    total_exposure_usd = long_exposure + short_exposure
+    net_exposure_usd = long_exposure - short_exposure
+    avg_liq_distance = (
+        sum(liq_distances) / len(liq_distances) if liq_distances else None
+    )
+
+    # ── Total balance (USD) ────────────────────────────────────────
+    # Use the sum of balance USD values (stablecoin-heavy portfolios).
+    total_balance_usd: Optional[float] = None
+    for b in balances:
+        usd_val = getattr(b, "usd_value", None)
+        if usd_val is not None:
+            if total_balance_usd is None:
+                total_balance_usd = 0.0
+            total_balance_usd += float(usd_val)
+
+    # ── Margin usage percentage ────────────────────────────────────
+    if total_balance_usd and total_balance_usd > 0:
+        margin_usage_pct = min(100.0, (total_margin_used / total_balance_usd) * 100.0)
+    else:
+        margin_usage_pct = 0.0
+
+    # ── Risk score (0–100) ─────────────────────────────────────────
+    risk_score = _compute_risk_score(
+        total_exposure_usd=total_exposure_usd,
+        net_exposure_usd=net_exposure_usd,
+        total_balance_usd=total_balance_usd,
+        margin_usage_pct=margin_usage_pct,
+        avg_liq_distance=avg_liq_distance,
+        open_positions=len(positions),
+    )
+
+    return RiskMetricsResponse(
+        exchange=exchange_slug,
+        total_exposure_usd=round(total_exposure_usd, 2),
+        net_exposure_usd=round(net_exposure_usd, 2),
+        long_exposure_usd=round(long_exposure, 2),
+        short_exposure_usd=round(short_exposure, 2),
+        avg_liquidation_distance_pct=(
+            round(avg_liq_distance, 2) if avg_liq_distance is not None else None
+        ),
+        margin_usage_pct=round(margin_usage_pct, 2),
+        total_margin_used=round(total_margin_used, 2),
+        total_balance_usd=(
+            round(total_balance_usd, 2) if total_balance_usd is not None else None
+        ),
+        open_positions=len(positions),
+        risk_score=round(risk_score, 1),
+    )
+
+
+def _compute_risk_score(
+    total_exposure_usd: float,
+    net_exposure_usd: float,
+    total_balance_usd: Optional[float],
+    margin_usage_pct: float,
+    avg_liq_distance: Optional[float],
+    open_positions: int,
+) -> float:
+    """Compute a 0–100 risk score (higher = more risk).
+
+    Weighted blend of:
+      * Leverage ratio (exposure / balance)
+      * Margin usage %
+      * Liquidation proximity (closer = riskier)
+      * Concentration (single position = riskier)
+    """
+    score = 0.0
+
+    # 1. Leverage ratio (exposure / balance) — 35 points max
+    if total_balance_usd and total_balance_usd > 0:
+        lev_ratio = total_exposure_usd / total_balance_usd
+        # 0x → 0, 5x → 35, 10x+ → 35
+        lev_points = min(35.0, lev_ratio * 7.0)
+    else:
+        # No balance data — infer from exposure alone (capped)
+        lev_points = min(20.0, total_exposure_usd / 1000.0)
+    score += lev_points
+
+    # 2. Margin usage — 30 points max
+    # 0% → 0, 50% → 15, 80% → 24, 100% → 30
+    usage_points = min(30.0, margin_usage_pct * 0.3)
+    score += usage_points
+
+    # 3. Liquidation proximity — 25 points max
+    if avg_liq_distance is not None:
+        # < 2% → 25, 5% → 15, 10% → 5, 20%+ → 0
+        if avg_liq_distance < 2.0:
+            liq_points = 25.0
+        elif avg_liq_distance < 5.0:
+            liq_points = 25.0 - (avg_liq_distance - 2.0) * (10.0 / 3.0)
+        elif avg_liq_distance < 20.0:
+            liq_points = max(0.0, 15.0 - (avg_liq_distance - 5.0) * (15.0 / 15.0))
+        else:
+            liq_points = 0.0
+        score += liq_points
+
+    # 4. Net exposure skew — 10 points max
+    # Fully one-sided (100% long or 100% short) = more risk
+    if total_exposure_usd > 0:
+        skew = abs(net_exposure_usd) / total_exposure_usd
+        score += skew * 10.0
+
+    return min(100.0, max(0.0, score))
 
 
 @router.get(

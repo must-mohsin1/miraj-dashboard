@@ -186,6 +186,38 @@ class PortfolioResponse(BaseModel):
     stale: bool = True
 
 
+# ── Position alert schemas (cross-reference with Miraj scan) ────────────────
+
+
+class PositionAlert(BaseModel):
+    """A single alert on a position (e.g. QQE flip, structure conflict)."""
+
+    type: str = Field(description="QQE_FLIP / STRUCTURE / CONFLUENCE / LIQ_DISTANCE")
+    severity: str = Field(description="WARNING or DANGER")
+    message: str
+    action: Optional[str] = None
+
+
+class PositionAlertItem(BaseModel):
+    """Aggregated alerts for a single open position."""
+
+    symbol: str
+    position_side: str
+    position_size: float
+    max_severity: Optional[str] = None
+    alerts: List[PositionAlert]
+
+
+class PositionAlertsResponse(BaseModel):
+    """Response for GET /api/v1/portfolio/{exchange}/position-alerts."""
+
+    exchange: str
+    total_alerts: int
+    danger_count: int
+    warning_count: int
+    positions: List[PositionAlertItem]
+
+
 class HistoryResponse(BaseModel):
     """Response for `GET /api/v1/portfolio/{exchange}/history`."""
 
@@ -716,6 +748,63 @@ async def get_portfolio(
         snapshot=SnapshotItem(**_serialise_snapshot(snapshot)) if snapshot else None,
         last_refreshed=_get_iso_ts(snapshot),
         stale=True,
+    )
+
+
+@router.get(
+    "/{exchange}/position-alerts",
+    response_model=PositionAlertsResponse,
+    responses={
+        404: {"model": PortfolioErrorResponse, "description": "Unsupported exchange"},
+        501: {"model": PortfolioErrorResponse, "description": "ccxt not installed"},
+    },
+)
+async def get_position_alerts(
+    exchange: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> PositionAlertsResponse:
+    """Cross-reference each open position with the Miraj scan engine.
+
+    For every open position, fetches the latest scan (cached or freshly run)
+    and compares the position direction against QQE signals, market
+    structure, and confluence direction. Also checks liquidation distance.
+
+    Returns a list of at-risk positions with their alerts. Positions with no
+    alerts are omitted.
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+
+    positions = await _load_positions(session, current_user.id, exchange_slug)
+    if not positions:
+        return PositionAlertsResponse(
+            exchange=exchange_slug,
+            total_alerts=0,
+            danger_count=0,
+            warning_count=0,
+            positions=[],
+        )
+
+    # Convert ORM rows to plain dicts for the alert service
+    position_dicts = [_serialise_position(p) for p in positions]
+
+    from backend.services.position_alert_service import compute_position_alerts
+
+    alert_items = await compute_position_alerts(position_dicts)
+
+    danger_count = sum(
+        1 for item in alert_items if item.get("max_severity") == "DANGER"
+    )
+    warning_count = sum(
+        1 for item in alert_items if item.get("max_severity") == "WARNING"
+    )
+
+    return PositionAlertsResponse(
+        exchange=exchange_slug,
+        total_alerts=len(alert_items),
+        danger_count=danger_count,
+        warning_count=warning_count,
+        positions=[PositionAlertItem(**item) for item in alert_items],
     )
 
 
