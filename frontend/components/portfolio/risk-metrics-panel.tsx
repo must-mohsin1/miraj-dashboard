@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 
-import { ScoreGauge } from "@/components/score-gauge";
 import type { RiskMetrics } from "@/lib/types";
 
 /**
@@ -91,12 +90,16 @@ export function RiskMetricsPanel({ token, exchange }: RiskMetricsPanelProps) {
 
   if (!data) return null;
 
+  const risk = data.risk_score;
+  const riskColor = risk >= 60 ? "#ef4444" : risk >= 30 ? "#f97316" : "#22c55e";
+  const riskLabel = risk >= 60 ? "High" : risk >= 30 ? "Moderate" : "Low";
+
   const netIsLong = data.net_exposure_usd >= 0;
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
       {/* Header */}
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-slate-300">Risk Metrics</h3>
         <button
           type="button"
@@ -112,14 +115,43 @@ export function RiskMetricsPanel({ token, exchange }: RiskMetricsPanelProps) {
         </button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-4">
-        {/* Risk score gauge */}
-        <div className="shrink-0">
-          <ScoreGauge score={data.risk_score} size={140} label="Risk" />
+      {/* Risk score bar + metrics grid */}
+      <div className="space-y-4">
+        {/* Risk score horizontal bar */}
+        <div className="flex items-center gap-3">
+          <div className="flex-1">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                Risk Score
+              </span>
+              <span
+                className="text-sm font-bold tabular-nums"
+                style={{ color: riskColor }}
+              >
+                {risk.toFixed(0)} / 100 — {riskLabel}
+              </span>
+            </div>
+            <div className="h-3 w-full overflow-hidden rounded-full bg-slate-800">
+              <div
+                className="h-full rounded-full transition-all duration-700"
+                style={{
+                  width: `${Math.min(100, risk)}%`,
+                  backgroundColor: riskColor,
+                }}
+              />
+            </div>
+            {/* Zone markers */}
+            <div className="mt-1 flex justify-between text-[9px] text-slate-600">
+              <span>0 (Safe)</span>
+              <span>30</span>
+              <span>60</span>
+              <span>100 (Danger)</span>
+            </div>
+          </div>
         </div>
 
         {/* Metric grid */}
-        <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           <MetricCard
             label="Total Exposure"
             value={usd(data.total_exposure_usd)}
