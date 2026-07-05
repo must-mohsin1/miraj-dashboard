@@ -142,6 +142,22 @@ def run_scan(symbol: str) -> dict[str, Any]:
     else:
         smc_result = {"error": "No 4h data for SMC"}
 
+    # ── 5b. Market structure classification (5 TFs) ───────────────
+    structure_results: dict[str, Any] = {}
+    for tf in ("weekly", "daily", "4h", "1h", "15m"):
+        df = timeframes.get(tf)
+        if df is not None and not df.empty:
+            try:
+                structure_results[tf] = smc.classify_structure(df)
+            except Exception as exc:
+                structure_results[tf] = {"label": "unknown", "error": str(exc)}
+                logger.warning("Structure classify failed for %s on %s: %s", symbol, tf, exc)
+        else:
+            structure_results[tf] = {"label": "unknown", "detail": f"No data for {tf}"}
+
+    # ── 5c. QQE signal summary (per-TF trend/strength) ─────────────
+    qqe_signals = _extract_qqe_signals(qqe_results)
+
     # ── 6. Patterns (daily) ────────────────────────────────────────
     pattern_result: dict[str, Any] = {}
     pat_df = timeframes.get("daily")
@@ -221,6 +237,8 @@ def run_scan(symbol: str) -> dict[str, Any]:
         "smc": smc_result,
         "patterns": pattern_result,
         "qqe": qqe_results,
+        "qqe_signals": qqe_signals,
+        "structure": structure_results,
         "indicators": _simplify_indicator_summary(ind_results),
     }
 
@@ -441,6 +459,35 @@ def _has_green_signal(qqe_results: dict[str, Any]) -> bool:
         if isinstance(result, dict) and result.get("signal") in ("GREEN", "GREEN-STRONG"):
             return True
     return False
+
+
+def _extract_qqe_signals(
+    qqe_results: dict[str, Any],
+) -> dict[str, dict[str, str]]:
+    """Condense raw QQE results into {tf: {trend, strength}} for the UI.
+
+    Source ``signal`` values: GREEN-STRONG, GREEN, RED-STRONG, RED, Neutral.
+    Returns trend in {GREEN, RED, NEUTRAL} and strength in {STRONG, NORMAL, NONE}.
+    Errors / missing TFs default to ``{trend: NEUTRAL, strength: NONE}``.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for tf in ("daily", "4h", "1h"):
+        raw = qqe_results.get(tf)
+        if not isinstance(raw, dict) or "error" in raw:
+            out[tf] = {"trend": "NEUTRAL", "strength": "NONE"}
+            continue
+        sig = raw.get("signal", "Neutral")
+        if sig == "GREEN-STRONG":
+            out[tf] = {"trend": "GREEN", "strength": "STRONG"}
+        elif sig == "GREEN":
+            out[tf] = {"trend": "GREEN", "strength": "NORMAL"}
+        elif sig == "RED-STRONG":
+            out[tf] = {"trend": "RED", "strength": "STRONG"}
+        elif sig == "RED":
+            out[tf] = {"trend": "RED", "strength": "NORMAL"}
+        else:
+            out[tf] = {"trend": "NEUTRAL", "strength": "NONE"}
+    return out
 
 
 def _has_confirmed_pattern(pattern_result: dict[str, Any]) -> bool:

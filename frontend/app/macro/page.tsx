@@ -6,6 +6,8 @@ import { serverFetch } from "@/lib/api";
 import type { MacroResponse } from "@/lib/types";
 import { MacroCards } from "@/components/macro-cards";
 import { MacroChart } from "@/components/macro-chart";
+import { FundingRatesCard } from "@/components/funding-rates-card";
+import { CMEGapsCard } from "@/components/cme-gaps-card";
 import { CardSkeleton } from "@/components/skeletons";
 import { Badge } from "@/components/ui/badge";
 

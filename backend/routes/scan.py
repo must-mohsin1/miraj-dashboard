@@ -55,6 +55,10 @@ class ScanResponse(BaseModel):
     smc: Optional[dict[str, Any]] = None
     patterns: Optional[dict[str, Any]] = None
     qqe: Optional[dict[str, Any]] = None
+    # ── Per-TF QQE trend/strength summary (daily/4h/1h) built by service ──
+    qqe_signals: Optional[dict[str, Any]] = None
+    # ── Per-TF market structure (weekly/daily/4h/1h/15m → {label, detail, swings}) ──
+    structure: Optional[dict[str, Any]] = None
     indicators: Optional[dict[str, Any]] = None
     candles: Optional[list[dict[str, Any]]] = None
     order_blocks: Optional[list[dict[str, Any]]] = None

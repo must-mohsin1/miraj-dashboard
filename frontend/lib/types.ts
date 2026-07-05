@@ -23,6 +23,19 @@ export interface MacroData {
   fear_greed_label: string | null;
   /** Binance global long/short account ratio for BTCUSDT. */
   binance_ls_ratio: number | null;
+  /** Per-asset funding rates from Binance Futures. `null` when the source failed. */
+  funding_rates?: Array<{
+    symbol: string;
+    funding_rate: number;
+    funding_rate_percent: number;
+  }>;
+  /** Unfilled CME gaps on BTC weekly candles. `null` when the source failed. */
+  cme_gaps?: Array<{
+    date: string;
+    gap_percent: number;
+    direction: string;
+    filled: boolean;
+  }>;
   /** Heuristic market regime: "risk-on" | "risk-off" | "mixed". */
   regime: string | null;
 }
@@ -397,6 +410,53 @@ export interface FairValueGap {
 }
 
 /**
+ * Per-timeframe QQE signal summary extracted by the backend from the raw
+ * `qqe` results. `trend` is GREEN / RED / NEUTRAL; `strength` is STRONG
+ * (volume-confirmed) / NORMAL / NONE (neutral or errored).
+ */
+export interface QqeSignal {
+  trend: "GREEN" | "RED" | "NEUTRAL";
+  strength: "STRONG" | "NORMAL" | "NONE";
+}
+
+/**
+ * Per-timeframe QQE signals keyed by timeframe (daily / 4h / 1h).
+ * `null` before a scan completes or if the backend omitted the field.
+ */
+export type QqeSignals = Record<"daily" | "4h" | "1h", QqeSignal>;
+
+/**
+ * A single swing point used in the market-structure analysis.
+ * `type` is "high" (swing high / peak) or "low" (swing low / trough).
+ */
+export interface StructureSwing {
+  type: "high" | "low";
+  price: number;
+  index: number;
+}
+
+/**
+ * Single-timeframe market-structure classification result.
+ * `label` ∈ {HH, HL, LH, LL, unknown, "Insufficient data"}.
+ * `swings` holds the most recent swing points (up to 6).
+ */
+export interface StructureLabel {
+  label: "HH" | "HL" | "LH" | "LL" | "unknown" | "Insufficient data";
+  detail: string;
+  error?: string;
+  swings?: StructureSwing[];
+}
+
+/**
+ * Per-timeframe market-structure labels keyed by timeframe
+ * (weekly / daily / 4h / 1h / 15m).
+ */
+export type StructureByTF = Record<
+  "weekly" | "daily" | "4h" | "1h" | "15m",
+  StructureLabel
+>;
+
+/**
  * The flat, UI-friendly trade plan derived by the backend from the full
  * `trade_plan` object. Entry / stop / targets are plain floats (or null
  * when unavailable). `rationale` is a free-text human explanation.
@@ -442,6 +502,10 @@ export interface ScanResult {
   smc: Record<string, unknown> | null;
   patterns: Record<string, unknown> | null;
   qqe: Record<string, unknown> | null;
+  /** Per-TF QQE trend/strength summary (daily/4h/1h). `null` before scan completes. */
+  qqe_signals: QqeSignals | null;
+  /** Per-TF market-structure classification (HH/HL/LH/LL). `null` before scan completes. */
+  structure: StructureByTF | null;
   indicators: Record<string, unknown> | null;
   /** Last 100 daily candles for the chart. */
   candles: Candle[] | null;

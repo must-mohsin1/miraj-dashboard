@@ -7,6 +7,8 @@ Data sources
 - DXY            : FRED API (series DTWEXBGS) with web-scrape fallback
 - Fear & Greed   : alternative.me /fng
 - L/S ratio      : Binance Futures /futures/data/globalLongShortAccountRatio
+- Funding rates  : Binance Futures /fapi/v1/premiumIndex (BTC/ETH/SOL)
+- CME gaps       : yfinance BTC=F weekly candles (unfilled-gap detection)
 - Regime         : heuristic over BTC.D + DXY
 
 Caching
@@ -39,6 +41,8 @@ _cache: dict[str, dict[str, Any]] = {
     "fear_greed_index": {"value": None, "error": None},
     "fear_greed_label": {"value": None, "error": None},
     "binance_ls_ratio": {"value": None, "error": None},
+    "funding_rates": {"value": None, "error": None},
+    "cme_gaps": {"value": None, "error": None},
     "regime": {"value": None, "error": None},
 }
 _last_refresh: Optional[float] = None
@@ -209,6 +213,177 @@ async def _fetch_binance_ls_ratio() -> tuple[Optional[float], Optional[str]]:
         return None, f"Unexpected Binance response: {exc}"
 
 
+# Binance Futures symbols → display symbol mapping for funding rates.
+_FUNDING_SYMBOLS: dict[str, str] = {
+    "BTCUSDT": "BTC",
+    "ETHUSDT": "ETH",
+    "SOLUSDT": "SOL",
+}
+
+
+async def _fetch_funding_rates() -> (
+    tuple[Optional[list[dict[str, Any]]], Optional[str]]
+):
+    """Fetch BTC/ETH/SOL funding rates from Binance Futures ``premiumIndex``.
+
+    The endpoint returns one entry per requested symbol with a
+    ``lastFundingRate`` field (a string, e.g. ``"0.0001"`` for a 0.01% rate
+    per 8h).  We convert the raw fraction into both the raw rate and a
+    human-readable percentage.  Negative funding = shorts paying longs
+    (bullish), positive funding = longs paying shorts (overheated).
+
+    A single Binance ``GET /fapi/v1/premiumIndex`` call without a
+    ``symbol`` parameter returns *all* symbols; this is rate-friendly and
+    much lighter than one call per symbol.
+    """
+    data = await _fetch_json(
+        "https://fapi.binance.com/fapi/v1/premiumIndex",
+    )
+    if data is None:
+        return None, "Binance Futures API unavailable (may be geo-blocked)"
+    try:
+        if not isinstance(data, list) or len(data) == 0:
+            return None, "Empty response from Binance premiumIndex"
+
+        # Build a {binance_symbol: rate} lookup from the response list.
+        rate_by_symbol: dict[str, float] = {}
+        for item in data:
+            sym = item.get("symbol")
+            if sym in _FUNDING_SYMBOLS:
+                rate_str = item.get("lastFundingRate", "0")
+                rate_by_symbol[sym] = float(rate_str)
+
+        results: list[dict[str, Any]] = []
+        for binance_symbol, display_symbol in _FUNDING_SYMBOLS.items():
+            rate = rate_by_symbol.get(binance_symbol)
+            if rate is None:
+                continue
+            results.append(
+                {
+                    "symbol": display_symbol,
+                    "funding_rate": rate,
+                    "funding_rate_percent": round(rate * 100, 5),
+                }
+            )
+
+        if not results:
+            return None, "No funding rates found for BTC/ETH/SOL"
+        return results, None
+    except (KeyError, TypeError, ValueError) as exc:
+        return None, f"Unexpected Binance premiumIndex response: {exc}"
+
+
+async def _fetch_cme_gaps() -> (
+    tuple[Optional[list[dict[str, Any]]], Optional[str]]
+):
+    """Detect unfilled CME gaps from BTC weekly candles via yfinance.
+
+    CME BTC futures (``BTC=F``) close Friday ~17:00 ET and reopen Sunday
+    ~18:00 ET.  A *gap* forms when the new week's open differs from the
+    previous week's close by more than a small threshold (0.5% here, to
+    avoid flagging trivial tick-level differences).  An *unfilled* gap is
+    one where price has not since traded back through the gap zone (the
+    band between the prior close and the new open).
+
+    Returns a list of ``{date, gap_percent, direction, filled}`` entries
+    for the last ~3 months.  ``direction`` is ``"up"`` when the new open is
+    higher than the prior close, ``"down"`` otherwise.
+    """
+    # yfinance is a blocking, sync library — run it in a worker thread so
+    # the async event loop (and concurrent macro fetches) never stalls.
+    try:
+        df = await asyncio.to_thread(
+            _download_cme_weekly,
+        )
+    except Exception as exc:  # pragma: no cover - network / yfinance errors
+        return None, f"yfinance unavailable for BTC=F: {exc}"
+
+    if df is None or df.empty:
+        return None, "No BTC=F weekly data from yfinance"
+
+    try:
+        rows = list(df.itertuples(index=True))
+        if len(rows) < 2:
+            return [], None
+
+        gaps: list[dict[str, Any]] = []
+        n = len(rows)
+        for i in range(1, n):
+            prev_row = rows[i - 1]
+            curr_row = rows[i]
+
+            prev_close_raw = getattr(prev_row, "Close", None)
+            curr_open_raw = getattr(curr_row, "Open", None)
+            if prev_close_raw is None or curr_open_raw is None:
+                continue
+            prev_close = float(prev_close_raw)
+            curr_open = float(curr_open_raw)
+            if prev_close <= 0 or curr_open <= 0:
+                continue
+
+            gap_pct = ((curr_open - prev_close) / prev_close) * 100.0
+            if abs(gap_pct) < 0.5:
+                continue  # ignore trivial gaps
+
+            direction = "up" if gap_pct > 0 else "down"
+            # Gap zone: band between prev_close and curr_open.
+            gap_low = min(prev_close, curr_open)
+            gap_high = max(prev_close, curr_open)
+
+            filled = False
+            for j in range(i + 1, n):
+                future_row = rows[j]
+                low_raw = getattr(future_row, "Low", None)
+                high_raw = getattr(future_row, "High", None)
+                if low_raw is None or high_raw is None:
+                    continue
+                low = float(low_raw)
+                high = float(high_raw)
+                if low <= gap_high and high >= gap_low:
+                    filled = True
+                    break
+
+            date_idx = getattr(curr_row, "Index", None)
+            if date_idx is not None and hasattr(date_idx, "strftime"):
+                date_str = date_idx.strftime("%Y-%m-%d")
+            else:
+                date_str = str(date_idx)[:10]
+
+            gaps.append(
+                {
+                    "date": date_str,
+                    "gap_percent": round(gap_pct, 2),
+                    "direction": direction,
+                    "filled": filled,
+                }
+            )
+
+        # Surface only unfilled gaps (most actionable); keep most-recent first.
+        unfilled = [g for g in reversed(gaps) if not g["filled"]]
+        return unfilled, None
+    except (AttributeError, TypeError, ValueError) as exc:
+        return None, f"Failed to parse BTC=F weekly candles: {exc}"
+
+
+def _download_cme_weekly():
+    """Download BTC=F weekly candles (blocking) with flattened columns.
+
+    Imported lazily so the module still imports cleanly in environments
+    without yfinance (the route returns a graceful error instead).
+    """
+    import yfinance as yf  # noqa: PLC0415
+
+    df = yf.download("BTC=F", interval="1wk", period="3mo", progress=False)
+    if df is None or df.empty:
+        return df
+    # Flatten yfinance MultiIndex columns (single-ticker download).
+    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+        df = df.copy()
+        df.columns = df.columns.get_level_values(0)
+    df.dropna(how="all", inplace=True)
+    return df
+
+
 # ── Regime detection ────────────────────────────────────────────────────────
 
 
@@ -275,6 +450,8 @@ async def refresh_macro_data() -> dict[str, Any]:
         "dxy": asyncio.create_task(_fetch_dxy()),
         "fg": asyncio.create_task(_fetch_fear_greed()),
         "bls": asyncio.create_task(_fetch_binance_ls_ratio()),
+        "fr": asyncio.create_task(_fetch_funding_rates()),
+        "cme": asyncio.create_task(_fetch_cme_gaps()),
     }
 
     # Collect results
@@ -283,6 +460,8 @@ async def refresh_macro_data() -> dict[str, Any]:
     dxy_val, dxy_err = await tasks["dxy"]
     fg_val, fg_label, fg_err = await tasks["fg"]
     bls_val, bls_err = await tasks["bls"]
+    fr_val, fr_err = await tasks["fr"]
+    cme_val, cme_err = await tasks["cme"]
 
     # ── Update cache (keep previous value on failure) ──────────────
     if btc_d is not None:
@@ -319,6 +498,18 @@ async def refresh_macro_data() -> dict[str, Any]:
     else:
         _cache["binance_ls_ratio"]["error"] = bls_err
 
+    if fr_val is not None:
+        _cache["funding_rates"]["value"] = fr_val
+        _cache["funding_rates"]["error"] = None
+    else:
+        _cache["funding_rates"]["error"] = fr_err
+
+    if cme_val is not None:
+        _cache["cme_gaps"]["value"] = cme_val
+        _cache["cme_gaps"]["error"] = None
+    else:
+        _cache["cme_gaps"]["error"] = cme_err
+
     # ── Regime (depends on current cached BTC.D + DXY) ─────────────
     current_btc_d = _cache["btc_dominance"]["value"]
     current_dxy = _cache["dxy"]["value"]
@@ -345,6 +536,8 @@ def build_response() -> dict[str, Any]:
         "fear_greed_index": _cache["fear_greed_index"]["value"],
         "fear_greed_label": _cache["fear_greed_label"]["value"],
         "binance_ls_ratio": _cache["binance_ls_ratio"]["value"],
+        "funding_rates": _cache["funding_rates"]["value"],
+        "cme_gaps": _cache["cme_gaps"]["value"],
         "regime": _cache["regime"]["value"],
     }
 

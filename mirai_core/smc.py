@@ -12,6 +12,8 @@ Detects:
 """
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks
@@ -279,6 +281,106 @@ def find_trend_lines(
             )
 
     return lines
+
+
+def classify_structure(df: pd.DataFrame) -> dict[str, Any]:
+    """Classify the latest market structure (HH/HL/LH/LL) from swing points.
+
+    Uses ``scipy.signal.find_peaks`` (via ``_find_swing_highs`` /
+    ``_find_swing_lows``) on the High and Low series to locate confirmed
+    swing points, then compares the last two of each to determine whether
+    the market is making higher/lower highs and higher/lower lows.
+
+    Args:
+        df: OHLCV DataFrame with columns Open, High, Low, Close, Volume.
+
+    Returns:
+        A dict with keys:
+            - ``label``: one of ``"HH"``, ``"HL"``, ``"LH"``, ``"LL"``,
+              ``"Insufficient data"``.
+            - ``detail``: human-readable description of the structure.
+            - ``swings``: list of ``{type, price, index}`` dicts for the
+              most recent swing points.
+    """
+
+    # Edge case: too few candles to meaningfully detect swings
+    if df is None or len(df) < 4:
+        return {
+            "label": "Insufficient data",
+            "detail": "Fewer than 4 candles available for structure analysis.",
+            "swings": [],
+        }
+
+    # Detect swing highs (peaks on High series) and swing lows (troughs on Low)
+    high_peaks = _find_swing_highs(df["High"])
+    low_troughs = _find_swing_lows(df["Low"])
+
+    # Build the consolidated swings list (interleaved, sorted by position)
+    swings: list[dict[str, Any]] = []
+    for idx in high_peaks:
+        swings.append({
+            "type": "high",
+            "price": float(df["High"].iloc[idx]),
+            "index": int(idx),
+        })
+    for idx in low_troughs:
+        swings.append({
+            "type": "low",
+            "price": float(df["Low"].iloc[idx]),
+            "index": int(idx),
+        })
+    swings.sort(key=lambda s: s["index"])
+
+    # Edge case: need at least 2 swings of some kind to classify
+    if len(high_peaks) < 2 and len(low_troughs) < 2:
+        return {
+            "label": "Insufficient data",
+            "detail": "Fewer than 2 swing points detected to classify structure.",
+            "swings": swings[-6:],
+        }
+
+    # ── Compare last two swing highs → HH or LH ──────────────────────
+    high_label = "unknown"
+    if len(high_peaks) >= 2:
+        prev_high = float(df["High"].iloc[high_peaks[-2]])
+        last_high = float(df["High"].iloc[high_peaks[-1]])
+        high_label = "HH" if last_high > prev_high else "LH"
+
+    # ── Compare last two swing lows → HL or LL ───────────────────────
+    low_label = "unknown"
+    if len(low_troughs) >= 2:
+        prev_low = float(df["Low"].iloc[low_troughs[-2]])
+        last_low = float(df["Low"].iloc[low_troughs[-1]])
+        low_label = "HL" if last_low > prev_low else "LL"
+
+    # ── Combine into overall label + detail ──────────────────────────
+    if high_label == "HH" and low_label == "HL":
+        label = "HH"
+        detail = "Price making higher highs and higher lows — bullish trend"
+    elif high_label == "LH" and low_label == "LL":
+        label = "LL"
+        detail = "Price making lower highs and lower lows — bearish trend"
+    elif high_label == "HH":
+        label = "HH"
+        detail = "Price making higher highs — bullish pressure on highs"
+    elif high_label == "LH":
+        label = "LH"
+        detail = "Price making lower highs — bearish pressure on highs"
+    elif low_label == "HL":
+        label = "HL"
+        detail = "Price making higher lows — bullish support building"
+    elif low_label == "LL":
+        label = "LL"
+        detail = "Price making lower lows — bearish pressure on lows"
+    else:
+        label = "unknown"
+        detail = "Unable to classify market structure"
+
+    return {
+        "label": label,
+        "detail": detail,
+        "swings": swings[-6:],
+    }
 
 
 def analyze(

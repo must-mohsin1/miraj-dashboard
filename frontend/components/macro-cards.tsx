@@ -30,6 +30,27 @@ function formatRatio(value: number | null | undefined): string {
   return value.toFixed(3);
 }
 
+/** Format the DXY (Dollar Index) value with 2 decimals, no percent sign. */
+function formatDxy(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return value.toFixed(2);
+}
+
+/**
+ * DXY is inversely correlated with crypto risk assets: a strong dollar
+ * (DXY >= 100) is bearish for crypto → red; a weak dollar (< 100) is
+ * bullish → green. This threshold aligns with the regime heuristic the
+ * backend uses in `macro_service.compute_regime`. The absolute level is a
+ * proxy for direction since the cache stores only the latest point value.
+ */
+function dxyColor(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "text-slate-200";
+  }
+  if (value >= 100) return "text-red-400"; // strong dollar → bearish for crypto
+  return "text-emerald-400"; // weak dollar → bullish for crypto
+}
+
 /**
  * Pick a Fear & Greed label. The backend already returns a classification
  * (`fear_greed_label`), but it may be missing/expired — fall back to a
@@ -79,9 +100,10 @@ export function MacroCards({ data }: MacroCardsProps) {
   const fearGreedIndex = d.fear_greed_index ?? null;
   const fearLabel = fearGreedLabel(fearGreedIndex, d.fear_greed_label);
   const longShortRatio = d.binance_ls_ratio ?? null;
+  const dxy = d.dxy ?? null;
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
       {/* BTC Dominance */}
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader className="pb-2">
@@ -151,6 +173,23 @@ export function MacroCards({ data }: MacroCardsProps) {
           </div>
           <p className="mt-1 text-xs text-slate-500">
             Binance global long/short (BTCUSDT)
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* DXY (Dollar Index) */}
+      <Card className="border-slate-800 bg-slate-900/60">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-slate-400">
+            DXY (Dollar Index)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className={cn("text-3xl font-bold", dxyColor(dxy))}>
+            {formatDxy(dxy)}
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            Rising DXY = bearish for crypto, falling = bullish
           </p>
         </CardContent>
       </Card>

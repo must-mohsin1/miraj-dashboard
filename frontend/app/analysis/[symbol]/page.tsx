@@ -15,6 +15,7 @@ import type { ScanResult, TradePlanFlat } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { ScoreGauge } from "@/components/score-gauge";
 import { TradePlan } from "@/components/trade-plan";
+import { KillZoneClock } from "@/components/kill-zone-clock";
 import { LiveCandlestickChart } from "@/components/live-candlestick-chart";
 import { TradingGlossary } from "@/components/trading-glossary";
 import { ChartSkeleton } from "@/components/skeletons";
@@ -287,6 +288,9 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
           <TradePlan tradePlan={flat as TradePlanFlat | null} />
         </div>
       </section>
+
+      {/* ICT kill-zone clock (live, above the chart) */}
+      <KillZoneClock />
 
       {/* Candlestick chart (with live price streaming) */}
       <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
