@@ -140,13 +140,14 @@ async def _fetch_usdt_dominance() -> tuple[Optional[float], Optional[str]]:
 
 
 async def _fetch_dxy() -> tuple[Optional[float], Optional[str]]:
-    """DXY (US Dollar Index) from FRED API or fallback web scrape.
+    """DXY (US Dollar Index) from FRED API, with yfinance fallback.
 
-    Requires ``FRED_API_KEY`` environment variable.  When the key is set
-    and the FRED API responds, the value from series ``DTWEXBGS`` is
-    returned.  If the key is not set, a clear message is returned as the
-    error so the dashboard can show actionable guidance instead of ``—``.
+    Tries FRED API first (requires ``FRED_API_KEY``).  If the key is not
+    set or FRED fails, falls back to yfinance ``DX-Y.NYB`` which needs no
+    API key.  This ensures DXY always shows on the dashboard even without
+    a FRED key.
     """
+    # ── Attempt 1: FRED API (if key is set) ──────────────────────
     api_key = os.environ.get("FRED_API_KEY")
     if api_key:
         data = await _fetch_json(
@@ -164,13 +165,19 @@ async def _fetch_dxy() -> tuple[Optional[float], Optional[str]]:
                 obs = data["observations"][0]
                 if obs["value"] != ".":
                     return float(obs["value"]), None
-                return None, "DXY value is '.' (not yet available)"
             except (KeyError, IndexError, ValueError) as exc:
-                return None, f"Unexpected FRED response: {exc}"
-        # FRED API key was set but the request failed
-        return None, "FRED API error — could not fetch DXY data"
+                logger.warning("FRED DXY parse error: %s", exc)
+        # FRED failed — fall through to yfinance
 
-    return None, "Set FRED_API_KEY for DXY data"
+    # ── Attempt 2: yfinance fallback (no API key needed) ─────────
+    try:
+        dxy_val = await asyncio.to_thread(_download_dxy)
+        if dxy_val is not None:
+            return dxy_val, None
+        return None, "yfinance returned no DXY data"
+    except Exception as exc:
+        logger.warning("yfinance DXY fallback failed: %s", exc)
+        return None, f"DXY unavailable (FRED key not set and yfinance failed: {exc})"
 
 
 async def _fetch_fear_greed() -> (
@@ -382,6 +389,26 @@ def _download_cme_weekly():
         df.columns = df.columns.get_level_values(0)
     df.dropna(how="all", inplace=True)
     return df
+
+
+def _download_dxy() -> Optional[float]:
+    """Download DXY (DX-Y.NYB) latest close via yfinance (blocking).
+
+    Used as a fallback when FRED_API_KEY is not set or FRED is unreachable.
+    """
+    import yfinance as yf  # noqa: PLC0415
+
+    df = yf.download("DX-Y.NYB", period="5d", interval="1d", progress=False)
+    if df is None or df.empty:
+        return None
+    # Flatten yfinance MultiIndex columns (single-ticker download).
+    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+        df = df.copy()
+        df.columns = df.columns.get_level_values(0)
+    df.dropna(how="all", inplace=True)
+    if df.empty:
+        return None
+    return float(df["Close"].iloc[-1])
 
 
 # ── Regime detection ────────────────────────────────────────────────────────
