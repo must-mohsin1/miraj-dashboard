@@ -109,9 +109,11 @@ def compute_qqe(
     vol_sell = np.where(close <= opens, volume, 0.0)
     vol_buy_s = pd.Series(vol_buy).rolling(5).sum().values
     vol_sell_s = pd.Series(vol_sell).rolling(5).sum().values
+    # Guard against divide-by-zero when both buy and sell volumes are 0
+    total_vol = vol_buy_s + vol_sell_s
     vol_ratio = np.where(
-        vol_buy_s + vol_sell_s > 0,
-        vol_buy_s / (vol_buy_s + vol_sell_s),
+        total_vol > 0,
+        np.nan_to_num(vol_buy_s / np.where(total_vol > 0, total_vol, 1)),
         0.5,
     )
 

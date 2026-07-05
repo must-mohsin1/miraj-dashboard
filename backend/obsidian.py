@@ -185,9 +185,15 @@ async def get_vault_path(
         )
     )
     setting_row = result.scalar_one_or_none()
-    if setting_row is not None and isinstance(setting_row.settings, dict):
-        vault_path = setting_row.settings.get("obsidian_vault_path", "").strip()
-        return vault_path if vault_path else None
+    if setting_row is not None and setting_row.settings:
+        import json
+        try:
+            settings = json.loads(setting_row.settings) if isinstance(setting_row.settings, str) else setting_row.settings
+            if isinstance(settings, dict):
+                vault_path = settings.get("obsidian_vault_path", "").strip()
+                return vault_path if vault_path else None
+        except (json.JSONDecodeError, TypeError):
+            pass
     return None
 
 
@@ -209,8 +215,14 @@ async def is_sync_enabled(
         )
     )
     setting_row = result.scalar_one_or_none()
-    if setting_row is not None and isinstance(setting_row.settings, dict):
-        return bool(setting_row.settings.get("obsidian_sync", True))
+    if setting_row is not None and setting_row.settings:
+        import json
+        try:
+            settings = json.loads(setting_row.settings) if isinstance(setting_row.settings, str) else setting_row.settings
+            if isinstance(settings, dict):
+                return bool(settings.get("obsidian_sync", True))
+        except (json.JSONDecodeError, TypeError):
+            pass
     return True
 
 

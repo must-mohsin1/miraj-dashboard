@@ -65,16 +65,29 @@ async def _fetch_json(
     url: str,
     params: Optional[dict[str, str]] = None,
     timeout: float = 10.0,
+    retries: int = 3,
 ) -> Optional[Any]:
-    """Fetch a URL, return parsed JSON, or ``None`` on any failure."""
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params=params or {})
-            resp.raise_for_status()
-            return resp.json()
-    except Exception as exc:
-        logger.warning("Failed to fetch %s: %s", url, exc)
-        return None
+    """Fetch a URL with retry/backoff for rate limiting (429), return parsed JSON or None."""
+    import asyncio as _asyncio
+    for attempt in range(retries):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(url, params=params or {})
+                if resp.status_code == 429:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning("Rate limited (429) on %s, retrying in %ds (attempt %d/%d)", url, wait, attempt + 1, retries)
+                    await _asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
+            if attempt < retries - 1:
+                wait = 2 ** (attempt + 1)
+                logger.warning("Fetch failed for %s: %s, retrying in %ds", url, exc, wait)
+                await _asyncio.sleep(wait)
+            else:
+                logger.warning("Failed to fetch %s after %d attempts: %s", url, retries, exc)
+    return None
 
 
 async def _fetch_text(

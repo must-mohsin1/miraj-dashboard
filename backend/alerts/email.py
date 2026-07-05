@@ -1,16 +1,16 @@
 """SMTP email alert sender.
 
 Sends plain-text trade alerts via SMTP.  Configuration comes from environment
-variables (SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM)
+variables (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM)
 and per-channel config fields stored in the AlertChannel.config JSON.
 
 Environment variables
 ---------------------
 SMTP_HOST       SMTP server hostname (default "smtp.gmail.com")
 SMTP_PORT       SMTP port (default 587)
-SMTP_USERNAME   SMTP login username
+SMTP_USER   SMTP login username
 SMTP_PASSWORD   SMTP login password / app password
-EMAIL_FROM      From-address for outgoing alerts
+SMTP_FROM      From-address for outgoing alerts
 
 Per-channel config (AlertChannel.config JSON)
 -----------------------------------------------
@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 
 SMTP_HOST: str = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT: int = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USERNAME: str = os.environ.get("SMTP_USERNAME", "")
+SMTP_USER: str = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD: str = os.environ.get("SMTP_PASSWORD", "")
-EMAIL_FROM: str = os.environ.get("EMAIL_FROM", "")
+SMTP_FROM: str = os.environ.get("SMTP_FROM", "")
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
@@ -76,22 +76,22 @@ def send_email(to_address: str, subject: str, body: str) -> bool:
 
     Returns ``True`` on success, ``False`` on failure.
     Reads SMTP configuration from environment variables at call time
-    (SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM).
+    (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM).
     """
     smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-    smtp_user = os.environ.get("SMTP_USERNAME", "")
+    smtp_user = os.environ.get("SMTP_USER", "")
     smtp_pass = os.environ.get("SMTP_PASSWORD", "")
-    email_from = os.environ.get("EMAIL_FROM", "")
+    email_from = os.environ.get("SMTP_FROM", "")
 
     if not smtp_user or not smtp_pass:
         logger.error(
-            "SMTP_USERNAME or SMTP_PASSWORD not set — email alerts disabled"
+            "SMTP_USER or SMTP_PASSWORD not set — email alerts disabled"
         )
         return False
 
     if not email_from:
-        logger.error("EMAIL_FROM not set — email alerts disabled")
+        logger.error("SMTP_FROM not set — email alerts disabled")
         return False
 
     msg = EmailMessage()
