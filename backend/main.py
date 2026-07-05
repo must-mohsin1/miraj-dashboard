@@ -29,6 +29,7 @@ from backend.routes import (
     portfolio_router,
     price_alerts_router,
     results_router,
+    scan_diff_router,
     scan_router,
     settings_router,
     stream_router,
