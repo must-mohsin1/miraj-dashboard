@@ -947,7 +947,9 @@ async def get_benchmark(
 
     # ── 4. Summary stats: total returns, alpha, beta ────────────────
     btc_total = btc_series.get(all_dates[-1], 0.0) if all_dates else 0.0
-    port_total = port_series.get(all_dates[-1], 0.0) if all_dates else 0.0
+    # Use the last forward-filled point for portfolio total (not raw port_series dict,
+    # which only has dates with position closures).
+    port_total = points[-1].portfolio_return_pct if points else 0.0
     alpha = round(port_total - btc_total, 4)
 
     # Beta: cov(port, btc) / var(btc) over overlapping dates.
