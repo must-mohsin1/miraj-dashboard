@@ -303,7 +303,10 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
 
       {/* ── Tab 4: Trade Attribution ── */}
       <TabsContent value="attribution">
-        <TradeAttributionTable token={token} exchange={exchange} />
+        <div className="flex flex-col gap-4">
+          <TradeAttributionTable token={token} exchange={exchange} />
+          <ScanAccuracyChart token={token} exchange={exchange} />
+        </div>
       </TabsContent>
 
       {/* ── Tab 5: Health Score ── */}
