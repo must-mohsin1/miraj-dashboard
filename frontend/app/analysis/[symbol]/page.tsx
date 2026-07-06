@@ -21,8 +21,12 @@ import { TradingGlossary } from "@/components/trading-glossary";
 import { KillZoneClock } from "@/components/kill-zone-clock";
 import { QqeSignalPanel } from "@/components/qqe-signal-panel";
 import { StructurePanel } from "@/components/structure-panel";
+import { PatternsPanel } from "@/components/patterns-panel";
+import { BmsbStatus } from "@/components/bmsb-status";
 import { SignalChangesPanel } from "@/components/signal-changes-panel";
+import { MetricTrends } from "@/components/metric-trends";
 import { ScoreProgressionChart } from "@/components/score-progression-chart";
+import { MacroStrip } from "@/components/macro-strip";
 import { ChartSkeleton } from "@/components/skeletons";
 
 /**
@@ -273,6 +277,19 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
         </div>
       </header>
 
+      {/* ── Macro context strip (BTC.D, USDT.D, F&G, DXY, L/S) ── */}
+      <MacroStrip />
+
+      {/* ── Metric Trends (compact trend arrows on key metrics) ── */}
+      <MetricTrends
+        symbol={result.symbol}
+        token={token}
+        currentScore={result.confluence_score}
+        currentQqe={result.qqe_signals ?? null}
+        currentStructure={result.structure ?? null}
+        currentDirection={direction ?? null}
+      />
+
       {/* Top row: Score gauge + Trade plan */}
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Score gauge */}
@@ -316,6 +333,16 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
         </Suspense>
         <TradingGlossary />
       </section>
+
+      {/* QQE Signals + Structure + Patterns + BMSB */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <QqeSignalPanel signals={result.qqe_signals} />
+        <StructurePanel structure={result.structure} />
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <PatternsPanel patterns={result.patterns} />
+        <BmsbStatus bmsb={result.bmsb} />
+      </div>
 
       {/* Score breakdown */}
       <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">

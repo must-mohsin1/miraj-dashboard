@@ -38,6 +38,14 @@ export interface MacroData {
   }>;
   /** Heuristic market regime: "risk-on" | "risk-off" | "mixed". */
   regime: string | null;
+  /** S&P 500 latest close (from yfinance ^GSPC). `null` when the source failed. */
+  sp500?: number | null;
+  /** S&P 500 daily change percentage vs. previous session close. `null` when unavailable. */
+  sp500_change?: number | null;
+  /** Nasdaq Composite latest close (from yfinance ^IXIC). `null` when the source failed. */
+  nasdaq?: number | null;
+  /** Nasdaq daily change percentage vs. previous session close. `null` when unavailable. */
+  nasdaq_change?: number | null;
 }
 
 // ── Watchlist ───────────────────────────────────────────────────────────────
@@ -526,7 +534,7 @@ export interface TradePlanFlat {
 export type CategoryScores = Record<string, number>;
 
 /**
-/** Full response shape for `POST /api/v1/scan/{symbol}`.
+ * Full response shape for `POST /api/v1/scan/{symbol}`.
  *
  * Mirrors the backend `ScanResponse` Pydantic model. Optional fields are
  * nullable because any given pipeline step may fail and the backend
@@ -549,6 +557,7 @@ export interface ScanResult {
   macro_data: Record<string, unknown> | null;
   smc: Record<string, unknown> | null;
   patterns: Record<string, unknown> | null;
+  bmsb: BMSB | null;
   qqe: Record<string, unknown> | null;
   /** Per-TF QQE trend/strength summary (daily/4h/1h). `null` before scan completes. */
   qqe_signals: QqeSignals | null;
@@ -953,4 +962,24 @@ export interface BenchmarkResponse {
   beta: number | null;
   /** Daily indexed series — both indexed to 0% at start. */
   points: BenchmarkPoint[];
+}
+
+// ── Pattern Detection ──────────────────────────────────────────────────────
+
+export interface Pattern {
+  name?: string;
+  pattern?: string;
+  direction: string;
+  timeframe?: string;
+  details?: unknown;
+}
+
+// ── Bull Market Support Band ───────────────────────────────────────────────
+
+export interface BMSB {
+  sma_20w: number;
+  ema_21w: number;
+  current_price: number;
+  status: "above" | "below";
+  regime: "bull" | "bear";
 }
