@@ -301,6 +301,11 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
         </div>
       </TabsContent>
 
+      {/* ── Tab 4: Trade Attribution ── */}
+      <TabsContent value="attribution">
+        <TradeAttributionTable token={token} exchange={exchange} />
+      </TabsContent>
+
       {/* ── Tab 5: Health Score ── */}
       <TabsContent value="health">
         <HealthScorePanel token={token} exchange={exchange} />
@@ -308,7 +313,7 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
 
       {/* ── Tab 6: Benchmark ── */}
       <TabsContent value="benchmark">
-        <BenchmarkComparison token={token} exchange={exchange} days={30} />
+        <BenchmarkComparison token={token} exchange={exchange} />
       </TabsContent>
     </Tabs>
   );

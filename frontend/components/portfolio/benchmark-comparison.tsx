@@ -1,14 +1,16 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
+import { Loader2, TrendingUp, TrendingDown, Activity, BarChart3 } from "lucide-react";
 import {
-  CartesianGrid,
-  Line,
   LineChart,
-  ResponsiveContainer,
-  Tooltip,
+  Line,
   XAxis,
   YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
 } from "recharts";
 
 import type { BenchmarkResponse } from "@/lib/types";
@@ -16,253 +18,255 @@ import type { BenchmarkResponse } from "@/lib/types";
 /**
  * BenchmarkComparison — Client Component.
  *
- * Renders a recharts dual-line chart comparing portfolio cumulative return
- * vs BTC buy-and-hold, both indexed to 0% at the start of the period.
- * Summary cards show total returns, alpha, and beta.
+ * Fetches `GET /api/v1/analytics/benchmark?symbol=BTC-USD&days=30&exchange=...`
+ * and renders:
+ *  - Recharts line chart: portfolio vs BTC buy-and-hold (both indexed to 0% at start)
+ *  - Summary stats: portfolio return %, BTC return %, alpha, beta
+ *
+ * Auto-refreshes every 5 minutes.
  */
 
 interface BenchmarkComparisonProps {
-  data: BenchmarkResponse | null;
-  loading: boolean;
-  error: string | null;
+  /** JWT access token (for Authorization header). */
+  token: string | null;
+  /** Exchange slug (e.g. "mexc"). */
+  exchange: string;
 }
 
-const TOOLTIP_STYLE = {
-  backgroundColor: "#0f172a",
-  border: "1px solid #1e293b",
-  borderRadius: "0.5rem",
-  color: "#e2e8f0",
-  fontSize: "0.75rem",
-} as const;
+const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
 
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr + "T00:00:00");
-  if (Number.isNaN(d.getTime())) return dateStr;
-  return d.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
+export function BenchmarkComparison({ token, exchange }: BenchmarkComparisonProps) {
+  const [data, setData] = useState<BenchmarkResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-interface TooltipPayloadItem {
-  payload: {
-    date: string;
-    btc_return_pct: number;
-    portfolio_return_pct: number;
-  };
-}
+  const headers: HeadersInit = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
 
-function BenchmarkTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: TooltipPayloadItem[];
-}) {
-  if (!active || !payload || payload.length === 0) return null;
-  const point = payload[0]?.payload;
-  if (!point) return null;
-  return (
-    <div style={TOOLTIP_STYLE} className="px-3 py-2">
-      <div className="font-medium text-slate-100">
-        {formatDate(point.date)}
-      </div>
-      <div className="mt-1 space-y-0.5">
-        <div className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-          <span className="text-slate-400">BTC:</span>
-          <span
-            className={`font-semibold tabular-nums ${
-              point.btc_return_pct >= 0 ? "text-amber-400" : "text-red-400"
-            }`}
-          >
-            {point.btc_return_pct >= 0 ? "+" : ""}
-            {point.btc_return_pct.toFixed(2)}%
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-          <span className="text-slate-400">Portfolio:</span>
-          <span
-            className={`font-semibold tabular-nums ${
-              point.portfolio_return_pct >= 0
-                ? "text-emerald-400"
-                : "text-red-400"
-            }`}
-          >
-            {point.portfolio_return_pct >= 0 ? "+" : ""}
-            {point.portfolio_return_pct.toFixed(2)}%
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
+  async function fetchBenchmark() {
+    setRefreshing(true);
+    try {
+      const res = await fetch(
+        `/api/v1/analytics/benchmark?symbol=BTC-USD&days=30&exchange=${exchange}`,
+        { headers },
+      );
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const json: BenchmarkResponse = await res.json();
+      setData(json);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
 
-export function BenchmarkComparison({
-  data,
-  loading,
-  error,
-}: BenchmarkComparisonProps) {
-  const chartData = useMemo(() => {
-    if (!data?.points) return [];
-    return data.points.map((p) => ({
-      date: p.date,
-      BTC: p.btc_return_pct,
-      Portfolio: p.portfolio_return_pct,
-    }));
-  }, [data]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
 
-  if (loading) {
+    async function load() {
+      if (cancelled) return;
+      await fetchBenchmark();
+    }
+    load();
+
+    const interval = setInterval(() => {
+      if (!cancelled) fetchBenchmark();
+    }, REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exchange, token]);
+
+  // ── Render: loading ──────────────────────────────────────────────────
+  if (loading && !data) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-sm text-slate-400">
-        Loading benchmark data…
+      <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-400">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading benchmark comparison…
       </div>
     );
   }
 
-  if (error) {
+  // ── Render: error ────────────────────────────────────────────────────
+  if (error && !data) {
     return (
-      <div className="rounded-md border border-red-800/50 bg-red-500/10 p-3 text-sm text-red-400">
-        {error}
+      <div className="flex items-center gap-2 rounded-xl border border-red-800/50 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+        Failed to load benchmark: {error}
       </div>
     );
   }
 
-  if (!data || !data.points || data.points.length === 0) {
-    return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-sm text-slate-400">
-        No benchmark data available. The chart will populate as portfolio data
-        is recorded.
-      </div>
-    );
-  }
+  if (!data) return null;
+
+  const points = data.points ?? [];
+  const portPositive = data.portfolio_return_pct >= 0;
+  const btcPositive = data.btc_return_pct >= 0;
+  const alphaPositive = data.alpha >= 0;
+
+  // Thin date labels for the X axis
+  const chartData = points.map((p) => ({
+    date: p.date.slice(5), // "MM-DD"
+    portfolio: Number(p.portfolio_return_pct.toFixed(2)),
+    btc: Number(p.btc_return_pct.toFixed(2)),
+  }));
 
   return (
     <div className="space-y-4">
-      {/* ── Summary stat cards ── */}
+      {/* ── Summary stat cards ───────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           label="Portfolio Return"
-          value={`${data.portfolio_return_pct >= 0 ? "+" : ""}${data.portfolio_return_pct.toFixed(2)}%`}
-          positive={data.portfolio_return_pct >= 0}
+          value={`${data.portfolio_return_pct.toFixed(2)}%`}
+          positive={portPositive}
+          icon={<TrendingUp className="h-4 w-4" />}
         />
         <StatCard
           label="BTC Return"
-          value={`${data.btc_return_pct >= 0 ? "+" : ""}${data.btc_return_pct.toFixed(2)}%`}
-          positive={data.btc_return_pct >= 0}
+          value={`${data.btc_return_pct.toFixed(2)}%`}
+          positive={btcPositive}
+          icon={<BarChart3 className="h-4 w-4" />}
         />
         <StatCard
           label="Alpha"
-          value={`${data.alpha >= 0 ? "+" : ""}${data.alpha.toFixed(2)}%`}
-          positive={data.alpha >= 0}
-          tooltip="Portfolio return minus BTC return — positive means the portfolio outperformed"
+          value={`${data.alpha.toFixed(2)}%`}
+          positive={alphaPositive}
+          icon={<Activity className="h-4 w-4" />}
+          hint="Portfolio − BTC"
         />
         <StatCard
           label="Beta"
-          value={data.beta !== null ? data.beta.toFixed(2) : "N/A"}
-          positive={
-            data.beta !== null
-              ? data.beta >= 0 && data.beta < 1.5
-              : true
-          }
-          tooltip="Portfolio volatility vs BTC. 1.0 = moves in sync, <1 = less volatile, >1 = more volatile"
+          value={data.beta !== null ? data.beta.toFixed(2) : "—"}
+          positive={data.beta !== null && data.beta < 1}
+          icon={<Activity className="h-4 w-4" />}
+          hint="Cov / Var"
         />
       </div>
 
-      {/* ── Chart ── */}
+      {/* ── Chart ────────────────────────────────────────────────────── */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <h3 className="mb-3 text-sm font-medium text-slate-300">
-          {data.symbol} Buy-and-Hold vs Portfolio
+        <h3 className="mb-4 text-sm font-medium text-slate-300">
+          Cumulative Return (Indexed to 0% at Start)
         </h3>
         <div className="h-72 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart
-              data={chartData}
-              margin={{ top: 8, right: 16, bottom: 8, left: 8 }}
-            >
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="#1e293b"
-                vertical={false}
-              />
-              <XAxis
-                dataKey="date"
-                tickFormatter={formatDate}
-                tick={{ fill: "#64748b", fontSize: 11 }}
-                axisLine={{ stroke: "#1e293b" }}
-                tickLine={false}
-                minTickGap={40}
-              />
-              <YAxis
-                tick={{ fill: "#64748b", fontSize: 11 }}
-                axisLine={{ stroke: "#1e293b" }}
-                tickLine={false}
-                width={56}
-                tickFormatter={(v: number) => `${v.toFixed(1)}%`}
-              />
-              <Tooltip content={<BenchmarkTooltip />} />
-              <Line
-                type="monotone"
-                dataKey="Portfolio"
-                stroke="#10b981"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, fill: "#10b981", stroke: "#0f172a", strokeWidth: 2 }}
-              />
-              <Line
-                type="monotone"
-                dataKey="BTC"
-                stroke="#f59e0b"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, fill: "#f59e0b", stroke: "#0f172a", strokeWidth: 2 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          {points.length === 0 ? (
+            <div className="flex h-full items-center justify-center text-sm text-slate-500">
+              No overlapping data points available.
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={chartData}
+                margin={{ top: 8, right: 8, bottom: 4, left: 0 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="#1e293b"
+                  vertical={false}
+                />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: "#64748b", fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={{ stroke: "#1e293b" }}
+                  interval="preserveStartEnd"
+                />
+                <YAxis
+                  tick={{ fill: "#64748b", fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: number) => `${v.toFixed(1)}%`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#0f172a",
+                    border: "1px solid #1e293b",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                  }}
+                  labelStyle={{ color: "#94a3b8" }}
+                  formatter={(value, name) => [
+                    `${Number(value).toFixed(2)}%`,
+                    name === "portfolio" ? "Portfolio" : "BTC",
+                  ]}
+                  labelFormatter={(label) => `Date: ${label}`}
+                />
+                <Legend
+                  wrapperStyle={{ fontSize: "12px", color: "#94a3b8" }}
+                  formatter={(value: string) =>
+                    value === "portfolio" ? "Portfolio" : "BTC (Buy & Hold)"
+                  }
+                />
+                <Line
+                  type="monotone"
+                  dataKey="portfolio"
+                  stroke="#22c55e"
+                  strokeWidth={2}
+                  dot={false}
+                  name="portfolio"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="btc"
+                  stroke="#f59e0b"
+                  strokeWidth={2}
+                  strokeDasharray="4 3"
+                  dot={false}
+                  name="btc"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
+      </div>
 
-        {/* Legend */}
-        <div className="mt-3 flex items-center justify-center gap-6 text-xs">
-          <div className="flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            <span className="text-slate-400">Portfolio</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" />
-            <span className="text-slate-400">{data.symbol}</span>
-          </div>
-        </div>
+      {/* ── Footnote ─────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-2.5 text-xs text-slate-500">
+        <Activity className="h-3 w-3 shrink-0" />
+        {data.days}-day comparison against {data.symbol}. BTC data via yfinance.
+        {refreshing && " Refreshing…"}
       </div>
     </div>
   );
 }
 
-/** Small stat card shown in the summary grid. */
-function StatCard({
-  label,
-  value,
-  positive,
-  tooltip,
-}: {
+// ── Stat card sub-component ──────────────────────────────────────────────
+
+interface StatCardProps {
   label: string;
   value: string;
   positive: boolean;
-  tooltip?: string;
-}) {
+  icon: React.ReactNode;
+  hint?: string;
+}
+
+function StatCard({ label, value, positive, icon, hint }: StatCardProps) {
   return (
-    <div
-      className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"
-      title={tooltip}
-    >
-      <div className="text-xs text-slate-500">{label}</div>
-      <div
-        className={`mt-1 text-lg font-bold tabular-nums ${
+    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-xs text-slate-500">
+          {icon}
+          {label}
+        </span>
+        {hint && (
+          <span className="text-[10px] text-slate-600" title={hint}>
+            {hint}
+          </span>
+        )}
+      </div>
+      <p
+        className={`mt-1 text-lg font-semibold tabular-nums ${
           positive ? "text-emerald-400" : "text-red-400"
         }`}
       >
         {value}
-      </div>
+      </p>
     </div>
   );
 }
