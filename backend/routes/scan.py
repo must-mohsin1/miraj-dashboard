@@ -272,4 +272,157 @@ async def export_analysis(
         )
 
 
+# ── Deep scan (vision analysis) ─────────────────────────────────────────
+
+
+class DeepScanResponse(ScanResponse):
+    """Extended scan result with deep (AI-style) narrative analysis.
+
+    All the regular ``ScanResponse`` fields are present; this model adds
+    the ``deep_analysis`` key with a comprehensive textual breakdown.
+    """
+
+    deep_analysis: Optional[dict[str, Any]] = None
+
+    model_config = {"json_schema_extra": {"example": {
+        "symbol": "BTC-USD",
+        "confluence_score": 18.5,
+        "deep_analysis": {
+            "summary": "Bullish bias (72%) — BTC-USD shows strong bullish alignment...",
+            "detailed_analysis": [
+                {"heading": "QQE Signal Consensus", "body": "QQE is GREEN across all 3 timeframes..."},
+            ],
+            "risk_factors": ["QQE conflict: GREEN on daily vs RED on 4h"],
+            "key_levels": {"entry": 65000, "stop_loss": 62000, "target_1": 70000},
+            "timeframe_breakdown": {"weekly": "RSI 62 (bullish)", "daily": "RSI 55 (neutral) | Structure: HH"},
+            "bullish_signals": 8,
+            "bearish_signals": 3,
+            "neutral_signals": 2,
+            "bias_percent": 72,
+        },
+        "stale": False,
+    }}}
+
+
+@router.post(
+    "/scan/{symbol}/deep",
+    response_model=DeepScanResponse,
+    responses={
+        400: {"model": ScanErrorResponse, "description": "Invalid symbol"},
+        502: {"model": ScanErrorResponse},
+    },
+)
+async def deep_scan_symbol(
+    symbol: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Any:
+    """Run a deep scan of *symbol* — bypasses cache and adds narrative analysis.
+
+    The regular scan runs the full pipeline (macro → OHLCV → indicators →
+    QQE → SMC → patterns → confluence → trade plan) and caches the result
+    for 15 minutes.
+
+    The **deep** scan:
+    1. Clears the in-memory cache for this symbol so the result is always fresh.
+    2. Runs the identical pipeline.
+    3. Generates a comprehensive textual deep analysis covering trend alignment,
+       QQE consensus, market structure coherence, pattern implications, volume
+       confirmation, key levels, risk factors, and an overall verdict.
+
+    Use this when you want the most up-to-date picture with detailed
+    narrative context, especially before making a trading decision.
+    """
+    from backend.services.deep_analysis_service import generate_deep_analysis
+
+    symbol = symbol.strip().upper()
+
+    # Validate symbol
+    if not validate_symbol(symbol):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid symbol: '{symbol}' is not a valid trading pair on Yahoo Finance",
+        )
+
+    # ── Clear cache then run fresh ────────────────────────────────
+    from backend.services.analysis_service import clear_cache as _clear_cache
+    _clear_cache(symbol)
+
+    try:
+        result = await asyncio.to_thread(run_scan, symbol)
+    except RuntimeError as exc:
+        logger.error("Deep scan pipeline failed for %s: %s", symbol, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error during deep scan for %s", symbol)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Analysis service error: {exc}",
+        ) from exc
+
+    # ── Generate deep analysis narrative ──────────────────────────
+    try:
+        deep_analysis = generate_deep_analysis(result)
+    except Exception as exc:
+        logger.warning("Deep analysis generation failed for %s: %s", symbol, exc)
+        deep_analysis = {
+            "summary": f"Technical data available but narrative generation failed: {exc}",
+            "detailed_analysis": [],
+            "risk_factors": [],
+            "key_levels": {},
+            "timeframe_breakdown": {},
+            "bullish_signals": 0,
+            "bearish_signals": 0,
+            "neutral_signals": 0,
+            "bias_percent": 50,
+        }
+
+    # ── Persist to analyses table ─────────────────────────────────
+    try:
+        score_val = result.get("overall_score") or result.get("confluence_score")
+        analysis = Analysis(
+            user_id=current_user.id,
+            pair=symbol,
+            analysis_type="deep_scan",  # distinguishes from regular scan
+            score=score_val,
+            parameters=json.dumps({"symbol": symbol}),
+            result=json.dumps({**result, "deep_analysis": deep_analysis}, default=str),
+        )
+        session.add(analysis)
+    except Exception as exc:
+        logger.warning("Failed to persist deep scan result: %s", exc)
+
+    # ── Sync to Obsidian vault (best-effort) ──────────────────────
+    try:
+        vault_path = await get_vault_path(session, current_user.id)
+        if vault_path:
+            enabled = await is_sync_enabled(session, current_user.id, symbol)
+            if enabled:
+                await asyncio.to_thread(
+                    sync_scan_result,
+                    current_user.id, symbol, {**result, "deep_analysis": deep_analysis},
+                    vault_path,
+                )
+    except Exception as sync_exc:
+        logger.warning("Obsidian sync failed for deep scan %s: %s", symbol, sync_exc)
+
+    # ── Alert manager (best-effort) ───────────────────────────────
+    try:
+        from backend.alerts.manager import process_scan_results
+        results_by_user = {current_user.id: [{
+            "symbol": symbol,
+            "confluence_score": result.get("confluence_score", 0),
+            "overall_score": result.get("overall_score"),
+            "trade_plan": result.get("trade_plan", {}),
+        }]}
+        await process_scan_results(session, results_by_user)
+    except Exception as alert_exc:
+        logger.warning("Alert check failed for deep scan %s: %s", symbol, alert_exc)
+
+    return {**result, "deep_analysis": deep_analysis}
+
+
 # ── Batch scan route is defined in routes/watchlist.py ──────────────────

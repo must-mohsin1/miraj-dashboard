@@ -45,6 +45,9 @@ async def lifespan(app: FastAPI):
     """Create tables on startup, auto-migrate new columns, and start the scheduler."""
     engine = get_engine()
     async with engine.begin() as conn:
+        # NOTE: create_all() is a fallback for fresh installs.
+        # In production, run migrations first:
+        #   cd backend && alembic upgrade head
         await conn.run_sync(Base.metadata.create_all)
 
     # ── Auto-migrate: add missing columns to existing tables ──────────

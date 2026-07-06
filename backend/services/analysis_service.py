@@ -433,6 +433,62 @@ def _simplify_indicator_summary(ind_results: dict[str, Any]) -> dict[str, Any]:
         bb = data.get("bb", {})
         if bb:
             entry["bb_squeeze"] = bool(data.get("bb_squeeze", False))
+
+        # ── Volume data for delta detection ──────────────────────────
+        volume = data.get("volume")
+        if volume is not None and hasattr(volume, "iloc") and len(volume) > 0:
+            entry["volume"] = round(float(volume.iloc[-1]), 2)
+            # 20-period average volume for relative comparison
+            window = min(20, len(volume))
+            avg_vol = volume.iloc[-window:].mean()
+            entry["avg_volume"] = round(float(avg_vol), 2) if not pd.isna(avg_vol) else None
+
+        # ── MACD signal for cross detection ──────────────────────────
+        macd = data.get("macd", {})
+        if isinstance(macd, dict):
+            macd_series = macd.get("macd")
+            signal_series = macd.get("signal")
+            if (
+                macd_series is not None and hasattr(macd_series, "iloc") and len(macd_series) > 1
+                and signal_series is not None and hasattr(signal_series, "iloc") and len(signal_series) > 1
+            ):
+                prev_macd = float(macd_series.iloc[-2])
+                cur_macd = float(macd_series.iloc[-1])
+                prev_sig = float(signal_series.iloc[-2])
+                cur_sig = float(signal_series.iloc[-1])
+                if cur_macd > cur_sig and prev_macd <= prev_sig:
+                    entry["macd_cross"] = "bullish"
+                elif cur_macd < cur_sig and prev_macd >= prev_sig:
+                    entry["macd_cross"] = "bearish"
+                elif cur_macd > cur_sig:
+                    entry["macd_cross"] = "above"
+                else:
+                    entry["macd_cross"] = "below"
+
+        # ── EMA alignment ────────────────────────────────────────────
+        emas = data.get("emas")
+        if isinstance(emas, dict) and len(emas) >= 2:
+            vals = []
+            for k, v in sorted(emas.items()):
+                if v is not None and hasattr(v, "iloc") and len(v) > 0:
+                    vals.append(float(v.iloc[-1]))
+            if len(vals) >= 2:
+                # short > long → bullish alignment
+                if vals[-1] > vals[0]:
+                    entry["ema_alignment"] = "bullish"
+                else:
+                    entry["ema_alignment"] = "bearish"
+
+        # ── Volume profile latest bucket for volume composition ──────
+        vp = data.get("volume_profile")
+        if isinstance(vp, dict) and vp.get("volumes"):
+            vols = vp["volumes"]
+            if isinstance(vols, (list, tuple)) and len(vols) > 0:
+                total_vol = sum(vols)
+                buy_vols = vp.get("buy_volumes", [])
+                total_buy = sum(buy_vols) if isinstance(buy_vols, (list, tuple)) else 0
+                entry["buy_volume_pct"] = round(total_buy / total_vol * 100, 1) if total_vol > 0 else 50.0
+
         summary[tf] = entry
     return summary
 

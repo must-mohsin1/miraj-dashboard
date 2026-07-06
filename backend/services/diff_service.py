@@ -28,6 +28,10 @@ SCORE_MINOR_DELTA: float = 1.0      # total score change 1–5 → minor
 CATEGORY_MINOR_DELTA: float = 2.0   # per-category change ≥ 2 → minor
 PRICE_NOISE_EPSILON: float = 0.01   # ignore sub-cent price moves
 
+# Volume change thresholds for diff_volume()
+VOLUME_SPIKE_MULTIPLIER: float = 2.0   # current volume >= 2x previous → spike
+VOLUME_DROP_THRESHOLD: float = 0.5     # current volume <= 0.5x previous → drop
+
 # Pattern names whose appearance / invalidation is "high impact" → major.
 HIGH_IMPACT_PATTERNS: frozenset[str] = frozenset({
     "double_top",
@@ -87,6 +91,7 @@ def diff_scans(
     entries += diff_trade_plan(prev, cur, ts_iso)
     entries += diff_patterns(prev, cur, ts_iso)
     entries += diff_indicators(prev, cur, ts_iso)
+    entries += diff_volume(prev, cur, ts_iso)
     return entries
 
 
@@ -538,3 +543,77 @@ def diff_indicators(prev: dict[str, Any], cur: dict[str, Any], ts_iso: str) -> l
             ))
 
     return out
+
+
+# ── 1.3.7  diff_volume ───────────────────────────────────────────────────
+
+def diff_volume(prev: dict[str, Any], cur: dict[str, Any], ts_iso: str) -> list[dict[str, Any]]:
+    """Compare daily candle volume between two scans for spike / drop signals.
+
+    Extracts the last daily candle's volume from ``candles`` list in each
+    scan result.  A spike is flagged when current volume >= 2× previous;
+    a drop when current volume <= 0.5× previous.  Severity is ``info``.
+    """
+    out: list[dict[str, Any]] = []
+    prev_candles: list[Any] = _safe_get(prev, "candles", []) or []
+    cur_candles: list[Any] = _safe_get(cur, "candles", []) or []
+    if not isinstance(prev_candles, list) or not isinstance(cur_candles, list):
+        return out
+    if len(prev_candles) == 0 or len(cur_candles) == 0:
+        return out
+
+    prev_vol = _extract_last_volume(prev_candles)
+    cur_vol = _extract_last_volume(cur_candles)
+    if prev_vol is None or cur_vol is None:
+        return out
+
+    try:
+        pv = float(prev_vol)
+        cv = float(cur_vol)
+    except (TypeError, ValueError):
+        return out
+
+    if pv <= 0:
+        return out
+
+    ratio = cv / pv
+
+    if ratio >= VOLUME_SPIKE_MULTIPLIER:
+        out.append(_entry(
+            field="volume.daily",
+            change=f"spike {ratio:.1f}× ({_fmt_num(pv, 0)} → {_fmt_num(cv, 0)})",
+            severity="info",
+            old_value=pv,
+            new_value=cv,
+            ts_iso=ts_iso,
+        ))
+    elif ratio <= VOLUME_DROP_THRESHOLD:
+        out.append(_entry(
+            field="volume.daily",
+            change=f"drop {ratio:.1f}× ({_fmt_num(pv, 0)} → {_fmt_num(cv, 0)})",
+            severity="info",
+            old_value=pv,
+            new_value=cv,
+            ts_iso=ts_iso,
+        ))
+
+    return out
+
+
+def _extract_last_volume(candles: list[Any]) -> Optional[float]:
+    """Extract the volume from the last candle in the list.
+
+    Returns ``None`` when the candle dict is missing or volume is absent.
+    """
+    if not candles:
+        return None
+    last = candles[-1]
+    if not isinstance(last, dict):
+        return None
+    val = last.get("volume")
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
