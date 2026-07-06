@@ -987,3 +987,50 @@ export interface BMSB {
   status: "above" | "below";
   regime: "bull" | "bear";
 }
+
+// ── Deep Scan (Vision Analysis) ────────────────────────────────────────────
+
+/** A single section in the deep analysis narrative. */
+export interface DeepAnalysisSection {
+  heading: string;
+  body: string;
+}
+
+/** Key price levels extracted by deep analysis. */
+export interface DeepKeyLevels {
+  entry?: number | null;
+  stop_loss?: number | null;
+  target_1?: number | null;
+  target_2?: number | null;
+  target_3?: number | null;
+  [key: string]: number | null | undefined;
+}
+
+/** The deep analysis narrative object. */
+export interface DeepAnalysis {
+  /** One-line bias verdict, e.g. "Bullish bias (72%) — BTC-USD shows..." */
+  summary: string;
+  /** Ordered list of analysis sections (heading + body). */
+  detailed_analysis: DeepAnalysisSection[];
+  /** Identified risk factors / warnings. */
+  risk_factors: string[];
+  /** Notable price levels (entry, stop, targets, OBs, FVGs). */
+  key_levels: DeepKeyLevels;
+  /** Per-timeframe breakdown strings. */
+  timeframe_breakdown: Record<string, string>;
+  /** Count of bullish signals found. */
+  bullish_signals: number;
+  /** Count of bearish signals found. */
+  bearish_signals: number;
+  /** Count of neutral signals found. */
+  neutral_signals: number;
+  /** Aggregate bullish bias percentage (0–100). */
+  bias_percent: number;
+}
+
+/** Response from `POST /api/v1/scan/{symbol}/deep`. */
+export interface DeepScanResult extends ScanResult {
+  /** Narrative deep analysis — only present on deep scan responses. */
+  deep_analysis: DeepAnalysis;
+}
+
