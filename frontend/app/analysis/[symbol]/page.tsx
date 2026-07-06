@@ -226,6 +226,9 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+      {/* ── Macro context strip (BTC.D, USDT.D, F&G, DXY, L/S) ── */}
+      <MacroStrip />
+
       {/* Header */}
       <header className="flex flex-col gap-3">
         <Link
