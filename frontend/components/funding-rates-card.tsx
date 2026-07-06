@@ -45,8 +45,10 @@ function fundingColor(percent: number): string {
 
 /** Short qualitative signal label for a funding rate. */
 function fundingSignal(percent: number): string {
-  if (percent < 0) return "Bullish";
-  if (percent > 0.05) return "Overheated";
+  if (percent < -0.01) return "Shorts pay longs — bullish";
+  if (percent > 0.05) return "High funding — long squeeze risk";
+  if (percent > 0.01) return "Longs pay shorts — overheated";
+  if (percent < 0) return "Shorts pay longs — bullish";
   return "Neutral";
 }
 

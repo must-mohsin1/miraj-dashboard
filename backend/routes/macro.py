@@ -60,6 +60,10 @@ class MacroResponse(BaseModel):
                 {"date": "2026-06-20", "gap_percent": 1.5, "direction": "up", "filled": False},
             ],
             "regime": "mixed",
+            "sp500": 5500.25,
+            "sp500_change": -0.42,
+            "nasdaq": 18000.5,
+            "nasdaq_change": 0.31,
         },
         "cached_at": "2026-07-05T12:00:00+00:00",
         "stale": False,
@@ -75,7 +79,8 @@ async def get_macro(
     current_user: User = Depends(get_current_user),
 ) -> MacroResponse:
     """Return macro market data: BTC.D, USDT.D, DXY, Fear & Greed,
-    Binance Long/Short ratio, funding rates, CME gaps, and regime detection.
+    Binance Long/Short ratio, funding rates, CME gaps, S&P 500, Nasdaq,
+    and regime detection.
 
     Data is cached in memory for 15 minutes.  A request triggers an
     asynchronous refresh only when the cached data is older than

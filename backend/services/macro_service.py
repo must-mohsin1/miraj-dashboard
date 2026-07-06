@@ -1,5 +1,6 @@
 """Macro market data service — fetches and caches BTC.D, USDT.D, DXY,
-Fear & Greed Index, Binance Long/Short ratio, and detects market regime.
+Fear & Greed Index, Binance Long/Short ratio, S&P 500 / Nasdaq indices,
+and detects market regime.
 
 Data sources
 -----------
@@ -9,6 +10,8 @@ Data sources
 - L/S ratio      : Binance Futures /futures/data/globalLongShortAccountRatio
 - Funding rates  : Binance Futures /fapi/v1/premiumIndex (BTC/ETH/SOL)
 - CME gaps       : yfinance BTC=F weekly candles (unfilled-gap detection)
+- S&P 500        : yfinance ^GSPC daily candles (latest close + daily %chg)
+- Nasdaq         : yfinance ^IXIC daily candles (latest close + daily %chg)
 - Regime         : heuristic over BTC.D + DXY
 
 Caching
@@ -44,6 +47,10 @@ _cache: dict[str, dict[str, Any]] = {
     "funding_rates": {"value": None, "error": None},
     "cme_gaps": {"value": None, "error": None},
     "regime": {"value": None, "error": None},
+    "sp500": {"value": None, "error": None},
+    "sp500_change": {"value": None, "error": None},
+    "nasdaq": {"value": None, "error": None},
+    "nasdaq_change": {"value": None, "error": None},
 }
 _last_refresh: Optional[float] = None
 
@@ -411,6 +418,67 @@ def _download_dxy() -> Optional[float]:
     return float(df["Close"].iloc[-1])
 
 
+
+def _download_index_close(symbol: str) -> tuple[Optional[float], Optional[float]]:
+    """Download a daily index (e.g. ``^GSPC``, ``^IXIC``) latest close and
+    daily change % via yfinance (blocking).  Returns ``(close, change_pct)``
+    where ``change_pct`` is the percent change between the previous session's
+    close and the latest close, or ``None`` if fewer than two rows were
+    returned.
+    """
+    import yfinance as yf  # noqa: PLC0415
+
+    df = yf.download(symbol, period="5d", interval="1d", progress=False)
+    if df is None or df.empty:
+        return None, None
+    # Flatten yfinance MultiIndex columns (single-ticker download).
+    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+        df = df.copy()
+        df.columns = df.columns.get_level_values(0)
+    df.dropna(how="all", inplace=True)
+    if df.empty:
+        return None, None
+    close_value = float(df["Close"].iloc[-1])
+    if len(df) >= 2:
+        prev_close = float(df["Close"].iloc[-2])
+        if prev_close > 0:
+            change = ((close_value - prev_close) / prev_close) * 100.0
+            return close_value, round(change, 2)
+    return close_value, None
+
+
+async def _fetch_sp500() -> tuple[Optional[float], Optional[float], Optional[str]]:
+    """S&P 500 (``^GSPC``) latest close + daily change % via yfinance.
+
+    Returns ``(close, change_pct, error_message)``.  Runs the blocking
+    yfinance call in a worker thread so the async event loop never stalls.
+    """
+    try:
+        close, change = await asyncio.to_thread(_download_index_close, "^GSPC")
+        if close is None:
+            return None, None, "yfinance returned no ^GSPC data"
+        return close, change, None
+    except Exception as exc:
+        logger.warning("S&P 500 fetch failed: %s", exc)
+        return None, None, f"S&P 500 unavailable (yfinance failed: {exc})"
+
+
+async def _fetch_nasdaq() -> tuple[Optional[float], Optional[float], Optional[str]]:
+    """Nasdaq Composite (``^IXIC``) latest close + daily change % via yfinance.
+
+    Returns ``(close, change_pct, error_message)``.  Runs the blocking
+    yfinance call in a worker thread so the async event loop never stalls.
+    """
+    try:
+        close, change = await asyncio.to_thread(_download_index_close, "^IXIC")
+        if close is None:
+            return None, None, "yfinance returned no ^IXIC data"
+        return close, change, None
+    except Exception as exc:
+        logger.warning("Nasdaq fetch failed: %s", exc)
+        return None, None, f"Nasdaq unavailable (yfinance failed: {exc})"
+
+
 # ── Regime detection ────────────────────────────────────────────────────────
 
 
@@ -479,6 +547,8 @@ async def refresh_macro_data() -> dict[str, Any]:
         "bls": asyncio.create_task(_fetch_binance_ls_ratio()),
         "fr": asyncio.create_task(_fetch_funding_rates()),
         "cme": asyncio.create_task(_fetch_cme_gaps()),
+        "sp500": asyncio.create_task(_fetch_sp500()),
+        "nasdaq": asyncio.create_task(_fetch_nasdaq()),
     }
 
     # Collect results
@@ -489,6 +559,8 @@ async def refresh_macro_data() -> dict[str, Any]:
     bls_val, bls_err = await tasks["bls"]
     fr_val, fr_err = await tasks["fr"]
     cme_val, cme_err = await tasks["cme"]
+    sp500_val, sp500_chg, sp500_err = await tasks["sp500"]
+    nasdaq_val, nasdaq_chg, nasdaq_err = await tasks["nasdaq"]
 
     # ── Update cache (keep previous value on failure) ──────────────
     if btc_d is not None:
@@ -537,6 +609,24 @@ async def refresh_macro_data() -> dict[str, Any]:
     else:
         _cache["cme_gaps"]["error"] = cme_err
 
+    if sp500_val is not None:
+        _cache["sp500"]["value"] = sp500_val
+        _cache["sp500"]["error"] = None
+        _cache["sp500_change"]["value"] = sp500_chg
+        _cache["sp500_change"]["error"] = None
+    else:
+        _cache["sp500"]["error"] = sp500_err
+        _cache["sp500_change"]["error"] = sp500_err
+
+    if nasdaq_val is not None:
+        _cache["nasdaq"]["value"] = nasdaq_val
+        _cache["nasdaq"]["error"] = None
+        _cache["nasdaq_change"]["value"] = nasdaq_chg
+        _cache["nasdaq_change"]["error"] = None
+    else:
+        _cache["nasdaq"]["error"] = nasdaq_err
+        _cache["nasdaq_change"]["error"] = nasdaq_err
+
     # ── Regime (depends on current cached BTC.D + DXY) ─────────────
     current_btc_d = _cache["btc_dominance"]["value"]
     current_dxy = _cache["dxy"]["value"]
@@ -566,6 +656,10 @@ def build_response() -> dict[str, Any]:
         "funding_rates": _cache["funding_rates"]["value"],
         "cme_gaps": _cache["cme_gaps"]["value"],
         "regime": _cache["regime"]["value"],
+        "sp500": _cache["sp500"]["value"],
+        "sp500_change": _cache["sp500_change"]["value"],
+        "nasdaq": _cache["nasdaq"]["value"],
+        "nasdaq_change": _cache["nasdaq_change"]["value"],
     }
 
     for key in _cache:

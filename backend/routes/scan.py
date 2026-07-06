@@ -54,6 +54,7 @@ class ScanResponse(BaseModel):
     macro_data: Optional[dict[str, Any]] = None
     smc: Optional[dict[str, Any]] = None
     patterns: Optional[dict[str, Any]] = None
+    bmsb: Optional[dict[str, Any]] = None
     qqe: Optional[dict[str, Any]] = None
     # ── Per-TF QQE trend/strength summary (daily/4h/1h) built by service ──
     qqe_signals: Optional[dict[str, Any]] = None

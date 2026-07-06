@@ -10,14 +10,14 @@ import type { MacroData } from "@/lib/types";
 /**
  * MacroCards — Server Component.
  *
- * Renders the four headline macro indicators in a responsive grid:
- * BTC Dominance, USDT Dominance, Fear & Greed Index, and the Binance
- * Long/Short ratio. Each card shows a title, a big value, and a short
- * subtitle. Colours follow the app's dark slate theme.
+ * Renders the headline macro indicators in a responsive grid:
+ * BTC Dominance, USDT Dominance, Fear & Greed Index, Binance Long/Short
+ * ratio, DXY, S&P 500, and Nasdaq. Each card shows a title, a big value, and
+ * a short subtitle. Colours follow the app's dark slate theme.
  *
- * When a value is unavailable (the upstream source failed) the card
- * renders an em-dash placeholder rather than blank space, and dims the
- * subtitle so the grid stays visually balanced.
+ * When a value is unavailable (the upstream source failed) the card renders
+ * an em-dash placeholder rather than blank space so the grid stays visually
+ * balanced.
  */
 
 function formatPercent(value: number | null | undefined): string {
@@ -34,6 +34,32 @@ function formatRatio(value: number | null | undefined): string {
 function formatDxy(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
   return value.toFixed(2);
+}
+
+/** Format an equity index value (e.g. ~5,500) with thousands separators. */
+function formatIndex(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+/** Format a daily change percentage with a leading +/- sign. */
+function formatChange(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+/**
+ * Colour for an equity index daily change: green for positive, red for
+ * negative, slate when unavailable.
+ */
+function changeColor(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "text-slate-400";
+  }
+  if (value > 0) return "text-emerald-400";
+  if (value < 0) return "text-red-400";
+  return "text-slate-400";
 }
 
 /**
@@ -101,9 +127,13 @@ export function MacroCards({ data }: MacroCardsProps) {
   const fearLabel = fearGreedLabel(fearGreedIndex, d.fear_greed_label);
   const longShortRatio = d.binance_ls_ratio ?? null;
   const dxy = d.dxy ?? null;
+  const sp500 = d.sp500 ?? null;
+  const sp500Change = d.sp500_change ?? null;
+  const nasdaq = d.nasdaq ?? null;
+  const nasdaqChange = d.nasdaq_change ?? null;
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
       {/* BTC Dominance */}
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader className="pb-2">
@@ -190,6 +220,46 @@ export function MacroCards({ data }: MacroCardsProps) {
           </div>
           <p className="mt-1 text-xs text-slate-500">
             Rising DXY = bearish for crypto, falling = bullish
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* S&P 500 */}
+      <Card className="border-slate-800 bg-slate-900/60">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-slate-400">
+            S&amp;P 500
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-3xl font-bold text-slate-100">
+            {formatIndex(sp500)}
+          </div>
+          <p className={cn("mt-1 text-xs font-medium", changeColor(sp500Change))}>
+            {formatChange(sp500Change)}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            US broad market benchmark
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Nasdaq */}
+      <Card className="border-slate-800 bg-slate-900/60">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-slate-400">
+            Nasdaq
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-3xl font-bold text-slate-100">
+            {formatIndex(nasdaq)}
+          </div>
+          <p className={cn("mt-1 text-xs font-medium", changeColor(nasdaqChange))}>
+            {formatChange(nasdaqChange)}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Tech-heavy composite
           </p>
         </CardContent>
       </Card>
