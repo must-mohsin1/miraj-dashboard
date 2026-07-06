@@ -21,6 +21,10 @@ import { PerformanceMetrics } from "@/components/portfolio/performance-metrics";
 import { EquityCurve } from "@/components/portfolio/equity-curve";
 import { PnlHeatmap } from "@/components/portfolio/pnl-heatmap";
 import { AllocationPie } from "@/components/portfolio/allocation-pie";
+import { TradeAttributionTable } from "@/components/portfolio/trade-attribution-table";
+import { ScanAccuracyChart } from "@/components/portfolio/scan-accuracy-chart";
+import { HealthScorePanel } from "@/components/portfolio/health-score-panel";
+import { BenchmarkComparison } from "@/components/portfolio/benchmark-comparison";
 import type {
   PerformanceMetrics as PerformanceMetricsType,
   EquityCurveResponse,
@@ -31,12 +35,16 @@ import type {
 /**
  * AnalyticsDashboard — Client Component.
  *
- * Combines all 5 Phase-2 analytics components in a tabbed view:
+ * Combines all analytics components in a tabbed view:
  *  - Tab 1: Performance (metrics cards + equity curve)
  *  - Tab 2: P&L Calendar (heatmap)
  *  - Tab 3: Allocation (pie + per-asset table)
+ *  - Tab 4: Trade Attribution (per-trade P&L breakdown)
+ *  - Tab 5: Health Score (grade + metric bars + recommendations)
+ *  - Tab 6: Benchmark (portfolio vs BTC buy-and-hold comparison)
  *
  * Fetches data from the analytics endpoints on mount and on exchange change.
+ * The Health Score and Benchmark tabs fetch internally (self-refreshing).
  */
 
 interface AnalyticsDashboardProps {
@@ -195,6 +203,9 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
         <TabsTrigger value="performance">Performance</TabsTrigger>
         <TabsTrigger value="calendar">P&amp;L Calendar</TabsTrigger>
         <TabsTrigger value="allocation">Allocation</TabsTrigger>
+        <TabsTrigger value="attribution">Trade Attribution</TabsTrigger>
+        <TabsTrigger value="health">Health Score</TabsTrigger>
+        <TabsTrigger value="benchmark">Benchmark</TabsTrigger>
       </TabsList>
 
       {/* ── Tab 1: Performance ── */}
@@ -288,6 +299,16 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
             <AllocationPie items={[]} />
           )}
         </div>
+      </TabsContent>
+
+      {/* ── Tab 5: Health Score ── */}
+      <TabsContent value="health">
+        <HealthScorePanel token={token} exchange={exchange} />
+      </TabsContent>
+
+      {/* ── Tab 6: Benchmark ── */}
+      <TabsContent value="benchmark">
+        <BenchmarkComparison token={token} exchange={exchange} days={30} />
       </TabsContent>
     </Tabs>
   );

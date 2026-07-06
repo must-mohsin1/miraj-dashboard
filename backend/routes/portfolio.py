@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.auth import get_current_user
 from backend.database import get_session
 from backend.models import (
+    Analysis,
     ExchangeKey,
     OrderHistory,
     PortfolioBalance,
@@ -224,6 +225,50 @@ class HistoryResponse(BaseModel):
     exchange: str
     position_history: List[PositionHistoryItem]
     order_history: List[OrderHistoryItem]
+
+
+# ── Trade attribution (scan linking) ─────────────────────────────────────────
+
+
+class TradeAttributionItem(BaseModel):
+    """A single closed position linked to the scan that preceded its entry.
+
+    The ``scan_*`` fields are ``None`` when no recorded scan exists for that
+    symbol, or when no scan ran before the position's ``open_time``.
+    """
+
+    position_symbol: str
+    position_side: str
+    entry_price: float
+    exit_price: float
+    pnl: float
+    pnl_percent: float = 0.0
+    leverage: float = 1.0
+    open_time: Optional[datetime] = None
+    close_time: Optional[datetime] = None
+    close_reason: Optional[str] = None
+    # ── Linked scan (nearest scan at/before open_time) ──
+    scan_score: Optional[float] = Field(
+        None, description="Confluence score (0–30) of the pre-entry scan"
+    )
+    scan_direction: Optional[str] = Field(
+        None, description="LONG / SHORT inferred from the scan's trade plan"
+    )
+    scan_qqe_signals: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Per-TF QQE summary {daily,4h,1h → {trend,strength}} at entry",
+    )
+
+
+class TradeAttributionResponse(BaseModel):
+    """Response for `GET /api/v1/portfolio/{exchange}/trade-attribution`."""
+
+    exchange: str
+    total_trades: int
+    high_confidence_trades: int = Field(
+        description="Trades entered on a scan with confluence score >= 20"
+    )
+    items: List[TradeAttributionItem]
 
 
 class PortfolioErrorResponse(BaseModel):
@@ -805,6 +850,50 @@ async def get_position_alerts(
         danger_count=danger_count,
         warning_count=warning_count,
         positions=[PositionAlertItem(**item) for item in alert_items],
+    )
+
+
+@router.get(
+    "/{exchange}/trade-attribution",
+    response_model=TradeAttributionResponse,
+    responses={
+        404: {"model": PortfolioErrorResponse, "description": "Unsupported exchange"},
+        501: {"model": PortfolioErrorResponse, "description": "ccxt not installed"},
+    },
+)
+async def get_trade_attribution(
+    exchange: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> TradeAttributionResponse:
+    """Link each closed position to the Miraj scan that preceded its entry.
+
+    For every closed position in :class:`PositionHistory`, finds the nearest
+    :class:`Analysis` (scan) for that symbol whose ``created_at`` is at or
+    before the position's ``open_time``, and returns the confluence score,
+    inferred trade direction, and per-TF QQE signals of that scan.
+
+    This shows **which** confluence score led to each trade — useful for
+    evaluating whether high-score signals actually produce profitable trades.
+
+    The endpoint reads purely from cache tables (no exchange API call) and
+    requires ccxt to be installed so the exchange slug is validated.
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+
+    from backend.services.scan_attribution_service import link_positions_to_scans
+
+    items = await link_positions_to_scans(
+        session, current_user.id, exchange_slug
+    )
+    high_confidence = sum(
+        1 for it in items if it.get("scan_score") is not None and it["scan_score"] >= 20
+    )
+    return TradeAttributionResponse(
+        exchange=exchange_slug,
+        total_trades=len(items),
+        high_confidence_trades=high_confidence,
+        items=[TradeAttributionItem(**it) for it in items],
     )
 
 

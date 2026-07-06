@@ -295,6 +295,54 @@ export interface AllocationResponse {
   items: AllocationItem[];
 }
 
+// ── Trade attribution (scan linking) ────────────────────────────────────────
+
+/** A single closed position linked to the scan that preceded its entry.
+ *  Response item from `GET /api/v1/portfolio/{exchange}/trade-attribution`. */
+export interface TradeAttributionItem {
+  position_symbol: string;
+  position_side: string;
+  entry_price: number;
+  exit_price: number;
+  pnl: number;
+  pnl_percent: number;
+  leverage: number;
+  open_time: string | null;
+  close_time: string | null;
+  close_reason: string | null;
+  /** Confluence score (0–30) of the pre-entry scan, or null if no scan found. */
+  scan_score: number | null;
+  /** LONG / SHORT inferred from the scan's trade plan, or null. */
+  scan_direction: string | null;
+  /** Per-TF QQE summary {daily,4h,1h → {trend,strength}} at entry. */
+  scan_qqe_signals: Record<string, { trend: string; strength: string }> | null;
+}
+
+/** Response for `GET /api/v1/portfolio/{exchange}/trade-attribution`. */
+export interface TradeAttributionResponse {
+  exchange: string;
+  total_trades: number;
+  /** Trades entered on a scan with confluence score >= 20. */
+  high_confidence_trades: number;
+  items: TradeAttributionItem[];
+}
+
+/** Win-rate / avg-PnL stats for a single confluence-score band. */
+export interface ScanAccuracyBand {
+  score_band: string;
+  total_trades: number;
+  winning_trades: number;
+  win_rate: number;
+  avg_pnl: number;
+}
+
+/** Response for `GET /api/v1/analytics/{exchange}/scan-accuracy`. */
+export interface ScanAccuracyResponse {
+  exchange: string;
+  total_trades: number;
+  bands: ScanAccuracyBand[];
+}
+
 // ── Settings ───────────────────────────────────────────────────────────────
 
 /** Per-pair alert settings row from `GET /api/v1/settings/pairs`. */
@@ -859,4 +907,50 @@ export interface RiskMetrics {
   open_positions: number;
   /** 0–100 (higher = more risk). */
   risk_score: number;
+}
+
+
+
+// ── Portfolio health score ──────────────────────────────────────────────────
+
+/** Response for `GET /api/v1/analytics/{exchange}/health`. */
+export interface HealthScore {
+  exchange: string;
+  /** 0–100. Higher = more diversified. */
+  diversification_score: number;
+  /** 0–100. Higher = more directional correlation risk. */
+  correlation_risk: number;
+  /** 0–100. Higher = more concentration risk. */
+  concentration_risk: number;
+  /** 0–100 weighted average (higher = healthier). */
+  health_score: number;
+  /** Letter grade: A / B / C / D / F. */
+  grade: string;
+  /** Actionable recommendations to improve portfolio health. */
+  recommendations: string[];
+  open_positions: number;
+  unique_assets: number;
+}
+
+// ── Benchmark comparison ────────────────────────────────────────────────────
+
+/** A single day's benchmark + portfolio return data point. */
+export interface BenchmarkPoint {
+  date: string;
+  btc_return_pct: number;
+  portfolio_return_pct: number;
+}
+
+/** Response for `GET /api/v1/analytics/benchmark`. */
+export interface BenchmarkResponse {
+  symbol: string;
+  days: number;
+  btc_return_pct: number;
+  portfolio_return_pct: number;
+  /** portfolio_return_pct − btc_return_pct. */
+  alpha: number;
+  /** Beta of portfolio vs BTC (cov / var). Null when insufficient data. */
+  beta: number | null;
+  /** Daily indexed series — both indexed to 0% at start. */
+  points: BenchmarkPoint[];
 }
