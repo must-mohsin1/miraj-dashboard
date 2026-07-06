@@ -11,14 +11,13 @@ import { cn } from "@/lib/utils";
  *
  * Displays the latest per-8h funding rate for BTC, ETH, and SOL, sourced
  * from Binance Futures ``premiumIndex``.  Funding rates indicate who is
- * paying whom in the perpetual swaps market:
+ * paying whom in the perpetual swaps market.  A four-tier interpretation
+ * label + accent colour is rendered *below* each rate value:
  *
- *  - **Negative** rate → shorts pay longs → **bullish** (longs are being
- *    paid to hold), rendered in emerald.
- *  - **Moderate positive** (0–0.05 %/8h) → neutral / normal carry,
- *    rendered in slate.
- *  - **High positive** (> 0.05 %/8h) → longs are paying heavily to hold
- *    → overheated / crowded long, rendered in red/orange.
+ *  - ``< -0.01 %``  → "Shorts paying longs — bullish"      (emerald)
+ *  - ``-0.01 … +0.01 %`` → "Neutral"                       (slate/gray)
+ *  - ``> +0.01 %`` → "Longs paying shorts — overheated"   (amber)
+ *  - ``> +0.05 %`` → "High funding — potential long squeeze" (red)
  *
  * Degrades gracefully: when the upstream source failed, an em-dash
  * placeholder row is shown so the card layout stays stable.
@@ -36,20 +35,36 @@ interface FundingRatesCardProps {
   rates?: FundingRateEntry[] | null;
 }
 
-/** Colour class for a given funding-rate percentage (per 8h). */
+/**
+ * Accent colour for the funding-rate *value*, following the four-tier
+ * scheme.  Order matters: the > 0.05 % (red) check must come before the
+ * > 0.01 % (amber) check, and the < -0.01 % (emerald) check before the
+ * neutral fallback.
+ */
 function fundingColor(percent: number): string {
-  if (percent < 0) return "text-emerald-400"; // negative = bullish
-  if (percent > 0.05) return "text-red-400"; // high positive = overheated
+  if (percent > 0.05) return "text-red-400"; // high funding — long squeeze
+  if (percent > 0.01) return "text-amber-400"; // overheated longs
+  if (percent < -0.01) return "text-emerald-400"; // shorts paying longs — bullish
   return "text-slate-200"; // neutral
 }
 
-/** Short qualitative signal label for a funding rate. */
+/**
+ * Interpretation label shown *below* each funding rate value.  Wording
+ * and thresholds match the spec exactly.
+ */
 function fundingSignal(percent: number): string {
-  if (percent < -0.01) return "Shorts pay longs — bullish";
-  if (percent > 0.05) return "High funding — long squeeze risk";
-  if (percent > 0.01) return "Longs pay shorts — overheated";
-  if (percent < 0) return "Shorts pay longs — bullish";
+  if (percent > 0.05) return "High funding — potential long squeeze";
+  if (percent > 0.01) return "Longs paying shorts — overheated";
+  if (percent < -0.01) return "Shorts paying longs — bullish";
   return "Neutral";
+}
+
+/** Accent colour for the interpretation label (slightly dimmer than the value). */
+function fundingLabelColor(percent: number): string {
+  if (percent > 0.05) return "text-red-400";
+  if (percent > 0.01) return "text-amber-400";
+  if (percent < -0.01) return "text-emerald-400";
+  return "text-slate-400";
 }
 
 function formatPercent(value: number): string {
@@ -88,7 +103,7 @@ export function FundingRatesCard({ rates }: FundingRatesCardProps) {
                   <span className="text-sm font-medium text-slate-300">
                     {entry.symbol}
                   </span>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-col items-end gap-0.5">
                     <span
                       className={cn(
                         "text-sm font-semibold tabular-nums",
@@ -97,7 +112,12 @@ export function FundingRatesCard({ rates }: FundingRatesCardProps) {
                     >
                       {formatPercent(pct)}
                     </span>
-                    <span className="text-xs text-slate-500">
+                    <span
+                      className={cn(
+                        "text-[11px] font-medium",
+                        fundingLabelColor(pct),
+                      )}
+                    >
                       {fundingSignal(pct)}
                     </span>
                   </div>

@@ -280,9 +280,6 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
         </div>
       </header>
 
-      {/* ── Macro context strip (BTC.D, USDT.D, F&G, DXY, L/S) ── */}
-      <MacroStrip />
-
       {/* ── Metric Trends (compact trend arrows on key metrics) ── */}
       <MetricTrends
         symbol={result.symbol}

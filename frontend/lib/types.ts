@@ -969,8 +969,12 @@ export interface BenchmarkResponse {
 export interface Pattern {
   name?: string;
   pattern?: string;
-  direction: string;
+  /** Backend returns `signal` ("Bullish"/"Bearish"); `direction` kept for compat. */
+  direction?: string;
+  signal?: string;
+  confirmed?: boolean;
   timeframe?: string;
+  levels?: Record<string, number>;
   details?: unknown;
 }
 

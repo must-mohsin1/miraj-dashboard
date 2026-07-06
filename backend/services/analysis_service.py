@@ -222,6 +222,28 @@ def run_scan(symbol: str) -> dict[str, Any]:
     # ── Assemble result ────────────────────────────────────────────
     trade_plan_flat: dict[str, Any] = _build_flat_trade_plan(trade_plan_result)
 
+    # ── Extract BMSB from weekly indicators ──────────────────────
+    bmsb_data: Optional[dict[str, Any]] = None
+    weekly_ind = ind_results.get("weekly", {})
+    if isinstance(weekly_ind, dict) and "error" not in weekly_ind:
+        bmsb_raw = weekly_ind.get("bmsb")
+        if bmsb_raw and isinstance(bmsb_raw, dict):
+            sma_series = bmsb_raw.get("sma20")
+            ema_series = bmsb_raw.get("ema21")
+            sma_val = float(sma_series.iloc[-1]) if sma_series is not None and hasattr(sma_series, "iloc") and len(sma_series) > 0 else None
+            ema_val = float(ema_series.iloc[-1]) if ema_series is not None and hasattr(ema_series, "iloc") and len(ema_series) > 0 else None
+            weekly_df = timeframes.get("weekly")
+            current_price = float(weekly_df["Close"].iloc[-1]) if weekly_df is not None and not weekly_df.empty else None
+            if sma_val is not None and ema_val is not None and current_price is not None:
+                band_value = min(sma_val, ema_val)
+                bmsb_data = {
+                    "sma_20w": sma_val,
+                    "ema_21w": ema_val,
+                    "current_price": current_price,
+                    "status": "above" if current_price >= band_value else "below",
+                    "regime": "bull" if current_price >= band_value else "bear",
+                }
+
     data: dict[str, Any] = {
         "symbol": symbol,
         "overall_score": round(min(conf_score * (100 / 30), 100.0), 1),
@@ -236,6 +258,7 @@ def run_scan(symbol: str) -> dict[str, Any]:
         },
         "smc": smc_result,
         "patterns": pattern_result,
+        "bmsb": bmsb_data,
         "qqe": qqe_results,
         "qqe_signals": qqe_signals,
         "structure": structure_results,
