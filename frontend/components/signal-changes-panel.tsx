@@ -182,6 +182,31 @@ export function SignalChangesPanel({
     ([url, tok]: [string, string | null]) => fetcher<ScanDiffResponse>(url, tok),
   );
 
+  // Group changes by category (must be before early returns — hooks rule)
+  const grouped = useMemo(() => {
+    if (!data?.changes) return [];
+    const groups: Record<string, ScanDiffEntry[]> = {};
+    const categoryOrderMap: Record<string, number> = {};
+    for (const ch of data.changes) {
+      const cat = categoryLabel(ch.field);
+      if (!groups[cat]) {
+        groups[cat] = [];
+        categoryOrderMap[cat] = categoryOrder(ch.field);
+      }
+      groups[cat].push(ch);
+    }
+    const sorted = Object.entries(groups).sort(
+      ([a], [b]) => (categoryOrderMap[a] ?? 99) - (categoryOrderMap[b] ?? 99)
+    );
+    for (const [, changes] of sorted) {
+      changes.sort((a, b) => {
+        const sevOrder = { major: 0, minor: 1, info: 2 };
+        return (sevOrder[a.severity] ?? 3) - (sevOrder[b.severity] ?? 3);
+      });
+    }
+    return sorted;
+  }, [data]);
+
   // ── Loading state ─────────────────────────────────────────────────────
   if (isLoading) {
     return (
@@ -212,36 +237,6 @@ export function SignalChangesPanel({
   }
 
   if (!data) return null;
-
-  // Group changes by category
-  const grouped = useMemo(() => {
-    const groups: Record<string, ScanDiffEntry[]> = {};
-    const categoryOrderMap: Record<string, number> = {};
-
-    for (const ch of data.changes) {
-      const cat = categoryLabel(ch.field);
-      if (!groups[cat]) {
-        groups[cat] = [];
-        categoryOrderMap[cat] = categoryOrder(ch.field);
-      }
-      groups[cat].push(ch);
-    }
-
-    // Sort categories by order, then changes by severity within each group
-    const sorted = Object.entries(groups).sort(
-      ([a], [b]) => (categoryOrderMap[a] ?? 99) - (categoryOrderMap[b] ?? 99)
-    );
-
-    // Sort changes within each category by severity: major first, then minor, info
-    for (const [, changes] of sorted) {
-      changes.sort((a, b) => {
-        const sevOrder = { major: 0, minor: 1, info: 2 };
-        return (sevOrder[a.severity] ?? 3) - (sevOrder[b.severity] ?? 3);
-      });
-    }
-
-    return sorted;
-  }, [data.changes]);
 
   const totalChanges = data.changes.length;
   const scoreDelta =
