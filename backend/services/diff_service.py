@@ -92,6 +92,8 @@ def diff_scans(
     entries += diff_patterns(prev, cur, ts_iso)
     entries += diff_indicators(prev, cur, ts_iso)
     entries += diff_volume(prev, cur, ts_iso)
+    entries += diff_macd(prev, cur, ts_iso)
+    entries += diff_ema_alignment(prev, cur, ts_iso)
     return entries
 
 
@@ -617,3 +619,63 @@ def _extract_last_volume(candles: list[Any]) -> Optional[float]:
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+# ── 1.3.8  diff_macd ──────────────────────────────────────────────────────
+
+
+def diff_macd(prev: dict[str, Any], cur: dict[str, Any], ts_iso: str) -> list[dict[str, Any]]:
+    """Compare MACD cross signals per timeframe (bullish ↔ bearish ↔ none)."""
+    out: list[dict[str, Any]] = []
+    for tf in INDICATOR_TIMEFRAMES:
+        prev_cross = _safe_get(prev, f"indicators.{tf}.macd_cross")
+        cur_cross = _safe_get(cur, f"indicators.{tf}.macd_cross")
+        if prev_cross is None or cur_cross is None:
+            continue
+        if str(prev_cross) == str(cur_cross):
+            continue
+        # Only emit for actual cross events (bullish/bearish), not state drift
+        if cur_cross in ("bullish", "bearish") and prev_cross != cur_cross:
+            sev: Severity = "minor"
+            if prev_cross in ("above", "below") and cur_cross in ("bullish", "bearish"):
+                sev = "minor"  # fresh cross
+            elif prev_cross in ("bullish", "bearish") and cur_cross in ("above", "below"):
+                sev = "info"  # no longer crossing
+            else:
+                sev = "minor"  # direct flip
+            arrow = "▲" if cur_cross == "bullish" else "▼"
+            direction = "bullish" if cur_cross == "bullish" else "bearish"
+            out.append(_entry(
+                field=f"indicators.{tf}.macd_cross",
+                change=f"{prev_cross} → {direction} ({arrow})",
+                severity=sev,
+                old_value=prev_cross,
+                new_value=cur_cross,
+                ts_iso=ts_iso,
+            ))
+    return out
+
+
+# ── 1.3.9  diff_ema_alignment ────────────────────────────────────────────────
+
+
+def diff_ema_alignment(prev: dict[str, Any], cur: dict[str, Any], ts_iso: str) -> list[dict[str, Any]]:
+    """Compare EMA alignment per timeframe (bullish ↔ bearish)."""
+    out: list[dict[str, Any]] = []
+    for tf in INDICATOR_TIMEFRAMES:
+        prev_align = _safe_get(prev, f"indicators.{tf}.ema_alignment")
+        cur_align = _safe_get(cur, f"indicators.{tf}.ema_alignment")
+        if prev_align is None or cur_align is None:
+            continue
+        if str(prev_align) == str(cur_align):
+            continue
+        arrow = "▲" if cur_align == "bullish" else "▼"
+        out.append(_entry(
+            field=f"indicators.{tf}.ema_alignment",
+            change=f"{prev_align} → {cur_align} ({arrow})",
+            severity="minor",
+            old_value=prev_align,
+            new_value=cur_align,
+            ts_iso=ts_iso,
+        ))
+    return out

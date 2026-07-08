@@ -441,7 +441,7 @@ def _simplify_indicator_summary(ind_results: dict[str, Any]) -> dict[str, Any]:
             # 20-period average volume for relative comparison
             window = min(20, len(volume))
             avg_vol = volume.iloc[-window:].mean()
-            entry["avg_volume"] = round(float(avg_vol), 2) if not pd.isna(avg_vol) else None
+            entry["avg_volume"] = round(float(avg_vol), 2) if avg_vol is not None and avg_vol == avg_vol else None
 
         # ── MACD signal for cross detection ──────────────────────────
         macd = data.get("macd", {})

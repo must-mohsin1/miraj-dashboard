@@ -2,16 +2,16 @@
 
 import { useMemo, useState } from "react";
 import {
+  Activity,
   ArrowDown,
   ArrowUp,
-  ArrowRightLeft,
-  BarChart4,
-  Eye,
+  BarChart3,
   FlipHorizontal,
-  Info,
+  Layers,
+  LineChart,
   Minus,
   TrendingUp,
-  Zap,
+  Volume2,
 } from "lucide-react";
 import useSWR from "swr";
 
@@ -26,12 +26,10 @@ import type { ScanDiffResponse, ScanDiffEntry, Severity } from "@/lib/types";
  * timeline of changes with colour coding by severity:
  *   - major → red    (QQE flip, structure change, score drop >5)
  *   - minor → amber  (score change 1–5, indicator tweaks)
- *   - info  → blue   (rationale text, volume changes)
+ *   - info  → blue   (rationale text, confirmation flips)
  *
- * Each change shows a field-specific icon, an old → new transition, and a
- * severity badge.  QQE flips get a coloured directional badge
- * (GREEN→RED = red, RED→GREEN = green).  Changes are grouped by severity:
- * major first, then minor, then info.
+ * Each change shows the field name, an old → new transition, and a
+ * severity badge. Score changes render an up/down arrow.
  *
  * Props:
  *   - symbol: the trading pair (e.g. "BTC-USD")
@@ -87,96 +85,64 @@ const SEVERITY_STYLES: Record<Severity, { dot: string; badge: string; row: strin
   },
 };
 
-/** Parse a QQE change string like "GREEN-STRONG → RED" into a direction. */
-function parseQqeDirection(change: string): "bearish" | "bullish" | "neutral" {
-  const upper = change.toUpperCase();
-  const greenWords = ["GREEN", "GREEN-STRONG"];
-  const redWords = ["RED", "RED-STRONG"];
-
-  for (const gw of greenWords) {
-    for (const rw of redWords) {
-      if (upper.includes(`${gw} → ${rw}`)) return "bearish";
-      if (upper.includes(`${rw} → ${gw}`)) return "bullish";
-    }
-  }
-  return "neutral";
+/** Map a change's field path to a display category label. */
+function categoryLabel(field: string): string {
+  if (field.startsWith("score.")) return "Score";
+  if (field.startsWith("qqe_signals.")) return "QQE";
+  if (field.startsWith("structure.")) return "Structure";
+  if (field.startsWith("trade_plan.")) return "Trade Plan";
+  if (field.startsWith("patterns.")) return "Patterns";
+  if (field.startsWith("volume.")) return "Volume";
+  if (field.startsWith("indicators.")) return "Indicators";
+  return "Other";
 }
 
-/** QQE flip badge styles: bearish (green→red) = red badge, bullish (red→green) = green */
-function qqeFlipBadge(direction: "bearish" | "bullish" | "neutral") {
-  if (direction === "bearish") {
-    return {
-      icon: <Zap className="h-3 w-3 text-red-400" />,
-      label: "BEARISH FLIP",
-      className: "border-red-500/40 bg-red-500/15 text-red-400",
-    };
-  }
-  if (direction === "bullish") {
-    return {
-      icon: <Zap className="h-3 w-3 text-emerald-400" />,
-      label: "BULLISH FLIP",
-      className: "border-emerald-500/40 bg-emerald-500/15 text-emerald-400",
-    };
-  }
-  return {
-    icon: <Zap className="h-3 w-3 text-amber-400" />,
-    label: "QQE CHANGE",
-    className: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+/** Sort key for ordering categories in the UI. */
+function categoryOrder(field: string): number {
+  const order: Record<string, number> = {
+    "Score": 0,
+    "QQE": 1,
+    "Structure": 2,
+    "Volume": 3,
+    "Indicators": 4,
+    "Patterns": 5,
+    "Trade Plan": 6,
   };
+  return order[categoryLabel(field)] ?? 99;
 }
 
-/** Return an icon element appropriate for the change field type. */
+/** Pick an icon for a change based on its field/severity. */
 function changeIcon(entry: ScanDiffEntry) {
   const f = entry.field;
-  const c = entry.change;
-
-  // Score changes: arrow up/down
   if (f.startsWith("score.total") || f.startsWith("score.")) {
-    const isUp = c.includes("▲");
-    const isDown = c.includes("▼");
+    // Score change: arrow up/down
+    const isUp = entry.change.includes("▲");
+    const isDown = entry.change.includes("▼");
     if (isUp) return <ArrowUp className="h-3.5 w-3.5 text-emerald-400" />;
     if (isDown) return <ArrowDown className="h-3.5 w-3.5 text-red-400" />;
   }
-
-  // QQE signal changes: zap/flip icon
-  if (f.startsWith("qqe_signals.")) {
-    const dir = parseQqeDirection(c);
-    if (dir === "bearish") return <Zap className="h-3.5 w-3.5 text-red-400" />;
-    if (dir === "bullish") return <Zap className="h-3.5 w-3.5 text-emerald-400" />;
-    return <Zap className="h-3.5 w-3.5 text-amber-400" />;
+  if (f.startsWith("qqe_signals.") || f.startsWith("structure.")) {
+    return <FlipHorizontal className="h-3.5 w-3.5 text-amber-400" />;
   }
-
-  // Structure (HH/HL/LH/LL) changes: arrow right-left
-  if (f.startsWith("structure.")) {
-    return <ArrowRightLeft className="h-3.5 w-3.5 text-red-400" />;
-  }
-
-  // Indicator changes (BB squeeze, RSI, EMA cross): activity/info icon
-  if (f.startsWith("indicators.")) {
-    return <Activity className="h-3.5 w-3.5 text-amber-400" />;
-  }
-
-  // Pattern changes (new / invalidated / confirmed): eye icon
-  if (f.startsWith("patterns.")) {
-    return <Eye className="h-3.5 w-3.5 text-amber-400" />;
-  }
-
-  // Volume changes: bar-chart icon
-  if (f.startsWith("volume.")) {
-    return <BarChart4 className="h-3.5 w-3.5 text-blue-400" />;
-  }
-
-  // Trade plan direction/decision: flip icon
   if (f.startsWith("trade_plan.direction") || f.startsWith("trade_plan.trade_decision")) {
     return <FlipHorizontal className="h-3.5 w-3.5 text-amber-400" />;
   }
-
-  // Trade plan price levels: trending up
-  if (f.startsWith("trade_plan.")) {
-    return <TrendingUp className="h-3.5 w-3.5 text-amber-400" />;
+  if (f.startsWith("volume.")) {
+    return <BarChart3 className="h-3.5 w-3.5 text-blue-400" />;
   }
-
-  return <Info className="h-3.5 w-3.5 text-slate-500" />;
+  if (f.startsWith("indicators.")) {
+    if (f.includes("macd_cross")) return <TrendingUp className="h-3.5 w-3.5 text-purple-400" />;
+    if (f.includes("ema_alignment")) return <Activity className="h-3.5 w-3.5 text-purple-400" />;
+    if (f.includes("bb_squeeze")) return <Layers className="h-3.5 w-3.5 text-sky-400" />;
+    if (f.includes("ema_cross")) return <LineChart className="h-3.5 w-3.5 text-sky-400" />;
+    if (f.includes("rsi")) return <Activity className="h-3.5 w-3.5 text-sky-400" />;
+    return <LineChart className="h-3.5 w-3.5 text-sky-400" />;
+  }
+  if (f.startsWith("patterns.")) {
+    if (entry.severity === "major") return <ArrowUp className="h-3.5 w-3.5 text-red-400" />;
+    return <Minus className="h-3.5 w-3.5 text-slate-500" />;
+  }
+  return <Minus className="h-3.5 w-3.5 text-slate-500" />;
 }
 
 /** Format an ISO-8601 timestamp as a relative "time ago" string. */
@@ -195,74 +161,14 @@ function formatRelative(iso: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-/** Sort changes by severity: major first, minor second, info last. */
-function sortBySeverity(changes: ScanDiffEntry[]): ScanDiffEntry[] {
-  const order: Record<Severity, number> = { major: 0, minor: 1, info: 2 };
-  return [...changes].sort(
-    (a, b) => (order[a.severity] ?? 2) - (order[b.severity] ?? 2),
-  );
-}
-
 /**
- * Render a single change entry row.
+ * Extract a short label from the change text for display purposes.
+ * For changes like "GREEN → RED" we show just the transition part.
  */
-function ChangeRow({ entry }: { entry: ScanDiffEntry }) {
-  const styles = SEVERITY_STYLES[entry.severity] ?? SEVERITY_STYLES.info;
-  const isQqe = entry.field.startsWith("qqe_signals.");
-  const qqeDir = isQqe ? parseQqeDirection(entry.change) : null;
-
-  return (
-    <li
-      className={cn(
-        "flex items-start gap-2.5 rounded-lg border px-3 py-2",
-        styles.row,
-      )}
-    >
-      {/* severity dot */}
-      <span
-        className={cn(
-          "mt-1 h-2 w-2 shrink-0 rounded-full",
-          styles.dot,
-        )}
-      />
-      {/* field-specific icon */}
-      <span className="mt-0.5 shrink-0">{changeIcon(entry)}</span>
-      {/* field + change */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <code className="truncate text-xs font-medium text-slate-200">
-            {entry.field}
-          </code>
-          <div className="flex shrink-0 items-center gap-1">
-            {/* QQE flip-specific directional badge */}
-            {isQqe && qqeDir && (
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                  qqeFlipBadge(qqeDir).className,
-                )}
-              >
-                {qqeFlipBadge(qqeDir).icon}
-                {qqeFlipBadge(qqeDir).label}
-              </span>
-            )}
-            {/* severity badge */}
-            <span
-              className={cn(
-                "inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                styles.badge,
-              )}
-            >
-              {entry.severity}
-            </span>
-          </div>
-        </div>
-        <p className="mt-0.5 text-xs text-slate-400">
-          {entry.change}
-        </p>
-      </div>
-    </li>
-  );
+function shortChangeLabel(change: string): string {
+  // Limit to a reasonable width
+  if (change.length > 60) return change.slice(0, 57) + "...";
+  return change;
 }
 
 export function SignalChangesPanel({
@@ -307,10 +213,37 @@ export function SignalChangesPanel({
 
   if (!data) return null;
 
-  // Sort changes by severity: major → minor → info
-  const sortedChanges = useMemo(() => sortBySeverity(data.changes), [data.changes]);
-  const changes = variant === "compact" ? sortedChanges.slice(0, limit) : sortedChanges;
-  const totalChanges = sortedChanges.length;
+  // Group changes by category
+  const grouped = useMemo(() => {
+    const groups: Record<string, ScanDiffEntry[]> = {};
+    const categoryOrderMap: Record<string, number> = {};
+
+    for (const ch of data.changes) {
+      const cat = categoryLabel(ch.field);
+      if (!groups[cat]) {
+        groups[cat] = [];
+        categoryOrderMap[cat] = categoryOrder(ch.field);
+      }
+      groups[cat].push(ch);
+    }
+
+    // Sort categories by order, then changes by severity within each group
+    const sorted = Object.entries(groups).sort(
+      ([a], [b]) => (categoryOrderMap[a] ?? 99) - (categoryOrderMap[b] ?? 99)
+    );
+
+    // Sort changes within each category by severity: major first, then minor, info
+    for (const [, changes] of sorted) {
+      changes.sort((a, b) => {
+        const sevOrder = { major: 0, minor: 1, info: 2 };
+        return (sevOrder[a.severity] ?? 3) - (sevOrder[b.severity] ?? 3);
+      });
+    }
+
+    return sorted;
+  }, [data.changes]);
+
+  const totalChanges = data.changes.length;
   const scoreDelta =
     data.previous_score != null && data.latest_score != null
       ? data.latest_score - data.previous_score
@@ -326,7 +259,7 @@ export function SignalChangesPanel({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {/* Header strip: score delta + summary counts */}
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-slate-400">
@@ -353,7 +286,7 @@ export function SignalChangesPanel({
               ` (${scoreDelta > 0 ? "+" : ""}${scoreDelta.toFixed(1)})`}
           </span>
         )}
-        <div className="flex items-center gap-1.5 ml-auto">
+        <div className="ml-auto flex items-center gap-1.5">
           {data.summary.major > 0 && (
             <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-red-400">
               {data.summary.major} major
@@ -372,18 +305,81 @@ export function SignalChangesPanel({
         </div>
       </div>
 
-      {/* Change list — grouped by severity */}
-      <ul className="space-y-1.5">
-        {changes.map((entry, i) => (
-          <ChangeRow key={`${entry.field}-${i}`} entry={entry} />
-        ))}
-      </ul>
+      {/* Category-grouped change list */}
+      <div className="space-y-3">
+        {grouped.slice(0, variant === "compact" ? undefined : undefined).map(([category, changes]) => {
+          const visible = variant === "compact" ? changes.slice(0, limit) : changes;
+          const totalInCat = changes.length;
+          return (
+            <div key={category}>
+              {/* Category header */}
+              <h4 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                {category}
+                <span className="ml-1.5 text-slate-600">
+                  ({totalInCat})
+                </span>
+              </h4>
+
+              {/* Changes for this category */}
+              <ul className="space-y-1">
+                {visible.map((entry, i) => {
+                  const styles = SEVERITY_STYLES[entry.severity] ?? SEVERITY_STYLES.info;
+                  return (
+                    <li
+                      key={`${entry.field}-${i}`}
+                      className={cn(
+                        "flex items-start gap-2.5 rounded-lg border px-3 py-2",
+                        styles.row,
+                      )}
+                    >
+                      {/* severity dot */}
+                      <span
+                        className={cn(
+                          "mt-1 h-2 w-2 shrink-0 rounded-full",
+                          styles.dot,
+                        )}
+                      />
+                      {/* icon */}
+                      <span className="mt-0.5 shrink-0">{changeIcon(entry)}</span>
+                      {/* field + change */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <code className="truncate text-xs font-medium text-slate-200">
+                            {entry.field}
+                          </code>
+                          <span
+                            className={cn(
+                              "inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                              styles.badge,
+                            )}
+                          >
+                            {entry.severity}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-xs text-slate-400">
+                          {shortChangeLabel(entry.change)}
+                        </p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              {/* "...and N more" if truncated per category */}
+              {variant === "compact" && totalInCat > limit && (
+                <p className="pt-0.5 text-[11px] text-slate-500">
+                  … and {totalInCat - limit} more in {category.toLowerCase()}
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
 
       {/* "showing N of M" footer for compact */}
       {variant === "compact" && totalChanges > limit && (
         <p className="pt-1 text-xs text-slate-500">
-          Showing {limit} of {totalChanges} changes from the last diff (sorted
-          by severity: major → minor → info).
+          Showing {limit} of {totalChanges} changes from the last diff.
         </p>
       )}
     </div>
