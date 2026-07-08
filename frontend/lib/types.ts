@@ -1066,3 +1066,63 @@ export interface DeepScanResult extends ScanResult {
   deep_analysis: DeepAnalysis;
 }
 
+// ── Dynamic DCA ────────────────────────────────────────────────────────────
+
+/**
+ * A single RSI / zone entry in the three-entry DCA ladder.
+ * (Spec: DYNAMIC_DCA_IMPLEMENTATION.md §7.5)
+ */
+export interface DcaEntryLevel {
+  entry: string;
+  trigger: string;
+  position_size_pct: string;
+  cumulative_pct: string;
+  status: "filled" | "pending";
+  trigger_type: "rsi" | "zone";
+  rsi_target: number;
+  level_price: number | null;
+}
+
+/** OTE / DCA zone used for zone-based adds. */
+export interface DcaZone {
+  low: number;
+  high: number;
+  label: string;
+}
+
+/**
+ * A single position's Dynamic DCA recommendation.
+ * Returned by `GET /api/v1/portfolio/{exchange}/dca`.
+ */
+export interface DcaRecommendation {
+  symbol: string;
+  position_side: string;
+  entry_price: number;
+  mark_price: number;
+  pnl: number;
+  pnl_percent: number;
+  leverage: number;
+  recommendation: "ADD" | "HOLD" | "REDUCE" | "CLOSE";
+  reason: string;
+  confidence: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  rsi_current: number | null;
+  rsi_entries: DcaEntryLevel[];
+  next_entry: DcaEntryLevel | null;
+  dca_zone: DcaZone | null;
+  tp_levels: number[];
+  risk_rules: string[];
+  future_add_triggers: string[];
+  action_items: string[];
+}
+
+/** Response from `GET /api/v1/portfolio/{exchange}/dca`. */
+export interface DcaResponse {
+  exchange: string;
+  total_positions: number;
+  add_count: number;
+  reduce_count: number;
+  close_count: number;
+  hold_count: number;
+  positions: DcaRecommendation[];
+}
+

@@ -21,6 +21,7 @@ import { LivePortfolioHeader } from "@/components/portfolio/live-portfolio-heade
 import { AnalyticsDashboard } from "@/components/portfolio/analytics-dashboard";
 import { PositionAlertsPanel } from "@/components/portfolio/position-alerts-panel";
 import { RiskMetricsPanel } from "@/components/portfolio/risk-metrics-panel";
+import { DcaPanel } from "@/components/portfolio/dca-panel";
 import type { PortfolioResponse, PositionAlertItem, PositionAlertsResponse } from "@/lib/types";
 import type { PriceMap } from "@/hooks/use-price-stream";
 
@@ -488,6 +489,9 @@ export function PortfolioDashboard({
 
       {/* Position alerts panel (Miraj cross-reference) — above tabs */}
       <PositionAlertsPanel token={token} exchange={exchange} />
+
+      {/* Dynamic DCA — per-position actionable recommendations */}
+      <DcaPanel token={token} exchange={exchange} />
 
       {/* Tabs */}
       <Tabs defaultValue="balances" className="w-full">
