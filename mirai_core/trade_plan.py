@@ -126,6 +126,9 @@ def generate_trade_plan(
                 "description": "2R+ at next supply/demand",
             },
         ],
+        # Explicit TP prices for DCA engine (top-level convenience fields)
+        "tp1_price": tp1,
+        "tp2_price": tp2,
         "rsi_entry_system": {
             "current_rsi": rsi_current,
             "entries": entries,

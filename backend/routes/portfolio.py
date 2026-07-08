@@ -219,6 +219,65 @@ class PositionAlertsResponse(BaseModel):
     positions: List[PositionAlertItem]
 
 
+# ── Dynamic DCA schemas (position-aware DCA engine) ─────────────────────────
+
+
+class DcaEntryLevel(BaseModel):
+    """A single rung in the adaptive RSI three-entry ladder."""
+
+    entry: str
+    trigger: str
+    position_size_pct: str
+    cumulative_pct: str
+    status: str = Field(description="filled or pending")
+    trigger_type: str = Field(description="rsi or zone")
+    rsi_target: int
+    level_price: Optional[float] = None
+
+
+class DcaZone(BaseModel):
+    """OTE / demand zone used as the primary DCA trigger."""
+
+    low: float
+    high: float
+    label: str
+
+
+class DcaRecommendation(BaseModel):
+    """DCA recommendation for a single open position."""
+
+    symbol: str
+    position_side: str
+    entry_price: float
+    mark_price: float
+    pnl: float
+    pnl_percent: float
+    leverage: float
+    recommendation: str = Field(description="ADD / HOLD / REDUCE / CLOSE")
+    reason: str
+    confidence: str = Field(description="LOW / MEDIUM / HIGH / CRITICAL")
+    rsi_current: Optional[float] = None
+    rsi_entries: List[DcaEntryLevel] = []
+    next_entry: Optional[DcaEntryLevel] = None
+    dca_zone: Optional[DcaZone] = None
+    tp_levels: List[float] = []
+    risk_rules: List[str] = []
+    future_add_triggers: List[str] = []
+    action_items: List[str] = []
+
+
+class DcaResponse(BaseModel):
+    """Response for GET /api/v1/portfolio/{exchange}/dca."""
+
+    exchange: str
+    total_positions: int
+    add_count: int
+    reduce_count: int
+    close_count: int
+    hold_count: int
+    positions: List[DcaRecommendation]
+
+
 class HistoryResponse(BaseModel):
     """Response for `GET /api/v1/portfolio/{exchange}/history`."""
 
@@ -850,6 +909,70 @@ async def get_position_alerts(
         danger_count=danger_count,
         warning_count=warning_count,
         positions=[PositionAlertItem(**item) for item in alert_items],
+    )
+
+
+@router.get(
+    "/{exchange}/dca",
+    response_model=DcaResponse,
+    responses={
+        404: {"model": PortfolioErrorResponse, "description": "Unsupported exchange"},
+        501: {"model": PortfolioErrorResponse, "description": "ccxt not installed"},
+    },
+)
+async def get_dca_recommendations(
+    exchange: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DcaResponse:
+    """Dynamic DCA recommendations for open positions.
+
+    For every open position, fetches the latest Miraj pair analysis
+    and computes: ADD / HOLD / REDUCE / CLOSE with an adaptive RSI
+    three-entry ladder, OTE zone, TP levels, action items, and future
+    ADD triggers.
+
+    Decision hierarchy:
+    1. Hard exits (liquidation proximity, confluence flip, BMSB regime)
+    2. Profit-taking (+100% PnL, TP1/TP2 hit)
+    3. QQE conflicts (daily+4H both against, or only 4H)
+    4. DCA disabled (BB squeeze, no QQE aligned, confluence < 10, opposite pattern)
+    5. Zone-based ADD (price in OTE + QQE aligned + optional RSI oversold)
+    6. Default → HOLD
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+
+    positions = await _load_positions(session, current_user.id, exchange_slug)
+    if not positions:
+        return DcaResponse(
+            exchange=exchange_slug,
+            total_positions=0,
+            add_count=0,
+            reduce_count=0,
+            close_count=0,
+            hold_count=0,
+            positions=[],
+        )
+
+    position_dicts = [_serialise_position(p) for p in positions]
+
+    from backend.services.dca_service import compute_dca_recommendations
+
+    dca_items = await compute_dca_recommendations(position_dicts)
+
+    add_count = sum(1 for i in dca_items if i["recommendation"] == "ADD")
+    reduce_count = sum(1 for i in dca_items if i["recommendation"] == "REDUCE")
+    close_count = sum(1 for i in dca_items if i["recommendation"] == "CLOSE")
+    hold_count = sum(1 for i in dca_items if i["recommendation"] == "HOLD")
+
+    return DcaResponse(
+        exchange=exchange_slug,
+        total_positions=len(dca_items),
+        add_count=add_count,
+        reduce_count=reduce_count,
+        close_count=close_count,
+        hold_count=hold_count,
+        positions=[DcaRecommendation(**item) for item in dca_items],
     )
 
 

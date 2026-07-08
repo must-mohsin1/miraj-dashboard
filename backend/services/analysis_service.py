@@ -726,6 +726,11 @@ def _build_flat_trade_plan(tp: dict[str, Any]) -> dict[str, Any]:
             level = tgt.get("level") if isinstance(tgt, dict) else None
             flat[f"target_{i + 1}"] = level
     flat["rationale"] = tp.get("reasoning") or tp.get("verdict", "")
+
+    # Explicit TP prices for DCA engine
+    flat["tp1_price"] = tp.get("tp1_price")
+    flat["tp2_price"] = tp.get("tp2_price")
+
     return flat
 
 

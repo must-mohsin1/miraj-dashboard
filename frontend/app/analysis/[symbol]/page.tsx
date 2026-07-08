@@ -28,6 +28,7 @@ import { MetricTrends } from "@/components/metric-trends";
 import { ScoreProgressionChart } from "@/components/score-progression-chart";
 import { MacroStrip } from "@/components/macro-strip";
 import { DeepScanPanel } from "@/components/deep-scan-panel";
+import { DcaStrategyPanel } from "@/components/dca-strategy-panel";
 import { ChartSkeleton } from "@/components/skeletons";
 
 /**
@@ -314,6 +315,16 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
           <TradePlan tradePlan={flat as TradePlanFlat | null} />
         </div>
       </section>
+
+      {/* ── DCA Strategy Panel (hidden trade_plan data exposed) ── */}
+      <DcaStrategyPanel
+        tradePlan={result.trade_plan}
+        confluenceScore={result.confluence_score}
+        qqeSignals={result.qqe_signals}
+        indicators={result.indicators}
+        bmsb={result.bmsb}
+        direction={direction ?? null}
+      />
 
       {/* ICT kill-zone clock (live, above the chart) */}
       <KillZoneClock />
