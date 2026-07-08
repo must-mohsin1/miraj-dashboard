@@ -292,7 +292,7 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
       /> */}
 
       {/* ── Deep Scan button + panel ── */}
-      <DeepScanPanel symbol={result.symbol} />
+      {/* <DeepScanPanel symbol={result.symbol} /> */}
 
       {/* Top row: Score gauge + Trade plan */}
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
