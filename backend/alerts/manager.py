@@ -148,7 +148,9 @@ async def _process_single_result(
     pair_settings = pair_settings_map.get(symbol, {})
 
     # ── Check alert_enabled ───────────────────────────────────────────
-    if pair_settings.get("alert_enabled") is False:
+    # Use truthiness check (not identity 'is False') so that any falsy
+    # value (False, 0, None, "") correctly disables alerts.
+    if not pair_settings.get("alert_enabled", True):
         logger.debug(
             "Alert disabled for %s (user %d) via pair settings",
             symbol, user_id,

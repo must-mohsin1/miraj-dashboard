@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -34,6 +35,17 @@ from backend.services.export_service import generate_csv, generate_pdf
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["scan"])
+
+#: Validate that a symbol matches supported quote currencies (XXX-USD or
+#: XXX-USDT).  This is a fast format check that doesn't hit the network.
+#: Symbols like "FOOBAR-USD" pass format validation but fail later in the
+#: yfinance existence check — the timeout below prevents indefinite hangs.
+_SYMBOL_FORMAT_RE = re.compile(r"^[A-Z0-9]{1,12}-?(USD|USDT)$")
+
+#: Maximum time a single scan is allowed to take before we abort and
+#: return an error to the client.  Prevents ccxt/yfinance hangs from
+#: blocking the request indefinitely.
+SCAN_TIMEOUT_SECONDS = 30
 
 
 # ── Pydantic response model (defined inline for locality) ────────────────
@@ -113,7 +125,16 @@ async def scan_symbol(
     # Normalise symbol (uppercase, strip whitespace)
     symbol = symbol.strip().upper()
 
-    # ── Validate symbol ────────────────────────────────────────────
+    # ── Validate symbol format (fast, no network) ────────────────────
+    # Reject malformed symbols before hitting yfinance so users get an
+    # immediate 400 instead of a multi-second hang.
+    if not _SYMBOL_FORMAT_RE.match(symbol):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid symbol format: '{symbol}'. Expected XXX-USD or XXX-USDT (e.g. BTC-USD).",
+        )
+
+    # ── Validate symbol exists via yfinance ─────────────────────────
     if not validate_symbol(symbol):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -125,9 +146,18 @@ async def scan_symbol(
     if cached is not None:
         return cached
 
-    # ── Run pipeline ───────────────────────────────────────────────
+    # ── Run pipeline (with 30s timeout to prevent indefinite hangs) ─
     try:
-        result = await asyncio.to_thread(run_scan, symbol)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(run_scan, symbol),
+            timeout=SCAN_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.error("Scan for %s timed out after %ds", symbol, SCAN_TIMEOUT_SECONDS)
+        raise HTTPException(
+            status_code=status.HTTP_408_REQUEST_TIMEOUT,
+            detail=f"Scan for '{symbol}' timed out after {SCAN_TIMEOUT_SECONDS}s. The market data service may be unavailable.",
+        )
     except RuntimeError as exc:
         # Critical upstream API failure → 502
         logger.error("Scan pipeline failed for %s: %s", symbol, exc)
@@ -237,7 +267,16 @@ async def export_analysis(
 
     # Run (or fetch cached) analysis
     try:
-        result = await asyncio.to_thread(run_scan, symbol)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(run_scan, symbol),
+            timeout=SCAN_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.error("Export scan for %s timed out after %ds", symbol, SCAN_TIMEOUT_SECONDS)
+        raise HTTPException(
+            status_code=status.HTTP_408_REQUEST_TIMEOUT,
+            detail=f"Scan for '{symbol}' timed out after {SCAN_TIMEOUT_SECONDS}s.",
+        )
     except RuntimeError as exc:
         logger.error("Export pipeline failed for %s: %s", symbol, exc)
         raise HTTPException(
@@ -349,7 +388,16 @@ async def deep_scan_symbol(
     _clear_cache(symbol)
 
     try:
-        result = await asyncio.to_thread(run_scan, symbol)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(run_scan, symbol),
+            timeout=SCAN_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.error("Deep scan for %s timed out after %ds", symbol, SCAN_TIMEOUT_SECONDS)
+        raise HTTPException(
+            status_code=status.HTTP_408_REQUEST_TIMEOUT,
+            detail=f"Deep scan for '{symbol}' timed out after {SCAN_TIMEOUT_SECONDS}s.",
+        )
     except RuntimeError as exc:
         logger.error("Deep scan pipeline failed for %s: %s", symbol, exc)
         raise HTTPException(

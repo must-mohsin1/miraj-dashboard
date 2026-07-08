@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, BookOpen, Loader2, Plus, Tag } from "lucide-react";
 
@@ -51,6 +52,7 @@ export function JournalDashboard({
   const [loading, setLoading] = useState(true);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [authRequired, setAuthRequired] = useState(false);
 
   // Dialog state.
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -63,7 +65,7 @@ export function JournalDashboard({
     try {
       const res = await fetch("/api/auth/session");
       const data = await res.json();
-      return data?.user?.accessToken ?? null;
+      return data?.accessToken ?? data?.user?.accessToken ?? null;
     } catch {
       return null;
     }
@@ -72,14 +74,27 @@ export function JournalDashboard({
   /** Fetch the journal entries list. */
   const fetchEntries = useCallback(async () => {
     const t = await getToken();
-    const headers: HeadersInit = {};
-    if (t) headers.Authorization = `Bearer ${t}`;
+    if (!t) {
+      setEntries([]);
+      setAuthRequired(true);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    const headers: HeadersInit = { Authorization: `Bearer ${t}` };
 
     setLoading(true);
     setError(null);
+    setAuthRequired(false);
     try {
       const res = await fetch("/api/v1/journal", { headers });
       if (!res.ok) {
+        if (res.status === 401) {
+          setEntries([]);
+          setAuthRequired(true);
+          return;
+        }
         let detail = "";
         try {
           detail = (await res.json())?.detail ?? "";
@@ -92,6 +107,7 @@ export function JournalDashboard({
       }
       const data: JournalListResponse = await res.json();
       setEntries(data.entries ?? []);
+      setAuthRequired(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -102,8 +118,13 @@ export function JournalDashboard({
   /** Fetch the tag summary from the analytics endpoint. */
   const fetchSummary = useCallback(async () => {
     const t = await getToken();
-    const headers: HeadersInit = {};
-    if (t) headers.Authorization = `Bearer ${t}`;
+    if (!t) {
+      setSummary(null);
+      setSummaryLoading(false);
+      return;
+    }
+
+    const headers: HeadersInit = { Authorization: `Bearer ${t}` };
 
     setSummaryLoading(true);
     try {
@@ -151,13 +172,22 @@ export function JournalDashboard({
       return;
     }
     const t = await getToken();
-    const headers: HeadersInit = {};
-    if (t) headers.Authorization = `Bearer ${t}`;
+    if (!t) {
+      setAuthRequired(true);
+      setError(null);
+      return;
+    }
+    const headers: HeadersInit = { Authorization: `Bearer ${t}` };
     try {
       const res = await fetch(`/api/v1/journal/${entry.id}`, {
         method: "DELETE",
         headers,
       });
+      if (res.status === 401) {
+        setAuthRequired(true);
+        setError(null);
+        return;
+      }
       if (!res.ok && res.status !== 204) {
         let detail = "";
         try {
@@ -199,6 +229,7 @@ export function JournalDashboard({
         </div>
         <Button
           onClick={handleAdd}
+          disabled={authRequired}
           className="bg-emerald-600 text-white hover:bg-emerald-500"
         >
           <Plus className="h-4 w-4" />
@@ -210,6 +241,29 @@ export function JournalDashboard({
         <div className="flex items-start gap-2 rounded-md border border-red-800/50 bg-red-500/10 p-3 text-sm text-red-400">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span className="break-words">{error}</span>
+        </div>
+      )}
+
+      {authRequired && (
+        <div
+          role="status"
+          className="flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+            <div>
+              <p className="font-medium text-amber-100">Please log in to view your journal.</p>
+              <p className="mt-1 text-amber-100/80">
+                Your session may have expired. Sign in again to load entries and add journal notes.
+              </p>
+            </div>
+          </div>
+          <Button
+            asChild
+            className="shrink-0 bg-amber-300 text-slate-950 hover:bg-amber-200"
+          >
+            <Link href="/login">Go to login</Link>
+          </Button>
         </div>
       )}
 
@@ -273,7 +327,7 @@ export function JournalDashboard({
       </div>
 
       {/* Journal list */}
-      {loading ? (
+      {authRequired ? null : loading ? (
         <div className="flex items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-sm text-slate-400">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading journal entries…

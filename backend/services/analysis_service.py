@@ -655,6 +655,22 @@ def _extract_price_levels(
         stop_loss = entry_price + stop_offset
 
     stop_loss = max(stop_loss, 0.01)  # positive price
+
+    # ── Ensure minimum 1% distance from entry ───────────────────────
+    # If the calculated stop_loss is within 0.1% of entry, use ATR-based
+    # fallback (ATR * 1.5).  Guarantee at least 1% distance in all cases.
+    min_distance = entry_price * 0.01  # 1% of entry price
+    if abs(entry_price - stop_loss) < min_distance:
+        if atr_val is not None and atr_val > 0:
+            fallback_offset = max(atr_val * 1.5, min_distance)
+        else:
+            fallback_offset = min_distance
+        if is_long:
+            stop_loss = entry_price - fallback_offset
+        else:
+            stop_loss = entry_price + fallback_offset
+        stop_loss = max(stop_loss, 0.01)
+
     levels["stop_loss"] = round(stop_loss, 2)
 
     # ── Take-profit levels based on risk distance ─────────────────

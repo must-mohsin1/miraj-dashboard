@@ -22,6 +22,7 @@ import time
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user
 from backend.models import User
@@ -54,6 +55,31 @@ _YF_TF: dict[str, tuple[str, str]] = {
     "1d": ("1d", "2y"),
     "1w": ("1wk", "5y"),
 }
+
+# ── Response models ───────────────────────────────────────────────────────
+
+
+class DrawingItem(BaseModel):
+    """Persisted chart drawing item.
+
+    The backend currently has no drawing persistence.  This model documents
+    the forward-compatible shape for future drawing storage while allowing the
+    frontend contract to receive a graceful empty state today.
+    """
+
+    id: str
+    type: str
+    points: list[dict[str, Any]] = Field(default_factory=list)
+    style: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DrawingsResponse(BaseModel):
+    symbol: str
+    timeframe: Timeframe
+    drawings: list[DrawingItem]
+    total: int
+
 
 # ── In-memory cache ───────────────────────────────────────────────────────
 
@@ -257,7 +283,29 @@ def _yf_download_safe(symbol: str, interval: str, period: str):
     return df
 
 
-# ── Route ────────────────────────────────────────────────────────────────
+# ── Routes ───────────────────────────────────────────────────────────────
+
+
+@router.get("/drawings", response_model=DrawingsResponse)
+async def get_drawings(
+    symbol: str = Query(..., min_length=1, description="Trading pair, e.g. BTC-USD"),
+    timeframe: Timeframe = Query("1d", description="1m|5m|15m|1h|4h|1d|1w"),
+    current_user: User = Depends(get_current_user),
+) -> DrawingsResponse:
+    """Return saved chart drawings for a symbol/timeframe.
+
+    Drawing persistence is not implemented yet, but the chart UI calls this
+    route. Returning an authenticated empty contract prevents a 404 and gives
+    the frontend a graceful empty state until persistence is added.
+    """
+    _ = current_user
+    symbol_norm = symbol.strip().upper()
+    return DrawingsResponse(
+        symbol=symbol_norm,
+        timeframe=timeframe,
+        drawings=[],
+        total=0,
+    )
 
 
 @router.get("/charts/{symbol}/candles")
