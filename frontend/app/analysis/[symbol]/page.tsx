@@ -228,7 +228,7 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
       {/* ── Macro context strip (BTC.D, USDT.D, F&G, DXY, L/S) ── */}
-      <MacroStrip />
+      {/* <MacroStrip /> */}
 
       {/* Header */}
       <header className="flex flex-col gap-3">
@@ -282,14 +282,14 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
       </header>
 
       {/* ── Metric Trends (compact trend arrows on key metrics) ── */}
-      <MetricTrends
+      {/* <MetricTrends
         symbol={result.symbol}
         token={token}
         currentScore={result.confluence_score}
         currentQqe={result.qqe_signals ?? null}
         currentStructure={result.structure ?? null}
         currentDirection={direction ?? null}
-      />
+      /> */}
 
       {/* ── Deep Scan button + panel ── */}
       <DeepScanPanel symbol={result.symbol} />
