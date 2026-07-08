@@ -341,7 +341,33 @@ def _build_markdown_report(
             lines.append(f"**Rationale**: {rationale}")
             lines.append("")
 
-    # ── Indicators Summary ────────────────────────────────────────────
+        # ── RSI Three-Entry System ──
+        if tp.get("rsi_entry_system"):
+            rsi_sys = tp["rsi_entry_system"]
+            lines.append("### RSI Three-Entry System")
+            lines.append("")
+            lines.append(f"- **Current RSI**: {rsi_sys.get('current_rsi', 'N/A')}")
+            for entry in rsi_sys.get("entries", []):
+                lines.append(f"- {entry['entry']}: {entry['trigger']} → {entry['position_size']}")
+            lines.append("")
+
+        # ── DCA Strategy ──
+        if tp.get("dca_strategy"):
+            lines.append("### DCA Strategy")
+            lines.append("")
+            for item in tp["dca_strategy"]:
+                lines.append(f"- {item}")
+            lines.append("")
+
+        # ── Risk Management ──
+        if tp.get("risk_management"):
+            lines.append("### Risk Management")
+            lines.append("")
+            for rule in tp["risk_management"]:
+                lines.append(f"- {rule}")
+            lines.append("")
+
+    # ── Indicators Summary ────────────────────────────────────────────────
     indicators = result.get("indicators", {})
     if indicators and isinstance(indicators, dict):
         lines.append("## Technical Indicators")
