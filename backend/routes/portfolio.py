@@ -219,65 +219,6 @@ class PositionAlertsResponse(BaseModel):
     positions: List[PositionAlertItem]
 
 
-# ── Dynamic DCA schemas (position-aware DCA engine) ─────────────────────────
-
-
-class DcaEntryLevel(BaseModel):
-    """A single rung in the adaptive RSI three-entry ladder."""
-
-    entry: str
-    trigger: str
-    position_size_pct: str
-    cumulative_pct: str
-    status: str = Field(description="filled or pending")
-    trigger_type: str = Field(description="rsi or zone")
-    rsi_target: int
-    level_price: Optional[float] = None
-
-
-class DcaZone(BaseModel):
-    """OTE / demand zone used as the primary DCA trigger."""
-
-    low: float
-    high: float
-    label: str
-
-
-class DcaRecommendation(BaseModel):
-    """DCA recommendation for a single open position."""
-
-    symbol: str
-    position_side: str
-    entry_price: float
-    mark_price: float
-    pnl: float
-    pnl_percent: float
-    leverage: float
-    recommendation: str = Field(description="ADD / HOLD / REDUCE / CLOSE")
-    reason: str
-    confidence: str = Field(description="LOW / MEDIUM / HIGH / CRITICAL")
-    rsi_current: Optional[float] = None
-    rsi_entries: List[DcaEntryLevel] = []
-    next_entry: Optional[DcaEntryLevel] = None
-    dca_zone: Optional[DcaZone] = None
-    tp_levels: List[float] = []
-    risk_rules: List[str] = []
-    future_add_triggers: List[str] = []
-    action_items: List[str] = []
-
-
-class DcaResponse(BaseModel):
-    """Response for GET /api/v1/portfolio/{exchange}/dca."""
-
-    exchange: str
-    total_positions: int
-    add_count: int
-    reduce_count: int
-    close_count: int
-    hold_count: int
-    positions: List[DcaRecommendation]
-
-
 class HistoryResponse(BaseModel):
     """Response for `GET /api/v1/portfolio/{exchange}/history`."""
 
@@ -912,6 +853,61 @@ async def get_position_alerts(
     )
 
 
+# ── Dynamic DCA (Dollar Cost Averaging) ──────────────────────────────────────
+
+
+class DcaEntryLevel(BaseModel):
+    """A single RSI three-entry level."""
+    entry: str
+    trigger: str
+    position_size_pct: str
+    cumulative_pct: str
+    status: str = Field(description="filled or pending")
+    trigger_type: str = Field(description="rsi or zone")
+    rsi_target: int
+    level_price: Optional[float] = None
+
+
+class DcaZone(BaseModel):
+    """The OTE / demand zone where DCA entries should be placed."""
+    low: float
+    high: float
+    label: str
+
+
+class DcaRecommendation(BaseModel):
+    """Dynamic DCA recommendation for a single open position."""
+    symbol: str
+    position_side: str
+    entry_price: float
+    mark_price: float
+    pnl: float
+    pnl_percent: float
+    leverage: float
+    recommendation: str = Field(description="ADD / HOLD / REDUCE / CLOSE")
+    reason: str
+    confidence: str = Field(description="LOW / MEDIUM / HIGH / CRITICAL")
+    rsi_current: Optional[float] = None
+    rsi_entries: List[DcaEntryLevel] = []
+    next_entry: Optional[DcaEntryLevel] = None
+    dca_zone: Optional[DcaZone] = None
+    tp_levels: List[float] = []
+    risk_rules: List[str] = []
+    future_add_triggers: List[str] = []
+    action_items: List[str] = []
+
+
+class DcaResponse(BaseModel):
+    """Response for GET /api/v1/portfolio/{exchange}/dca."""
+    exchange: str
+    total_positions: int
+    add_count: int
+    reduce_count: int
+    close_count: int
+    hold_count: int
+    positions: List[DcaRecommendation]
+
+
 @router.get(
     "/{exchange}/dca",
     response_model=DcaResponse,
@@ -927,18 +923,16 @@ async def get_dca_recommendations(
 ) -> DcaResponse:
     """Dynamic DCA recommendations for open positions.
 
-    For every open position, fetches the latest Miraj pair analysis
-    and computes: ADD / HOLD / REDUCE / CLOSE with an adaptive RSI
-    three-entry ladder, OTE zone, TP levels, action items, and future
-    ADD triggers.
+    For every open position, fetches the latest Miraj pair analysis (cached or
+    freshly run) and computes a DCA recommendation:
 
-    Decision hierarchy:
-    1. Hard exits (liquidation proximity, confluence flip, BMSB regime)
-    2. Profit-taking (+100% PnL, TP1/TP2 hit)
-    3. QQE conflicts (daily+4H both against, or only 4H)
-    4. DCA disabled (BB squeeze, no QQE aligned, confluence < 10, opposite pattern)
-    5. Zone-based ADD (price in OTE + QQE aligned + optional RSI oversold)
-    6. Default → HOLD
+    * **ADD** — price in OTE/demand zone + QQE aligned + RSI oversold.
+      Suggests next entry size per Miraj's 20/20/60 three-entry system.
+    * **HOLD** — position fine, no action needed.
+    * **REDUCE** — QQE flipped against, at TP1, PnL >= 100%, or below BMSB.
+    * **CLOSE** — confluence opposed with 3+ conflicts, or liquidation < 2%.
+
+    Returns adaptive RSI entry ladder, future ADD triggers, and action items.
     """
     exchange_slug = _require_supported_exchange(exchange)
 
