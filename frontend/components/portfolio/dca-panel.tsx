@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { DcaValidationEntry } from "@/components/portfolio/dca-validation-entry";
 import type {
   DcaEntryLevel,
   DcaRecommendation,
@@ -137,6 +138,15 @@ export function DcaPanel({ token, exchange }: DcaPanelProps) {
           {collapsed ? "Show" : "Hide"}
         </div>
       </button>
+
+      {!collapsed && (
+        <div className="border-t border-slate-800 px-3 py-2">
+          <DcaValidationEntry exchange={exchange} compact />
+          <span className="ml-2 text-xs text-slate-500">
+            Review reconstructed shadow-mode validation without changing these recommendations.
+          </span>
+        </div>
+      )}
 
       {!collapsed && (
         <div className="grid gap-3 p-3 pt-0 sm:grid-cols-2 xl:grid-cols-3">

@@ -10,6 +10,10 @@ from backend.auth import get_current_user
 from backend.database import Base, get_engine
 # Import portfolio models so Base.metadata.create_all() creates their tables.
 from backend.models import (  # noqa: F401 — imported for side effect (table registration)
+    DcaShadowDecisionHistory,
+    DcaShadowGlobalKillSwitch,
+    DcaShadowSymbolKillSwitch,
+    DcaShadowUserKillSwitch,
     ExchangeKey,
     OrderHistory,
     PortfolioBalance,
@@ -23,6 +27,7 @@ from backend.routes import (
     analytics_router,
     auth_router,
     charts_router,
+    dca_validation_router,
     history_router,
     journal_router,
     macro_router,
@@ -173,6 +178,7 @@ app.include_router(portfolio_router)
 app.include_router(charts_router)
 app.include_router(journal_router)
 app.include_router(trading_router)
+app.include_router(dca_validation_router)
 
 
 # ── Simple health / protected check ─────────────────────────────────────────

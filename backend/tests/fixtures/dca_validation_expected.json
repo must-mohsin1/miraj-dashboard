@@ -1,0 +1,458 @@
+{
+  "schema_version": 1,
+  "contract_document": "docs/dca-validation-domain-contract.md",
+  "method": "scan-to-scan",
+  "assumptions": {
+    "fee_percent": 0.04,
+    "fee_rate": 0.0004,
+    "slippage_percent": 0.05,
+    "slippage_rate": 0.0005,
+    "ambiguous_gap_hours": 48,
+    "minimum_usable_scans": 2,
+    "long_rsi_thresholds": [30, 24, 16],
+    "short_rsi_thresholds": [80, 92, 95],
+    "allocations_percent": [20, 20, 60],
+    "allocations_rate": [0.2, 0.2, 0.6],
+    "quantity_sizing": "allocation_notional_divided_by_executed_fill_price",
+    "long_entry_fill_price": "mark_price * (1 + slippage_rate)",
+    "long_exit_fill_price": "mark_price * (1 - slippage_rate)",
+    "short_entry_fill_price": "mark_price * (1 - slippage_rate)",
+    "short_exit_fill_price": "mark_price * (1 + slippage_rate)",
+    "net_pnl_formula": "gross_pnl - entry_slippage_impact - exit_slippage_impact - total_fees"
+  },
+  "fixtures": [
+    {
+      "id": "long_btc_closed_three_entries",
+      "symbol": "BTC/USDT:USDT",
+      "direction": "LONG",
+      "position_budget": 10000.0,
+      "expected_status": "closed",
+      "scan_summary": {
+        "first_scan_at": "2026-01-01T00:00:00Z",
+        "last_scan_at": "2026-01-07T00:00:00Z",
+        "usable_scan_count": 5,
+        "max_scan_gap_hours": 72,
+        "data_quality_warnings": [
+          "scan_gap_over_48h",
+          "fewer_than_30_reconstructed_events",
+          "assumed_fill_due_to_scan_gap"
+        ]
+      },
+      "scan_history": [
+        {
+          "scan_id": "L0",
+          "timestamp": "2026-01-01T00:00:00Z",
+          "mark_price": 100.0,
+          "indicators": {"daily": {"rsi": 35.0}},
+          "trade_plan": {"direction": "LONG"},
+          "expected_event": "no_fill"
+        },
+        {
+          "scan_id": "L1",
+          "timestamp": "2026-01-02T00:00:00Z",
+          "mark_price": 96.0,
+          "indicators": {"daily": {"rsi": 29.0}},
+          "trade_plan": {"direction": "LONG"},
+          "expected_event": "entry_1"
+        },
+        {
+          "scan_id": "L2",
+          "timestamp": "2026-01-05T00:00:00Z",
+          "mark_price": 88.0,
+          "indicators": {"daily": {"rsi": 20.0}},
+          "trade_plan": {"direction": "LONG"},
+          "expected_event": "entry_2_assumed_scan_gap"
+        },
+        {
+          "scan_id": "L3",
+          "timestamp": "2026-01-06T00:00:00Z",
+          "mark_price": 80.0,
+          "indicators": {"daily": {"rsi": 15.0}},
+          "trade_plan": {"direction": "LONG"},
+          "expected_event": "entry_3"
+        },
+        {
+          "scan_id": "L4",
+          "timestamp": "2026-01-07T00:00:00Z",
+          "mark_price": 110.0,
+          "indicators": {"daily": {"rsi": 55.0}},
+          "trade_plan": {"direction": "LONG"},
+          "expected_event": "validation_exit"
+        }
+      ],
+      "expected_fills": [
+        {
+          "entry_level": 1,
+          "rsi_threshold": 30,
+          "allocation_percent": 20,
+          "allocation_notional": 2000.0,
+          "scan_id": "L1",
+          "mark_price": 96.0,
+          "fill_price": 96.048,
+          "quantity": 20.822922,
+          "fee_amount": 0.8,
+          "slippage_impact": 0.9995,
+          "fill_confirmation": "confirmed",
+          "metrics_eligible": true
+        },
+        {
+          "entry_level": 2,
+          "rsi_threshold": 24,
+          "allocation_percent": 20,
+          "allocation_notional": 2000.0,
+          "scan_id": "L2",
+          "mark_price": 88.0,
+          "fill_price": 88.044,
+          "quantity": 22.715915,
+          "fee_amount": 0.8,
+          "slippage_impact": 0.9995,
+          "fill_confirmation": "assumed_scan_gap",
+          "metrics_eligible": true
+        },
+        {
+          "entry_level": 3,
+          "rsi_threshold": 16,
+          "allocation_percent": 60,
+          "allocation_notional": 6000.0,
+          "scan_id": "L3",
+          "mark_price": 80.0,
+          "fill_price": 80.04,
+          "quantity": 74.962519,
+          "fee_amount": 2.4,
+          "slippage_impact": 2.9985,
+          "fill_confirmation": "confirmed",
+          "metrics_eligible": true
+        }
+      ],
+      "expected_exit": {
+        "scan_id": "L4",
+        "timestamp": "2026-01-07T00:00:00Z",
+        "exit_signal": "validation_exit",
+        "mark_price": 110.0,
+        "fill_price": 109.945,
+        "fee_amount": 5.21
+      },
+      "expected_metrics": {
+        "status": "closed",
+        "total_quantity": 118.501355,
+        "average_mark_entry": 84.345048,
+        "average_executed_entry": 84.38722,
+        "gross_pnl": 3040.15,
+        "gross_profit": 3040.15,
+        "gross_loss": 0.0,
+        "profit_factor": null,
+        "profit_factor_reason": "gross_loss_is_zero",
+        "entry_slippage_impact": 5.0,
+        "exit_slippage_impact": 6.52,
+        "entry_fees": 4.0,
+        "exit_fees": 5.21,
+        "total_fees": 9.21,
+        "net_pnl": 3019.42,
+        "open_closed_status": "closed",
+        "max_scan_gap_hours": 72,
+        "reconstructed_trade_count": 1,
+        "entry_level_completion_rate": 1.0,
+        "three_entry_completion_rate": 1.0,
+        "sharpe_ratio": null,
+        "sharpe_ratio_reason": "fewer_than_2_return_observations",
+        "sortino_ratio": null,
+        "sortino_ratio_reason": "fewer_than_2_return_observations"
+      }
+    },
+    {
+      "id": "short_eth_open_three_entries",
+      "symbol": "ETH/USDT:USDT",
+      "direction": "SHORT",
+      "position_budget": 5000.0,
+      "expected_status": "open",
+      "scan_summary": {
+        "first_scan_at": "2026-02-01T00:00:00Z",
+        "last_scan_at": "2026-02-07T00:00:00Z",
+        "usable_scan_count": 5,
+        "max_scan_gap_hours": 72,
+        "data_quality_warnings": [
+          "scan_gap_over_48h",
+          "fewer_than_30_reconstructed_events",
+          "assumed_fill_due_to_scan_gap"
+        ]
+      },
+      "scan_history": [
+        {
+          "scan_id": "S0",
+          "timestamp": "2026-02-01T00:00:00Z",
+          "mark_price": 2000.0,
+          "indicators": {"daily": {"rsi": 70.0}},
+          "trade_plan": {"direction": "SHORT"},
+          "expected_event": "no_fill"
+        },
+        {
+          "scan_id": "S1",
+          "timestamp": "2026-02-02T00:00:00Z",
+          "mark_price": 2100.0,
+          "indicators": {"daily": {"rsi": 81.0}},
+          "trade_plan": {"direction": "SHORT"},
+          "expected_event": "entry_1"
+        },
+        {
+          "scan_id": "S2",
+          "timestamp": "2026-02-05T00:00:00Z",
+          "mark_price": 2250.0,
+          "indicators": {"daily": {"rsi": 93.0}},
+          "trade_plan": {"direction": "SHORT"},
+          "expected_event": "entry_2_assumed_scan_gap"
+        },
+        {
+          "scan_id": "S3",
+          "timestamp": "2026-02-06T00:00:00Z",
+          "mark_price": 2400.0,
+          "indicators": {"daily": {"rsi": 96.0}},
+          "trade_plan": {"direction": "SHORT"},
+          "expected_event": "entry_3"
+        },
+        {
+          "scan_id": "S4",
+          "timestamp": "2026-02-07T00:00:00Z",
+          "mark_price": 1980.0,
+          "indicators": {"daily": {"rsi": 61.0}},
+          "trade_plan": {"direction": "SHORT"},
+          "expected_event": "latest_open_valuation"
+        }
+      ],
+      "expected_fills": [
+        {
+          "entry_level": 1,
+          "rsi_threshold": 80,
+          "allocation_percent": 20,
+          "allocation_notional": 1000.0,
+          "scan_id": "S1",
+          "mark_price": 2100.0,
+          "fill_price": 2098.95,
+          "quantity": 0.476429,
+          "fee_amount": 0.4,
+          "slippage_impact": 0.5003,
+          "fill_confirmation": "confirmed",
+          "metrics_eligible": true
+        },
+        {
+          "entry_level": 2,
+          "rsi_threshold": 92,
+          "allocation_percent": 20,
+          "allocation_notional": 1000.0,
+          "scan_id": "S2",
+          "mark_price": 2250.0,
+          "fill_price": 2248.875,
+          "quantity": 0.444667,
+          "fee_amount": 0.4,
+          "slippage_impact": 0.5003,
+          "fill_confirmation": "assumed_scan_gap",
+          "metrics_eligible": true
+        },
+        {
+          "entry_level": 3,
+          "rsi_threshold": 95,
+          "allocation_percent": 60,
+          "allocation_notional": 3000.0,
+          "scan_id": "S3",
+          "mark_price": 2400.0,
+          "fill_price": 2398.8,
+          "quantity": 1.250625,
+          "fee_amount": 1.2,
+          "slippage_impact": 1.5008,
+          "fill_confirmation": "confirmed",
+          "metrics_eligible": true
+        }
+      ],
+      "expected_valuation": {
+        "scan_id": "S4",
+        "timestamp": "2026-02-07T00:00:00Z",
+        "mark_price": 1980.0,
+        "buy_to_close_fill_price": 1980.99,
+        "valuation_close_fee": 1.72
+      },
+      "expected_metrics": {
+        "status": "open",
+        "total_quantity": 2.171721,
+        "average_mark_entry": 2303.473492,
+        "average_executed_entry": 2302.321755,
+        "gross_open_pnl": 702.49,
+        "gross_profit": 702.49,
+        "gross_loss": 0.0,
+        "profit_factor": null,
+        "profit_factor_reason": "gross_loss_is_zero",
+        "entry_slippage_impact": 2.5,
+        "exit_slippage_impact": 2.15,
+        "entry_fees": 2.0,
+        "valuation_close_fees": 1.72,
+        "total_fees": 3.72,
+        "net_open_pnl": 694.12,
+        "open_closed_status": "open",
+        "max_scan_gap_hours": 72,
+        "reconstructed_trade_count": 1,
+        "entry_level_completion_rate": 1.0,
+        "three_entry_completion_rate": 1.0,
+        "sharpe_ratio": null,
+        "sharpe_ratio_reason": "fewer_than_2_return_observations",
+        "sortino_ratio": null,
+        "sortino_ratio_reason": "fewer_than_2_return_observations"
+      }
+    }
+  ],
+  "edge_cases": [
+    {
+      "id": "insufficient_history_one_usable_scan",
+      "symbol": "SOL/USDT:USDT",
+      "direction": "LONG",
+      "scan_history": [
+        {
+          "scan_id": "E0",
+          "timestamp": "2026-03-01T00:00:00Z",
+          "mark_price": 150.0,
+          "indicators": {"daily": {"rsi": 28.0}},
+          "trade_plan": {"direction": "LONG"}
+        }
+      ],
+      "expected": {
+        "status": "skipped",
+        "skip_reason": "insufficient_history",
+        "required_minimum_usable_scans": 2,
+        "usable_scan_count": 1,
+        "metrics": null
+      }
+    },
+    {
+      "id": "missing_rsi",
+      "symbol": "ADA/USDT:USDT",
+      "direction": "LONG",
+      "scan_history": [
+        {
+          "scan_id": "E1",
+          "timestamp": "2026-03-01T00:00:00Z",
+          "mark_price": 0.62,
+          "indicators": {"daily": {}},
+          "trade_plan": {"direction": "LONG"}
+        },
+        {
+          "scan_id": "E2",
+          "timestamp": "2026-03-02T00:00:00Z",
+          "mark_price": 0.59,
+          "indicators": {"daily": {"rsi": null}},
+          "trade_plan": {"direction": "LONG"}
+        }
+      ],
+      "expected": {
+        "status": "skipped",
+        "skip_reason": "missing_rsi",
+        "metrics": null
+      }
+    },
+    {
+      "id": "missing_mark_price",
+      "symbol": "XRP/USDT:USDT",
+      "direction": "SHORT",
+      "scan_history": [
+        {
+          "scan_id": "E3",
+          "timestamp": "2026-03-01T00:00:00Z",
+          "mark_price": 0.74,
+          "indicators": {"daily": {"rsi": 83.0}},
+          "trade_plan": {"direction": "SHORT"}
+        },
+        {
+          "scan_id": "E4",
+          "timestamp": "2026-03-02T00:00:00Z",
+          "mark_price": null,
+          "indicators": {"daily": {"rsi": 94.0}},
+          "trade_plan": {"direction": "SHORT"}
+        }
+      ],
+      "expected": {
+        "status": "skipped",
+        "skip_reason": "missing_mark_price",
+        "metrics": null
+      }
+    },
+    {
+      "id": "malformed_scan_result",
+      "symbol": "DOGE/USDT:USDT",
+      "direction": "LONG",
+      "scan_history": [
+        {
+          "scan_id": "E5",
+          "timestamp": "2026-03-01T00:00:00Z",
+          "mark_price": 0.11,
+          "indicators": {"daily": {"rsi": 32.0}},
+          "trade_plan": {"direction": "LONG"}
+        },
+        "not-a-scan-object"
+      ],
+      "expected": {
+        "status": "skipped",
+        "skip_reason": "malformed_scan_result",
+        "metrics": null
+      }
+    },
+    {
+      "id": "unsupported_direction",
+      "symbol": "BNB/USDT:USDT",
+      "direction": "FLAT",
+      "scan_history": [
+        {
+          "scan_id": "E6",
+          "timestamp": "2026-03-01T00:00:00Z",
+          "mark_price": 500.0,
+          "indicators": {"daily": {"rsi": 28.0}},
+          "trade_plan": {"direction": "FLAT"}
+        },
+        {
+          "scan_id": "E7",
+          "timestamp": "2026-03-02T00:00:00Z",
+          "mark_price": 490.0,
+          "indicators": {"daily": {"rsi": 24.0}},
+          "trade_plan": {"direction": "FLAT"}
+        }
+      ],
+      "expected": {
+        "status": "skipped",
+        "skip_reason": "unsupported_direction",
+        "supported_directions": ["LONG", "SHORT"],
+        "metrics": null
+      }
+    },
+    {
+      "id": "missing_position_context",
+      "symbol": null,
+      "direction": "LONG",
+      "position_context": null,
+      "scan_history": [
+        {
+          "scan_id": "E8",
+          "timestamp": "2026-03-01T00:00:00Z",
+          "mark_price": 7.5,
+          "indicators": {"daily": {"rsi": 29.0}},
+          "trade_plan": {"direction": "LONG"}
+        },
+        {
+          "scan_id": "E9",
+          "timestamp": "2026-03-02T00:00:00Z",
+          "mark_price": 7.1,
+          "indicators": {"daily": {"rsi": 23.0}},
+          "trade_plan": {"direction": "LONG"}
+        }
+      ],
+      "expected": {
+        "status": "skipped",
+        "skip_reason": "missing_position_context",
+        "required_context": ["symbol", "direction", "position_budget"],
+        "metrics": null
+      }
+    }
+  ],
+  "expected_skip_reasons": [
+    "insufficient_history",
+    "missing_rsi",
+    "missing_mark_price",
+    "malformed_scan_result",
+    "unsupported_direction",
+    "missing_position_context"
+  ]
+}

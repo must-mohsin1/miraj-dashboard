@@ -2,7 +2,7 @@
 
 import datetime
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import JSON
 
@@ -29,6 +29,9 @@ class User(Base):
     portfolio_positions = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")
     portfolio_trades = relationship("PortfolioTrade", back_populates="user", cascade="all, delete-orphan")
     portfolio_snapshots = relationship("PortfolioSnapshot", back_populates="user", cascade="all, delete-orphan")
+    dca_shadow_user_kill_switches = relationship("DcaShadowUserKillSwitch", back_populates="user", cascade="all, delete-orphan")
+    dca_shadow_symbol_kill_switches = relationship("DcaShadowSymbolKillSwitch", back_populates="user", cascade="all, delete-orphan")
+    dca_shadow_decision_history = relationship("DcaShadowDecisionHistory", back_populates="user", cascade="all, delete-orphan")
     position_history = relationship("PositionHistory", back_populates="user", cascade="all, delete-orphan")
     order_history = relationship("OrderHistory", back_populates="user", cascade="all, delete-orphan")
     journal_entries = relationship("TradeJournalEntry", back_populates="user", cascade="all, delete-orphan")
@@ -254,6 +257,91 @@ class PortfolioSnapshot(Base):
     timestamp = Column(DateTime, nullable=False)
 
     user = relationship("User", back_populates="portfolio_snapshots")
+
+
+class DcaShadowGlobalKillSwitch(Base):
+    """Global shadow-mode ADD kill switch for all users."""
+
+    __tablename__ = "dca_shadow_global_kill_switches"
+    __table_args__ = (
+        Index("ix_dca_shadow_global_kill_switches_active", "active"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    active = Column(Boolean, nullable=False, default=False)
+    reason = Column(Text, nullable=True)
+    created_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+
+class DcaShadowUserKillSwitch(Base):
+    """Per-user shadow-mode ADD kill switch."""
+
+    __tablename__ = "dca_shadow_user_kill_switches"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_dca_shadow_user_kill_switch_user"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    active = Column(Boolean, nullable=False, default=False)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="dca_shadow_user_kill_switches")
+
+
+class DcaShadowSymbolKillSwitch(Base):
+    """Per-user, per-symbol shadow-mode ADD kill switch."""
+
+    __tablename__ = "dca_shadow_symbol_kill_switches"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "exchange", "symbol",
+            name="uq_dca_shadow_symbol_kill_switch_user_exchange_symbol",
+        ),
+        Index("ix_dca_shadow_symbol_kill_switch_user_exchange", "user_id", "exchange"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exchange = Column(String(32), nullable=False)
+    symbol = Column(String(40), nullable=False)
+    active = Column(Boolean, nullable=False, default=False)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="dca_shadow_symbol_kill_switches")
+
+
+class DcaShadowDecisionHistory(Base):
+    """Audited shadow-mode DCA decision history scoped to a user."""
+
+    __tablename__ = "dca_shadow_decision_history"
+    __table_args__ = (
+        Index("ix_dca_shadow_decision_history_user_exchange", "user_id", "exchange"),
+        Index("ix_dca_shadow_decision_history_user_symbol", "user_id", "symbol"),
+        Index("ix_dca_shadow_decision_history_user_outcome", "user_id", "final_outcome"),
+        Index("ix_dca_shadow_decision_history_user_timestamp", "user_id", "timestamp"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    exchange = Column(String(32), nullable=False)
+    symbol = Column(String(40), nullable=False)
+    original_recommendation = Column(String(20), nullable=False)
+    final_outcome = Column(String(20), nullable=False)
+    gate_breakdown = Column(JSON, nullable=False)
+    blocked_gates = Column(JSON, nullable=False)
+    assumption_set = Column(JSON, nullable=False)
+    final_reason = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="dca_shadow_decision_history")
 
 
 class PositionHistory(Base):
