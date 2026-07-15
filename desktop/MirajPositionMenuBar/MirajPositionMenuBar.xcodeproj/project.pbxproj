@@ -1,0 +1,243 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXAggregateTarget section */
+		A00000000000000000000001 /* MirajPositionMenuBarHarnesses */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = A00000000000000000000002 /* Build configuration list for PBXAggregateTarget "MirajPositionMenuBarHarnesses" */;
+			buildPhases = (
+				A00000000000000000000003 /* Run Deterministic Swift Harnesses */,
+			);
+			dependencies = (
+			);
+			name = MirajPositionMenuBarHarnesses;
+			productName = MirajPositionMenuBarHarnesses;
+		};
+/* End PBXAggregateTarget section */
+
+/* Begin PBXBuildFile section */
+		B00000000000000000000001 /* MirajPositionMenuBarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000001 /* MirajPositionMenuBarApp.swift */; };
+		B00000000000000000000002 /* PositionCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000002 /* PositionCache.swift */; };
+		B00000000000000000000003 /* PositionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000003 /* PositionClient.swift */; };
+		B00000000000000000000004 /* PositionDisplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000004 /* PositionDisplayModel.swift */; };
+		B00000000000000000000005 /* PositionPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000005 /* PositionPopoverView.swift */; };
+		B00000000000000000000006 /* PositionPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000006 /* PositionPreferences.swift */; };
+		B00000000000000000000007 /* PositionTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000007 /* PositionTokenStore.swift */; };
+		B00000000000000000000008 /* MockFixturePositionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000008 /* MockFixturePositionProvider.swift */; };
+		B00000000000000000000009 /* MockFixtures in Resources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000009 /* MockFixtures */; };
+		B00000000000000000000010 /* MirajPositionMenuBarHarnessXCTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000010 /* MirajPositionMenuBarHarnessXCTest.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C00000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = PR0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A00000000000000000000001;
+			remoteInfo = MirajPositionMenuBarHarnesses;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		F00000000000000000000001 /* MirajPositionMenuBarApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/MirajPositionMenuBar/MirajPositionMenuBarApp.swift; sourceTree = "<group>"; };
+		F00000000000000000000002 /* PositionCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/MirajPositionMenuBar/PositionCache.swift; sourceTree = "<group>"; };
+		F00000000000000000000003 /* PositionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/MirajPositionMenuBar/PositionClient.swift; sourceTree = "<group>"; };
+		F00000000000000000000004 /* PositionDisplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/MirajPositionMenuBar/PositionDisplayModel.swift; sourceTree = "<group>"; };
+		F00000000000000000000005 /* PositionPopoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/MirajPositionMenuBar/PositionPopoverView.swift; sourceTree = "<group>"; };
+		F00000000000000000000006 /* PositionPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/MirajPositionMenuBar/PositionPreferences.swift; sourceTree = "<group>"; };
+		F00000000000000000000007 /* PositionTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/MirajPositionMenuBar/PositionTokenStore.swift; sourceTree = "<group>"; };
+		F00000000000000000000008 /* MockFixturePositionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/MirajPositionMenuBar/MockFixturePositionProvider.swift; sourceTree = "<group>"; };
+		F00000000000000000000009 /* MockFixtures */ = {isa = PBXFileReference; lastKnownFileType = folder; path = MockFixtures; sourceTree = "<group>"; };
+		F00000000000000000000010 /* MirajPositionMenuBarHarnessXCTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "$(DERIVED_FILE_DIR)/MirajPositionMenuBarHarnessXCTest.swift"; sourceTree = "<absolute>"; };
+		P00000000000000000000001 /* MirajPositionMenuBar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MirajPositionMenuBar.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		P00000000000000000000002 /* MirajPositionMenuBarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MirajPositionMenuBarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E00000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+		E00000000000000000000002 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		G00000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				G00000000000000000000002 /* Sources */,
+				F00000000000000000000009 /* MockFixtures */,
+				G00000000000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		G00000000000000000000002 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000001 /* MirajPositionMenuBarApp.swift */,
+				F00000000000000000000008 /* MockFixturePositionProvider.swift */,
+				F00000000000000000000002 /* PositionCache.swift */,
+				F00000000000000000000003 /* PositionClient.swift */,
+				F00000000000000000000004 /* PositionDisplayModel.swift */,
+				F00000000000000000000005 /* PositionPopoverView.swift */,
+				F00000000000000000000006 /* PositionPreferences.swift */,
+				F00000000000000000000007 /* PositionTokenStore.swift */,
+			);
+			name = Sources;
+			sourceTree = "<group>";
+		};
+		G00000000000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				P00000000000000000000001 /* MirajPositionMenuBar.app */,
+				P00000000000000000000002 /* MirajPositionMenuBarTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		T00000000000000000000001 /* MirajPositionMenuBar */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = T00000000000000000000002 /* Build configuration list for PBXNativeTarget "MirajPositionMenuBar" */;
+			buildPhases = (
+				S00000000000000000000001 /* Sources */,
+				E00000000000000000000001 /* Frameworks */,
+				R00000000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MirajPositionMenuBar;
+			productName = MirajPositionMenuBar;
+			productReference = P00000000000000000000001 /* MirajPositionMenuBar.app */;
+			productType = "com.apple.product-type.application";
+		};
+		X00000000000000000000001 /* MirajPositionMenuBarTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = X00000000000000000000002 /* Build configuration list for PBXNativeTarget "MirajPositionMenuBarTests" */;
+			buildPhases = (
+				X00000000000000000000005 /* Generate XCTest Harness */,
+				X00000000000000000000006 /* Sources */,
+				E00000000000000000000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D00000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = MirajPositionMenuBarTests;
+			productName = MirajPositionMenuBarTests;
+			productReference = P00000000000000000000002 /* MirajPositionMenuBarTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		PR0000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					T00000000000000000000001 = {CreatedOnToolsVersion = 15.0; };
+					X00000000000000000000001 = {CreatedOnToolsVersion = 15.0; };
+				};
+			};
+			buildConfigurationList = PR0000000000000000000002 /* Build configuration list for PBXProject "MirajPositionMenuBar" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base, );
+			mainGroup = G00000000000000000000001;
+			productRefGroup = G00000000000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				T00000000000000000000001 /* MirajPositionMenuBar */,
+				X00000000000000000000001 /* MirajPositionMenuBarTests */,
+				A00000000000000000000001 /* MirajPositionMenuBarHarnesses */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		R00000000000000000000001 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000009 /* MockFixtures in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A00000000000000000000003 /* Run Deterministic Swift Harnesses */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Run Deterministic Swift Harnesses";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\ncd \"$SRCROOT/../..\"\nmkdir -p \"$DERIVED_FILE_DIR/pimb-harnesses\"\nswiftc -parse-as-library desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionDisplayModel.swift desktop/MirajPositionMenuBar/Tests/MirajPositionMenuBarTests/PositionDisplayModelTests.swift -o \"$DERIVED_FILE_DIR/pimb-harnesses/PositionDisplayModelTests\"\n\"$DERIVED_FILE_DIR/pimb-harnesses/PositionDisplayModelTests\"\nswiftc -parse-as-library desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionDisplayModel.swift desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionTokenStore.swift desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionCache.swift desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionPreferences.swift desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionClient.swift desktop/MirajPositionMenuBar/Tests/MirajPositionMenuBarTests/PositionClientCacheTests.swift -o \"$DERIVED_FILE_DIR/pimb-harnesses/PositionClientCacheTests\"\n\"$DERIVED_FILE_DIR/pimb-harnesses/PositionClientCacheTests\"\nswiftc -parse-as-library desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionDisplayModel.swift desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionPopoverView.swift desktop/MirajPositionMenuBar/Tests/MirajPositionMenuBarTests/PositionPopoverViewTests.swift -o \"$DERIVED_FILE_DIR/pimb-harnesses/PositionPopoverViewTests\"\n\"$DERIVED_FILE_DIR/pimb-harnesses/PositionPopoverViewTests\"\nswiftc -parse-as-library desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionDisplayModel.swift desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionPreferences.swift desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/PositionTokenStore.swift desktop/MirajPositionMenuBar/Tests/MirajPositionMenuBarTests/PositionTokenStoreTests.swift -o \"$DERIVED_FILE_DIR/pimb-harnesses/PositionTokenStoreTests\"\n\"$DERIVED_FILE_DIR/pimb-harnesses/PositionTokenStoreTests\"\nswiftc -parse-as-library -D MENUBAR_VIEWMODEL_TESTING desktop/MirajPositionMenuBar/Sources/MirajPositionMenuBar/*.swift desktop/MirajPositionMenuBar/Tests/MirajPositionMenuBarTests/MirajPositionMenuBarViewModelTests.swift -o \"$DERIVED_FILE_DIR/pimb-harnesses/MirajPositionMenuBarViewModelTests\"\n\"$DERIVED_FILE_DIR/pimb-harnesses/MirajPositionMenuBarViewModelTests\"\n";
+		};
+		X00000000000000000000005 /* Generate XCTest Harness */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Generate XCTest Harness";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/MirajPositionMenuBarHarnessXCTest.swift",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\nmkdir -p \"$DERIVED_FILE_DIR\"\ncat > \"$DERIVED_FILE_DIR/MirajPositionMenuBarHarnessXCTest.swift\" <<'SWIFT'\nimport XCTest\n\nfinal class MirajPositionMenuBarHarnessXCTest: XCTestCase {\n    func testDeterministicHarnessesAreWiredIntoXcodeTestAction() throws {\n        XCTAssertTrue(true)\n    }\n}\nSWIFT\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		S00000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000001, B00000000000000000000008, B00000000000000000000002, B00000000000000000000003, B00000000000000000000004, B00000000000000000000005, B00000000000000000000006, B00000000000000000000007, ); runOnlyForDeploymentPostprocessing = 0; };
+		X00000000000000000000006 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000010, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D00000000000000000000001 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = A00000000000000000000001 /* MirajPositionMenuBarHarnesses */; targetProxy = C00000000000000000000001 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		PR0000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; DEVELOPMENT_TEAM = ""; ENABLE_STRICT_OBJC_MSGSEND = YES; GCC_C_LANGUAGE_STANDARD = gnu17; MACOSX_DEPLOYMENT_TARGET = 14.0; ONLY_ACTIVE_ARCH = YES; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Debug; };
+		PR0000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; DEVELOPMENT_TEAM = ""; ENABLE_STRICT_OBJC_MSGSEND = YES; GCC_C_LANGUAGE_STANDARD = gnu17; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Release; };
+		T00000000000000000000005 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; CODE_SIGN_STYLE = Manual; COMBINE_HIDPI_IMAGES = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_LSUIElement = YES; PRODUCT_BUNDLE_IDENTIFIER = pk.miraj.PositionMenuBar; PRODUCT_NAME = "MirajPositionMenuBar"; SWIFT_VERSION = 5.0; }; name = Debug; };
+		T00000000000000000000006 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; CODE_SIGN_STYLE = Manual; COMBINE_HIDPI_IMAGES = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_LSUIElement = YES; PRODUCT_BUNDLE_IDENTIFIER = pk.miraj.PositionMenuBar; PRODUCT_NAME = "MirajPositionMenuBar"; SWIFT_VERSION = 5.0; }; name = Release; };
+		A00000000000000000000004 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Debug; };
+		A00000000000000000000005 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Release; };
+		X00000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; CODE_SIGN_STYLE = Manual; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; PRODUCT_BUNDLE_IDENTIFIER = pk.miraj.PositionMenuBarTests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_VERSION = 5.0; TEST_HOST = ""; }; name = Debug; };
+		X00000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; CODE_SIGN_STYLE = Manual; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; PRODUCT_BUNDLE_IDENTIFIER = pk.miraj.PositionMenuBarTests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_VERSION = 5.0; TEST_HOST = ""; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		PR0000000000000000000002 /* Build configuration list for PBXProject "MirajPositionMenuBar" */ = {isa = XCConfigurationList; buildConfigurations = (PR0000000000000000000003, PR0000000000000000000004, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		T00000000000000000000002 /* Build configuration list for PBXNativeTarget "MirajPositionMenuBar" */ = {isa = XCConfigurationList; buildConfigurations = (T00000000000000000000005, T00000000000000000000006, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A00000000000000000000002 /* Build configuration list for PBXAggregateTarget "MirajPositionMenuBarHarnesses" */ = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000004, A00000000000000000000005, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		X00000000000000000000002 /* Build configuration list for PBXNativeTarget "MirajPositionMenuBarTests" */ = {isa = XCConfigurationList; buildConfigurations = (X00000000000000000000003, X00000000000000000000004, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = PR0000000000000000000001 /* Project object */;
+}

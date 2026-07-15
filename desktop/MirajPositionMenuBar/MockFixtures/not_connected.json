@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "exchange": "mexc",
+  "selection_reason": "no_open_positions",
+  "generated_at": "2026-07-15T10:00:00Z",
+  "source": {
+    "portfolio_last_refreshed": null,
+    "mark_price_source": "unavailable",
+    "mark_price_last_refreshed": null,
+    "pnl_age_seconds": null,
+    "stale_status": "offline"
+  },
+  "position": null,
+  "privacy": { "hide_amounts_available": true, "redaction_supported": true },
+  "errors": [{ "code": "auth_required", "message": "Connect to Miraj to view your position." }]
+}

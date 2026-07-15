@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "exchange": "mexc",
+  "selection_reason": "user_selected",
+  "generated_at": "2026-07-15T10:00:00Z",
+  "source": {
+    "portfolio_last_refreshed": "2026-07-15T09:48:00Z",
+    "mark_price_source": "portfolio_cache",
+    "mark_price_last_refreshed": "2026-07-15T09:48:00Z",
+    "pnl_age_seconds": 720,
+    "stale_status": "offline"
+  },
+  "position": {
+    "symbol": "SOLUSDT",
+    "side": "LONG",
+    "size_contracts": 12,
+    "contract_size": 1,
+    "entry_price": 150,
+    "mark_price": 149,
+    "pnl": -12,
+    "pnl_percent": -3,
+    "pnl_formula": "exchange_unrealized_pnl",
+    "margin": 400,
+    "leverage": 3,
+    "liquidation_price": null,
+    "liquidation_distance_pct": null,
+    "htf_sr": {
+      "timeframes": ["Daily", "Weekly"],
+      "support": null,
+      "resistance": null,
+      "structure_label": "unknown",
+      "confidence": "UNAVAILABLE"
+    },
+    "ltf_sr": {
+      "timeframes": ["1H", "4H"],
+      "support": { "price": 145, "distance_pct": -2.68, "timeframe": "4H", "swing_type": "swing_low", "swing_index": 9, "method": "smc_swing" },
+      "resistance": { "price": 153, "distance_pct": 2.68, "timeframe": "1H", "swing_type": "swing_high", "swing_index": 14, "method": "smc_swing" },
+      "structure_label": "range",
+      "confidence": "HIGH"
+    },
+    "advisory": {
+      "action": "HOLD",
+      "severity": "INFO",
+      "reason": "Cached response only; reconnect before changing the position.",
+      "source": "fallback",
+      "action_items_count": 0
+    },
+    "dashboard_deeplink": "/portfolio?exchange=mexc&symbol=SOLUSDT"
+  },
+  "privacy": { "hide_amounts_available": true, "redaction_supported": true },
+  "errors": [{ "code": "offline_cached_response", "message": "Showing cached position after request failure." }]
+}
