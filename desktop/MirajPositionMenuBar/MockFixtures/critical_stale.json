@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "exchange": "mexc",
+  "selection_reason": "user_selected",
+  "generated_at": "2026-07-15T10:00:00Z",
+  "source": {
+    "portfolio_last_refreshed": "2026-07-15T09:40:00Z",
+    "mark_price_source": "scan_cache",
+    "mark_price_last_refreshed": "2026-07-15T09:40:00Z",
+    "pnl_age_seconds": 1200,
+    "stale_status": "critical_stale"
+  },
+  "position": {
+    "symbol": "XRPUSDT",
+    "side": "SHORT",
+    "size_contracts": 8,
+    "contract_size": 1,
+    "entry_price": 2.5,
+    "mark_price": 2.5,
+    "pnl": 0,
+    "pnl_percent": 0,
+    "pnl_formula": "exchange_unrealized_pnl",
+    "margin": null,
+    "leverage": 2,
+    "liquidation_price": 3.1,
+    "liquidation_distance_pct": 24,
+    "htf_sr": {
+      "timeframes": ["Daily", "Weekly"],
+      "support": { "price": 2.3, "distance_pct": -8, "timeframe": "Daily", "swing_type": "swing_low", "swing_index": 3, "method": "smc_swing" },
+      "resistance": { "price": 2.8, "distance_pct": 12, "timeframe": "Weekly", "swing_type": "swing_high", "swing_index": 2, "method": "smc_swing" },
+      "structure_label": "compression",
+      "confidence": "HIGH"
+    },
+    "ltf_sr": {
+      "timeframes": ["1H", "4H"],
+      "support": null,
+      "resistance": null,
+      "structure_label": "unknown",
+      "confidence": "UNAVAILABLE"
+    },
+    "advisory": {
+      "action": "CLOSE",
+      "severity": "DANGER",
+      "reason": "Liquidation alert referenced an old mark price near 2.50.",
+      "source": "position_alert",
+      "action_items_count": 3
+    },
+    "dashboard_deeplink": "/portfolio?exchange=mexc&symbol=XRPUSDT"
+  },
+  "privacy": { "hide_amounts_available": true, "redaction_supported": true },
+  "errors": [
+    { "code": "position_source_stale", "message": "Position source is critically stale." },
+    { "code": "margin_missing_for_pnl_percent", "message": "Margin unavailable; PnL percent set to zero." }
+  ]
+}

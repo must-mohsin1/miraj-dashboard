@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "exchange": "mexc",
+  "selection_reason": "no_user_selection_defaulted",
+  "generated_at": "2026-07-15T10:00:00Z",
+  "source": {
+    "portfolio_last_refreshed": "2026-07-15T09:54:00Z",
+    "mark_price_source": "bounded_mark_cache",
+    "mark_price_last_refreshed": "2026-07-15T09:54:00Z",
+    "pnl_age_seconds": 360,
+    "stale_status": "stale"
+  },
+  "position": {
+    "symbol": "ETHUSDT",
+    "side": "SHORT",
+    "size_contracts": 3,
+    "contract_size": 0.5,
+    "entry_price": 100,
+    "mark_price": 90,
+    "pnl": 15,
+    "pnl_percent": 15,
+    "pnl_formula": "computed_contracts_contract_size",
+    "margin": 100,
+    "leverage": 5,
+    "liquidation_price": 130,
+    "liquidation_distance_pct": 44.44,
+    "htf_sr": {
+      "timeframes": ["Daily", "Weekly"],
+      "support": { "price": 84, "distance_pct": -6.67, "timeframe": "Daily", "swing_type": "swing_low", "swing_index": 21, "method": "smc_swing" },
+      "resistance": { "price": 98, "distance_pct": 8.89, "timeframe": "Weekly", "swing_type": "swing_high", "swing_index": 7, "method": "smc_swing" },
+      "structure_label": "bearish_retest",
+      "confidence": "HIGH"
+    },
+    "ltf_sr": {
+      "timeframes": ["1H", "4H"],
+      "support": null,
+      "resistance": { "price": 92, "distance_pct": 2.22, "timeframe": "1H", "swing_type": "swing_high", "swing_index": 52, "method": "smc_swing" },
+      "structure_label": "lower_high",
+      "confidence": "LOW"
+    },
+    "advisory": {
+      "action": "REDUCE",
+      "severity": "WARNING",
+      "reason": "Stale source; open Miraj before changing exposure.",
+      "source": "position_alert",
+      "action_items_count": 2
+    },
+    "dashboard_deeplink": "/portfolio?exchange=mexc&symbol=ETHUSDT"
+  },
+  "privacy": { "hide_amounts_available": true, "redaction_supported": true },
+  "errors": [{ "code": "position_source_stale", "message": "Position source is stale." }]
+}

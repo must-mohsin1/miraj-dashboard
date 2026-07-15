@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "exchange": "mexc",
+  "selection_reason": "user_selected",
+  "generated_at": "2026-07-15T10:00:00Z",
+  "source": {
+    "portfolio_last_refreshed": "2026-07-15T09:59:20Z",
+    "mark_price_source": "portfolio_cache",
+    "mark_price_last_refreshed": "2026-07-15T09:59:30Z",
+    "pnl_age_seconds": 30,
+    "stale_status": "fresh"
+  },
+  "position": {
+    "symbol": "BTCUSDT",
+    "side": "LONG",
+    "size_contracts": 3,
+    "contract_size": 0.5,
+    "entry_price": 100,
+    "mark_price": 110,
+    "pnl": 15,
+    "pnl_percent": 7.5,
+    "pnl_formula": "computed_contracts_contract_size",
+    "margin": 200,
+    "leverage": 10,
+    "liquidation_price": 80,
+    "liquidation_distance_pct": 27.27,
+    "htf_sr": {
+      "timeframes": ["Daily", "Weekly"],
+      "support": { "price": 96, "distance_pct": -12.73, "timeframe": "Daily", "swing_type": "swing_low", "swing_index": 12, "method": "smc_swing" },
+      "resistance": { "price": 118, "distance_pct": 7.27, "timeframe": "Weekly", "swing_type": "swing_high", "swing_index": 4, "method": "smc_swing" },
+      "structure_label": "bullish_continuation",
+      "confidence": "HIGH"
+    },
+    "ltf_sr": {
+      "timeframes": ["1H", "4H"],
+      "support": { "price": 106, "distance_pct": -3.64, "timeframe": "1H", "swing_type": "swing_low", "swing_index": 31, "method": "smc_swing" },
+      "resistance": { "price": 112, "distance_pct": 1.82, "timeframe": "4H", "swing_type": "swing_high", "swing_index": 18, "method": "smc_swing" },
+      "structure_label": "higher_low",
+      "confidence": "HIGH"
+    },
+    "advisory": {
+      "action": "HOLD",
+      "severity": "INFO",
+      "reason": "Momentum remains constructive; review Miraj for details.",
+      "source": "combined",
+      "action_items_count": 1
+    },
+    "dashboard_deeplink": "/portfolio?exchange=mexc&symbol=BTCUSDT"
+  },
+  "privacy": { "hide_amounts_available": true, "redaction_supported": true },
+  "errors": []
+}
