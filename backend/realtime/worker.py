@@ -279,12 +279,26 @@ class MexcMonitoringWorker:
     async def stop(self) -> None:
         self._stop.set()
 
+    @staticmethod
+    def _supported_watchlist_symbol(symbol: str) -> str | None:
+        """Return a normalized MEXC Contract symbol, or exclude unsupported watchlist entries."""
+        normalized = symbol.strip().upper().replace("_", "").replace("-", "").replace("/", "")
+        try:
+            to_mexc_symbol(normalized)
+        except ValueError:
+            return None
+        return normalized
+
     async def _load_watchlist(self) -> None:
         async with get_session_factory()() as session:
             rows = (await session.execute(select(WatchlistPair))).scalars().all()
         for row in rows:
-            self._users_by_symbol[row.pair.strip().upper()].add(row.user_id)
-        logger.info("Real-time worker loaded %d unique watchlist pairs", len(self._users_by_symbol))
+            symbol = self._supported_watchlist_symbol(row.pair)
+            if symbol is None:
+                logger.warning("Skipping unsupported non-MEXC-USDT watchlist pair: %s", row.pair)
+                continue
+            self._users_by_symbol[symbol].add(row.user_id)
+        logger.info("Real-time worker loaded %d supported MEXC watchlist pairs", len(self._users_by_symbol))
 
     async def _hydrate_history(self) -> None:
         """Backfill enough public MEXC candles before evaluating live frames."""
