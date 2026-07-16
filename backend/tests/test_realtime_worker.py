@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.database import Base
 from backend.realtime.lifecycle import Confirmation
-from backend.realtime.worker import MonitoringCoordinator
+from backend.realtime.worker import MexcMonitoringWorker, MonitoringCoordinator
 
 
 def test_coordinator_queues_actionable_transition_without_precommit_delivery():
@@ -31,5 +31,14 @@ def test_coordinator_queues_actionable_transition_without_precommit_delivery():
 
         assert sent == []
         await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_worker_excludes_non_usdt_watchlist_symbols_before_mexc_hydration():
+    async def scenario() -> None:
+        worker = MexcMonitoringWorker()
+        assert worker._supported_watchlist_symbol("BTC/USDT") == "BTCUSDT"
+        assert worker._supported_watchlist_symbol("AAPL") is None
 
     asyncio.run(scenario())
