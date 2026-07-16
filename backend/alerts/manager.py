@@ -84,6 +84,16 @@ async def process_scan_results(
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 
+def is_actionable_trade_plan(trade_plan: Any) -> bool:
+    """Return whether a scan explicitly confirmed a manual-entry trade plan.
+
+    A confluence score is context, not a trade trigger.  Scheduled alerts must
+    never notify a user of an actionable setup unless the analysis pipeline set
+    ``trade_decision`` to the literal boolean ``True``.
+    """
+    return isinstance(trade_plan, dict) and trade_plan.get("trade_decision") is True
+
+
 async def _get_enabled_channels(
     session: AsyncSession, user_id: int,
 ) -> list[AlertChannel]:
@@ -139,6 +149,13 @@ async def _process_single_result(
     symbol = (scan_result.get("symbol") or "").strip().upper()
     if not symbol:
         logger.warning("Scan result missing symbol; skipping")
+        return None
+
+    # A confluence score alone is only a watch condition.  Manual-entry
+    # notifications require an explicit confirmation from the trade plan.
+    trade_plan = scan_result.get("trade_plan", {}) or {}
+    if not is_actionable_trade_plan(trade_plan):
+        logger.debug("Symbol %s has no confirmed trade decision; no alert", symbol)
         return None
 
     score = scan_result.get("confluence_score") or scan_result.get("overall_score") or 0.0

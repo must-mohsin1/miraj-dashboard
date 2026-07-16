@@ -367,6 +367,22 @@ async def refresh_all_portfolios_job() -> None:
 # ── Advanced alerts (RSI / EMA cross / volume spike) ────────────────────────
 
 
+def select_advanced_signals(
+    signals: list[dict[str, Any]], active_alert_types: set[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """Match detector output only to alert types configured for this symbol."""
+    selected: dict[str, list[dict[str, Any]]] = {}
+    for signal in signals:
+        signal_type = str(signal.get("type", ""))
+        if signal_type.startswith("rsi") and "rsi" in active_alert_types:
+            selected.setdefault("rsi", []).append(signal)
+        elif signal_type.startswith("ema_cross") and "ema_cross" in active_alert_types:
+            selected.setdefault("ema_cross", []).append(signal)
+        elif signal_type == "volume_spike" and "volume_spike" in active_alert_types:
+            selected.setdefault("volume_spike", []).append(signal)
+    return selected
+
+
 async def check_advanced_alerts_job() -> None:
     """APScheduler job callback — check advanced technical-signal alerts.
 
@@ -471,15 +487,10 @@ async def check_advanced_alerts_job() -> None:
                 if not signals:
                     continue
 
-                # Map signal types to alert types.
-                signal_by_type: dict[str, Any] = {}
-                for sig in signals:
-                    if sig["type"].startswith("rsi") and "rsi" in by_symbol:
-                        signal_by_type.setdefault("rsi", []).append(sig)
-                    elif sig["type"].startswith("ema_cross") and "ema_cross" in by_symbol:
-                        signal_by_type.setdefault("ema_cross", []).append(sig)
-                    elif sig["type"] == "volume_spike" and "volume_spike" in by_symbol:
-                        signal_by_type.setdefault("volume_spike", []).append(sig)
+                # Only match detector events to alert types configured for this symbol.
+                signal_by_type = select_advanced_signals(
+                    signals, {str(alert.alert_type) for alert in symbol_alerts}
+                )
 
                 for alert in symbol_alerts:
                     if alert.alert_type not in signal_by_type:

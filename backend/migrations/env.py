@@ -43,6 +43,8 @@ from backend.models import (       # noqa: E402, F401
     PortfolioTrade,
     PositionHistory,
     PriceAlert,
+    RealtimeNotification,
+    RealtimeSignal,
     ScanRun,
     TradeJournalEntry,
     User,
