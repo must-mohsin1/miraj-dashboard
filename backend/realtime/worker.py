@@ -283,6 +283,10 @@ class MexcMonitoringWorker:
     def _supported_watchlist_symbol(symbol: str) -> str | None:
         """Return a normalized MEXC Contract symbol, or exclude unsupported watchlist entries."""
         normalized = symbol.strip().upper().replace("_", "").replace("-", "").replace("/", "")
+        # The dashboard's generic spot-style watchlist stores BTC-USD; MEXC
+        # Contract executes the corresponding USDT perpetual as BTC_USDT.
+        if normalized.endswith("USD") and not normalized.endswith("USDT"):
+            normalized = f"{normalized}T"
         try:
             to_mexc_symbol(normalized)
         except ValueError:

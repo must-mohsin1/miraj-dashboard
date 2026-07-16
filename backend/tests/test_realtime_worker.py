@@ -35,10 +35,12 @@ def test_coordinator_queues_actionable_transition_without_precommit_delivery():
     asyncio.run(scenario())
 
 
-def test_worker_excludes_non_usdt_watchlist_symbols_before_mexc_hydration():
+def test_worker_maps_usd_watchlist_symbols_to_mexc_usdt_perpetuals():
     async def scenario() -> None:
         worker = MexcMonitoringWorker()
         assert worker._supported_watchlist_symbol("BTC/USDT") == "BTCUSDT"
+        assert worker._supported_watchlist_symbol("BTC_USDT") == "BTCUSDT"
+        assert worker._supported_watchlist_symbol("BTC-USD") == "BTCUSDT"
         assert worker._supported_watchlist_symbol("AAPL") is None
 
     asyncio.run(scenario())
