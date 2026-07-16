@@ -453,3 +453,49 @@ class TradeJournalEntry(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="journal_entries")
+
+
+class RealtimeSignal(Base):
+    """Latest durable advisory-signal state for a user and market direction.
+
+    ``dedup_key`` advances only when the lifecycle changes, making restart-safe
+    notification idempotency possible without retaining exchange credentials.
+    """
+
+    __tablename__ = "realtime_signals"
+    __table_args__ = (
+        UniqueConstraint("user_id", "pair", "direction", name="uq_realtime_signal_user_pair_direction"),
+        Index("ix_realtime_signals_user_pair", "user_id", "pair"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    pair = Column(String(20), nullable=False)
+    direction = Column(String(10), nullable=False)
+    state = Column(String(20), nullable=False)
+    dedup_key = Column(String(100), nullable=False)
+    transition_count = Column(Integer, nullable=False, default=0)
+    missing_gates = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+
+class RealtimeNotification(Base):
+    """Committed outbox record for at-least-once advisory delivery."""
+
+    __tablename__ = "realtime_notifications"
+    __table_args__ = (
+        UniqueConstraint("signal_id", "channel_id", "dedup_key", name="uq_realtime_notification_delivery"),
+        Index("ix_realtime_notifications_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    signal_id = Column(Integer, ForeignKey("realtime_signals.id", ondelete="CASCADE"), nullable=False)
+    channel_id = Column(Integer, ForeignKey("alert_channels.id", ondelete="CASCADE"), nullable=False)
+    dedup_key = Column(String(100), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    sent_at = Column(DateTime, nullable=True)

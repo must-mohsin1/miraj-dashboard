@@ -1,5 +1,6 @@
 services:
   web:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.web
@@ -18,7 +19,31 @@ services:
       retries: 5
       start_period: 15s
 
+  monitor:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    command: ["python", "-m", "backend.realtime.worker"]
+    env_file:
+      - .env
+    environment:
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-change-in-production}
+      - MONITOR_HEARTBEAT_FILE=/tmp/mexc-monitor.heartbeat
+    volumes:
+      - ./crypto_analysis.db:/app/crypto_analysis.db
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,sys,time; p='/tmp/mexc-monitor.heartbeat'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p)<90 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+
   nextjs:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: frontend/Dockerfile.nextjs
