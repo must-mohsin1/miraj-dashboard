@@ -87,6 +87,8 @@ class WatchlistPairWithScore(BaseModel):
     created_at: datetime
     score: Optional[float] = Field(None, ge=0, le=100)
     status: str = "Active"
+    market_scope: str = "research_only"
+    mexc_symbol: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

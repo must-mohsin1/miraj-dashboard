@@ -38,9 +38,11 @@ def test_coordinator_queues_actionable_transition_without_precommit_delivery():
 def test_worker_maps_usd_watchlist_symbols_to_mexc_usdt_perpetuals():
     async def scenario() -> None:
         worker = MexcMonitoringWorker()
-        assert worker._supported_watchlist_symbol("BTC/USDT") == "BTCUSDT"
-        assert worker._supported_watchlist_symbol("BTC_USDT") == "BTCUSDT"
-        assert worker._supported_watchlist_symbol("BTC-USD") == "BTCUSDT"
-        assert worker._supported_watchlist_symbol("AAPL") is None
+        catalogue = frozenset({"BTC_USDT"})
+        assert worker._supported_watchlist_symbol("BTC/USDT", catalogue) == "BTCUSDT"
+        assert worker._supported_watchlist_symbol("BTC_USDT", catalogue) == "BTCUSDT"
+        assert worker._supported_watchlist_symbol("BTC-USD", catalogue) == "BTCUSDT"
+        assert worker._supported_watchlist_symbol("SNDK-USD", catalogue) is None
+        assert worker._supported_watchlist_symbol("AAPL", catalogue) is None
 
     asyncio.run(scenario())
