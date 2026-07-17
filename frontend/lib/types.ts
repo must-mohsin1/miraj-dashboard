@@ -72,6 +72,10 @@ export interface WatchlistPair {
   score: number | null;
   /** Human-readable status, e.g. "Active". */
   status: string;
+  /** Whether this symbol is verified for MEXC realtime monitoring or research-only. */
+  market_scope: "mexc_realtime" | "research_only";
+  /** Canonical MEXC perpetual, when `market_scope` is `mexc_realtime`. */
+  mexc_symbol: string | null;
 }
 
 /** Response envelope for `GET /api/v1/watchlist`. */

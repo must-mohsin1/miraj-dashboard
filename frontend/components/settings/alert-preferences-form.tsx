@@ -29,9 +29,9 @@ import type { AlertChannel, PairSettingsResponse } from "@/lib/types";
  *
  * Two-part settings panel:
  *
- *  1. **Alert Channels** — lists configured Telegram / Discord / email
- *     channels from `GET /api/v1/settings/channels`. A small form lets the
- *     user add a new Telegram channel via `POST /api/v1/settings/channels`.
+ *  1. **Alert Channels** — lists configured delivery channels from
+ *     `GET /api/v1/settings/channels`. The dashboard currently exposes a
+ *     Telegram configuration form via `POST /api/v1/settings/channels`.
  *     Each channel can be deleted (DELETE) or toggled (PUT enabled).
  *
  *  2. **Per-Pair Thresholds** — lists pair-level alert settings from
