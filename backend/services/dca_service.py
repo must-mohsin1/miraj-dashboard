@@ -34,10 +34,10 @@ SCORE_TRADE_THRESHOLD = 10
 
 
 def _normalize_symbol(position_symbol: str) -> str:
-    """Convert position symbol (BTC/USDT:USDT) to yfinance ticker (BTC-USD)."""
+    """Convert a position symbol (BTC/USDT:USDT, HYPE_USDT) to a scanner ticker (BTC-USD)."""
     s = position_symbol.upper().strip()
     s = s.split(":")[0]           # strip settlement suffix
-    s = s.replace("/", "-")       # slash to dash
+    s = s.replace("/", "-").replace("_", "-")  # ccxt slash / MEXC underscore to dash
     if s.endswith("-USDT"):
         base = s[:-5]
     elif s.endswith("-USD"):
@@ -472,10 +472,14 @@ def evaluate_dca(
 # ── Batch computation ────────────────────────────────────────────────────────
 
 
-async def compute_dca_recommendations(
+async def fetch_scans_for_positions(
     positions: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """Compute DCA for all open positions (concurrent scan fetching)."""
+) -> List[Optional[Dict[str, Any]]]:
+    """Fetch a scan (cached or fresh) for each position's normalized symbol.
+
+    Shared by the DCA engine and the Position Desk so one concurrent scan
+    pass powers both. Entries are ``None`` when the scan failed.
+    """
     semaphore = asyncio.Semaphore(3)
 
     async def _fetch(pos_symbol: str) -> Optional[Dict[str, Any]]:
@@ -494,10 +498,12 @@ async def compute_dca_recommendations(
         *[_fetch(p.get("symbol", "")) for p in positions],
         return_exceptions=True,
     )
+    return [scan if isinstance(scan, dict) else None for scan in scans]
 
-    results: List[Dict[str, Any]] = []
-    for pos, scan in zip(positions, scans):
-        if isinstance(scan, Exception):
-            scan = None
-        results.append(evaluate_dca(pos, scan if isinstance(scan, dict) else None))
-    return results
+
+async def compute_dca_recommendations(
+    positions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Compute DCA for all open positions (concurrent scan fetching)."""
+    scans = await fetch_scans_for_positions(positions)
+    return [evaluate_dca(pos, scan) for pos, scan in zip(positions, scans)]

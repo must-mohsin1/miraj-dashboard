@@ -1209,3 +1209,48 @@ export interface DcaResponse {
   positions: DcaRecommendation[];
 }
 
+// ── Position Desk (verdict-joined positions) ──────────────────────────────
+
+/** A price zone attached to a desk row (OTE / demand zone). */
+export interface PositionDeskZone {
+  low?: number | null;
+  high?: number | null;
+  label?: string | null;
+}
+
+/** One open position joined with its scan verdict and DCA ruling. */
+export interface PositionDeskRow {
+  symbol: string;
+  scan_symbol: string;
+  side: string;
+  size?: number | null;
+  entry_price?: number | null;
+  mark_price?: number | null;
+  pnl?: number | null;
+  pnl_percent?: number | null;
+  leverage?: number | null;
+  liquidation_price?: number | null;
+  liq_distance_pct?: number | null;
+  verdict?: ScanVerdictData | null;
+  regime?: string | null;
+  regime_band_low?: number | null;
+  regime_band_high?: number | null;
+  alignment: "ALIGNED" | "COUNTER_REGIME" | "MIXED" | "NO_DATA" | string;
+  recommendation: "ADD" | "HOLD" | "REDUCE" | "CLOSE" | string;
+  confidence?: string | null;
+  ruling: string;
+  detail?: string | null;
+  add_zone?: PositionDeskZone | null;
+  next_entry?: Record<string, unknown> | null;
+  tp_levels?: number[];
+  action_items?: string[];
+  next_review?: string | null;
+}
+
+/** Response from `GET /api/v1/portfolio/{exchange}/position-desk`. */
+export interface PositionDeskResponse {
+  exchange: string;
+  total_positions: number;
+  positions: PositionDeskRow[];
+}
+

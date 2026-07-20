@@ -20,6 +20,7 @@ import { OrderHistoryTable } from "@/components/portfolio/order-history-table";
 import { LivePortfolioHeader } from "@/components/portfolio/live-portfolio-header";
 import { AnalyticsDashboard } from "@/components/portfolio/analytics-dashboard";
 import { PositionAlertsPanel } from "@/components/portfolio/position-alerts-panel";
+import { PositionDesk } from "@/components/portfolio/position-desk";
 import { RiskMetricsPanel } from "@/components/portfolio/risk-metrics-panel";
 import { DcaPanel } from "@/components/portfolio/dca-panel";
 import type { PortfolioResponse, PositionAlertItem, PositionAlertsResponse } from "@/lib/types";
@@ -486,6 +487,9 @@ export function PortfolioDashboard({
           <RiskMetricsPanel token={token} exchange={exchange} />
         </div>
       </div>
+
+      {/* Position Desk — one ruling per open position, before everything else */}
+      <PositionDesk token={token} exchange={exchange} />
 
       {/* Position alerts panel (Miraj cross-reference) — above tabs */}
       <PositionAlertsPanel token={token} exchange={exchange} />

@@ -970,6 +970,87 @@ async def get_dca_recommendations(
     )
 
 
+# ── Position Desk (verdict-joined positions) ─────────────────────────────
+
+
+class PositionDeskRow(BaseModel):
+    """One open position joined with its scan verdict and DCA ruling."""
+
+    symbol: str
+    scan_symbol: str
+    side: str
+    size: Optional[float] = None
+    entry_price: Optional[float] = None
+    mark_price: Optional[float] = None
+    pnl: Optional[float] = None
+    pnl_percent: Optional[float] = None
+    leverage: Optional[float] = None
+    liquidation_price: Optional[float] = None
+    liq_distance_pct: Optional[float] = None
+    verdict: Optional[Dict[str, Any]] = None
+    regime: Optional[str] = None
+    regime_band_low: Optional[float] = None
+    regime_band_high: Optional[float] = None
+    alignment: str
+    recommendation: str
+    confidence: Optional[str] = None
+    ruling: str
+    detail: Optional[str] = None
+    add_zone: Optional[Dict[str, Any]] = None
+    next_entry: Optional[Dict[str, Any]] = None
+    tp_levels: List[float] = Field(default_factory=list)
+    action_items: List[str] = Field(default_factory=list)
+    next_review: Optional[str] = None
+
+
+class PositionDeskResponse(BaseModel):
+    """Verdict-joined view of all open positions for one exchange."""
+
+    exchange: str
+    total_positions: int
+    positions: List[PositionDeskRow]
+
+
+@router.get(
+    "/{exchange}/position-desk",
+    response_model=PositionDeskResponse,
+    responses={
+        404: {"model": PortfolioErrorResponse, "description": "Unsupported exchange"},
+        501: {"model": PortfolioErrorResponse, "description": "ccxt not installed"},
+    },
+)
+async def get_position_desk(
+    exchange: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> PositionDeskResponse:
+    """Join every open position with its live verdict and DCA ruling.
+
+    The portfolio page's decision layer: for each position — the typed scan
+    verdict, weekly-regime alignment, the DCA engine's recommendation, and a
+    one-line mechanical ruling ("Reduce — wrong side of the weekly band.").
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+
+    positions = await _load_positions(session, current_user.id, exchange_slug)
+    if not positions:
+        return PositionDeskResponse(
+            exchange=exchange_slug, total_positions=0, positions=[]
+        )
+
+    position_dicts = [_serialise_position(p) for p in positions]
+
+    from backend.services.position_desk_service import compute_position_desk
+
+    desk_rows = await compute_position_desk(position_dicts)
+
+    return PositionDeskResponse(
+        exchange=exchange_slug,
+        total_positions=len(desk_rows),
+        positions=[PositionDeskRow(**row) for row in desk_rows],
+    )
+
+
 @router.get(
     "/{exchange}/trade-attribution",
     response_model=TradeAttributionResponse,
