@@ -336,6 +336,33 @@ def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
     return _build_cached_response(symbol, _cache[symbol])
 
 
+#: Chart-only plot series stripped before persisting a scan result.  They are
+#: rebuilt on every scan and only the live API response needs them — nothing
+#: reads them back out of the ``analyses`` table.
+_CHART_SERIES_KEYS: tuple[str, ...] = ("emas", "macd", "bb", "rsi", "volume_profile")
+
+
+def build_persistable_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Return a trimmed copy of a scan *result* for the ``analyses`` table.
+
+    Every persist path (manual scan route, deep scan, 4-hour scheduler) goes
+    through this helper so rows stay symmetric and ``diff_service`` can do
+    field-level diffs (QQE flips, structure changes, verdict transitions)
+    across any pair of scans.
+
+    Trimming, to keep row size bounded:
+      * chart series (``emas``/``macd``/``bb``/``rsi``/``volume_profile``)
+        are dropped entirely;
+      * ``candles`` is cut to the final bar — ``diff_service.diff_volume``
+        only compares last-candle volume.
+    """
+    trimmed = {k: v for k, v in result.items() if k not in _CHART_SERIES_KEYS}
+    candles = trimmed.get("candles")
+    if isinstance(candles, list) and len(candles) > 1:
+        trimmed["candles"] = candles[-1:]
+    return trimmed
+
+
 def get_cached_or_none(symbol: str) -> Optional[dict[str, Any]]:
     """Return a cached response for *symbol* without triggering a refresh.
 

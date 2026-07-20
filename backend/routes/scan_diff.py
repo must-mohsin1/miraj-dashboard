@@ -27,6 +27,12 @@ from backend.services import diff_service
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scan", tags=["scan-diff"])
 
+#: Analysis rows that carry the full normalized scan result and therefore
+#: participate in field-level diffs.  Scheduled 4-hour scans persist the same
+#: blob as manual scans (see ``build_persistable_result``), so the timeline
+#: interleaves both.
+_DIFFABLE_TYPES: tuple[str, ...] = ("scan", "scheduled_scan")
+
 
 # ── Response models ────────────────────────────────────────────────────────
 
@@ -137,7 +143,7 @@ async def get_scan_diff(
         .where(
             Analysis.user_id == current_user.id,
             Analysis.pair == sym,
-            Analysis.analysis_type == "scan",
+            Analysis.analysis_type.in_(_DIFFABLE_TYPES),
         )
         .order_by(Analysis.created_at.desc())
         .limit(2)
@@ -199,7 +205,7 @@ async def get_scan_changes(
         .where(
             Analysis.user_id == current_user.id,
             Analysis.pair == sym,
-            Analysis.analysis_type == "scan",
+            Analysis.analysis_type.in_(_DIFFABLE_TYPES),
         )
         .order_by(Analysis.created_at.asc())  # oldest first
         .limit(limit)

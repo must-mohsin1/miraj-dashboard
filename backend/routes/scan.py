@@ -32,7 +32,12 @@ from backend.obsidian import get_vault_path, is_sync_enabled, sync_scan_result
 
 from backend.realtime.mexc_contracts import classify_market_scope, fetch_mexc_contract_catalogue
 from backend.realtime.mexc_stream import to_mexc_symbol
-from backend.services.analysis_service import get_cached_or_none, run_scan, validate_symbol
+from backend.services.analysis_service import (
+    build_persistable_result,
+    get_cached_or_none,
+    run_scan,
+    validate_symbol,
+)
 from backend.services.export_service import generate_csv, generate_pdf
 
 logger = logging.getLogger(__name__)
@@ -194,6 +199,8 @@ async def scan_symbol(
     # indicator states across scans. Old rows (pre-A0) only have
     # {confluence_score, trade_plan, score_breakdown} — they still parse,
     # they just won't have the extra fields to diff against.
+    # ``build_persistable_result`` (shared with the 4-hour scheduler)
+    # strips chart-only series so rows stay small and symmetric.
     try:
         # Extract score from full result for the indexable column
         score_val: float | None = (
@@ -207,7 +214,7 @@ async def scan_symbol(
             parameters=json.dumps({"symbol": symbol}),
             # `default=str` guards against non-natively-serializable values
             # (e.g. numpy scalars) from the indicator pipeline.
-            result=json.dumps(result, default=str),
+            result=json.dumps(build_persistable_result(result), default=str),
         )
         session.add(analysis)
     except Exception as exc:
@@ -453,7 +460,10 @@ async def deep_scan_symbol(
             analysis_type="deep_scan",  # distinguishes from regular scan
             score=score_val,
             parameters=json.dumps({"symbol": symbol}),
-            result=json.dumps({**result, "deep_analysis": deep_analysis}, default=str),
+            result=json.dumps(
+                {**build_persistable_result(result), "deep_analysis": deep_analysis},
+                default=str,
+            ),
         )
         session.add(analysis)
     except Exception as exc:

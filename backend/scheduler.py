@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_session_factory
 from backend.models import Analysis, ExchangeKey, PriceAlert, ScanRun, WatchlistPair
 from backend.obsidian import get_vault_path, is_sync_enabled, sync_scan_result
-from backend.services.analysis_service import run_scan
+from backend.services.analysis_service import build_persistable_result, run_scan
 
 logger = logging.getLogger(__name__)
 
@@ -125,24 +125,29 @@ async def run_scheduled_scan() -> None:
 
             for pair, users in pair_to_users.items():
                 scan_result = scan_results_map.get(pair)
+                if scan_result is None:
+                    continue  # scan failed for this pair
+
+                # Persist the same full normalized result the manual scan
+                # route stores (trimmed of chart series) so diff_service can
+                # compare QQE flips, structure changes, and verdict
+                # transitions across scheduled scans too.  Serialised once
+                # per pair and reused for every user who watches it.
+                score_val: float | None = (
+                    scan_result.get("overall_score") or scan_result.get("confluence_score")
+                )
+                result_json = json.dumps(
+                    build_persistable_result(scan_result), default=str,
+                )
+
                 for user_id in users:
-                    if scan_result is None:
-                        continue  # scan failed for this pair
-                    # Persist
-                    score_val: float | None = (
-                        scan_result.get("overall_score") or scan_result.get("confluence_score")
-                    )
                     analysis = Analysis(
                         user_id=user_id,
                         pair=pair,
                         analysis_type="scheduled_scan",
                         score=score_val,
                         parameters=json.dumps({"symbol": pair}),
-                        result=json.dumps({
-                            "confluence_score": scan_result.get("confluence_score"),
-                            "trade_plan": scan_result.get("trade_plan"),
-                            "score_breakdown": scan_result.get("score_breakdown"),
-                        }),
+                        result=result_json,
                     )
                     session.add(analysis)
 
