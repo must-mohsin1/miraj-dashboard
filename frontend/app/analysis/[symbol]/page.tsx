@@ -16,6 +16,7 @@ import type { ScanResult, TradePlanFlat } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { ScoreGauge } from "@/components/score-gauge";
 import { TradePlan } from "@/components/trade-plan";
+import { VerdictCard } from "@/components/verdict-card";
 import { LiveCandlestickChart } from "@/components/live-candlestick-chart";
 import { TradingGlossary } from "@/components/trading-glossary";
 import { KillZoneClock } from "@/components/kill-zone-clock";
@@ -204,7 +205,9 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
   // ── Extract data for the chart and trade plan ───────────────────────
   const overall = result.overall_score ?? result.confluence_score;
   const flat = result.trade_plan_flat;
-  const direction = flat?.direction;
+  // Bias from the typed verdict is authoritative; flat direction is the fallback
+  // for old cached results that predate the verdict contract.
+  const direction = result.verdict?.bias ?? flat?.direction;
   const candles = result.candles ?? [];
   const dirMeta = directionMeta(direction);
   const cachedAt = formatRelative(result.cached_at);
@@ -294,6 +297,9 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
 
       {/* ── Deep Scan button + panel ── */}
       {/* <DeepScanPanel symbol={result.symbol} /> */}
+
+      {/* ── Verdict (decision first: state, bias, blockers, gates) ── */}
+      <VerdictCard verdict={result.verdict} />
 
       {/* Top row: Score gauge + Trade plan */}
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">

@@ -16,6 +16,7 @@ from mirai_core import patterns
 from mirai_core import confluence
 from mirai_core import trade_plan
 from mirai_core import charts
+from mirai_core import verdict
 
 __all__ = [
     "config",
@@ -28,6 +29,7 @@ __all__ = [
     "confluence",
     "trade_plan",
     "charts",
+    "verdict",
 ]
 
 __version__ = "1.0.0"

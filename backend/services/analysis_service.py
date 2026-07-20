@@ -36,6 +36,7 @@ if _MIRAI_PARENT not in sys.path:
     sys.path.insert(0, _MIRAI_PARENT)
 
 from mirai_core import ohlcv, indicators, qqe_mod, smc, patterns, confluence, trade_plan, charts, macro
+from mirai_core import verdict as verdict_contract
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
@@ -248,6 +249,21 @@ def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
             logger.error("Trade plan generation failed: %s", exc)
             trade_plan_result = {"trade_decision": False, "error": str(exc)}
 
+    # ── 8b. Typed verdict (bias vs actionability contract) ─────────
+    try:
+        verdict_payload = verdict_contract.build_verdict(
+            direction=direction,
+            entry_actionable=entry_actionable,
+            structure_results=structure_results,
+            qqe_signals=qqe_signals,
+            bmsb_data=bmsb_data,
+            price_levels=price_levels,
+            order_blocks=smc_result.get("order_blocks", []) if isinstance(smc_result, dict) else [],
+        )
+    except Exception as exc:
+        logger.error("Verdict build failed: %s", exc)
+        verdict_payload = None
+
     # ── 9. Chart (daily, last 100 bars) ────────────────────────────
     chart_html: Optional[str] = None
     chart_df = timeframes.get("daily")
@@ -269,6 +285,7 @@ def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
         "scores": _extract_category_scores(score_breakdown),
         "trade_plan": trade_plan_result,
         "trade_plan_flat": trade_plan_flat,
+        "verdict": verdict_payload,
         "macro_data": {
             k: macro_data.get(k)
             for k in ("btc_d", "usdt_d", "dxy", "fear_greed", "long_short_ratio_btc")

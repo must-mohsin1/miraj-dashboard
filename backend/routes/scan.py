@@ -64,6 +64,8 @@ class ScanResponse(BaseModel):
     scores: Optional[dict[str, float]] = None
     trade_plan: dict[str, Any]
     trade_plan_flat: Optional[dict[str, Any]] = None
+    # ── Typed verdict contract (state/bias/gates/blockers) — mirai_core.verdict ──
+    verdict: Optional[dict[str, Any]] = None
     score_breakdown: dict[str, Any]
     macro_data: Optional[dict[str, Any]] = None
     smc: Optional[dict[str, Any]] = None

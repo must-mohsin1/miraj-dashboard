@@ -613,6 +613,33 @@ export interface TradePlanFull {
   tp2_price?: number | null;
 }
 
+/** One hard eligibility gate from the typed verdict contract. */
+export interface VerdictGate {
+  id: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+}
+
+/**
+ * Typed scan verdict (`mirai_core.verdict`). Separates BIAS (which way the
+ * market leans) from ACTIONABILITY (whether an entry may be taken now).
+ * `state` is the decision; the confluence score only ranks quality after
+ * every gate passes.
+ */
+export interface ScanVerdictData {
+  schema_version: number;
+  state: "NO_TRADE" | "WATCH" | "READY_LONG" | "READY_SHORT";
+  /** Human display label, e.g. "NO TRADE TODAY". */
+  display: string;
+  bias: "LONG" | "SHORT" | "NEUTRAL";
+  actionable: boolean;
+  gates: VerdictGate[];
+  blockers: string[];
+  reasoning: string;
+  next_review?: string | null;
+}
+
 /**
  * Category-level sub-scores (0–5 raw points each). Keys: regime, location,
  * confirmation, volume_retest, risk.
@@ -638,6 +665,8 @@ export interface ScanResult {
   trade_plan: Record<string, unknown>;
   /** Flat, UI-friendly trade plan (entry/stop/targets/direction). */
   trade_plan_flat: TradePlanFlat | null;
+  /** Typed verdict contract (state/bias/gates/blockers). Null on old cached results. */
+  verdict?: ScanVerdictData | null;
   /** Breakdown of the confluence score (category objects with `score`/`max`). */
   score_breakdown: Record<string, unknown>;
   macro_data: Record<string, unknown> | null;
