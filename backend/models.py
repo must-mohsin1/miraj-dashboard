@@ -476,6 +476,7 @@ class RealtimeSignal(Base):
     dedup_key = Column(String(100), nullable=False)
     transition_count = Column(Integer, nullable=False, default=0)
     missing_gates = Column(Text, nullable=True)
+    analysis_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 

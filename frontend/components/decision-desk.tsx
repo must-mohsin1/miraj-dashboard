@@ -8,6 +8,12 @@ export interface DecisionDeskSignal {
   direction: string;
   state: string;
   missingGates: string[];
+  analysis?: {
+    entry: number;
+    invalidation: number;
+    targetOne: number;
+    riskReward: number;
+  } | null;
   updatedAt: string | null;
 }
 
@@ -59,6 +65,11 @@ function SignalList({ signals, emptyMessage }: { signals: DecisionDeskSignal[]; 
             <Badge className="bg-slate-700 text-slate-200 hover:bg-slate-700">{signal.state}</Badge>
             <span className="font-medium text-slate-200">{`${signal.pair} — ${signal.direction}`}</span>
           </div>
+          {signal.analysis ? (
+            <p className="text-xs text-emerald-300">
+              Entry {signal.analysis.entry} · Invalidation {signal.analysis.invalidation} · Target 1 {signal.analysis.targetOne} · R:R {signal.analysis.riskReward.toFixed(2)}
+            </p>
+          ) : null}
           {signal.missingGates.length > 0 ? (
             <p className="text-xs text-slate-500">Missing: {signal.missingGates.join(", ")}</p>
           ) : null}

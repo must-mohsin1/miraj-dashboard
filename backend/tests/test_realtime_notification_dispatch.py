@@ -67,10 +67,16 @@ def test_stale_transition_is_persisted_but_not_enqueued_for_delivery():
 
 def test_actionable_message_includes_confirmation_and_manual_risk_review():
     signal = RealtimeSignal(
-        pair="BTCUSDT", direction="LONG", state="ACTIONABLE", dedup_key="BTCUSDT:LONG:ACTIONABLE:1", missing_gates="[]"
+        pair="BTCUSDT",
+        direction="LONG",
+        state="ACTIONABLE",
+        dedup_key="BTCUSDT:LONG:ACTIONABLE:1",
+        missing_gates="[]",
+        analysis_json='{"entry": 100.0, "invalidation": 95.0, "target_one": 110.0, "risk_reward": 2.0}',
     )
     text = _format_notification(signal)
     assert "Closed-candle review:" in text
     assert "higher-timeframe alignment" in text
-    assert "entry, stop/invalidation, target, position size" in text
+    assert "Setup levels: entry 100 | invalidation 95 | target 1 110 | R:R 2.00" in text
+    assert "validate current price and account exposure" in text
     assert "no order has been placed" in text

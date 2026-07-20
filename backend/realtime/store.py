@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +42,7 @@ async def record_transition(
         )
     ).scalar_one_or_none()
     missing_gates = json.dumps(evaluation.missing_gates)
+    analysis_json = json.dumps(asdict(evaluation.analysis)) if evaluation.analysis else None
 
     if row is None:
         row = RealtimeSignal(
@@ -52,18 +53,20 @@ async def record_transition(
             dedup_key=f"{evaluation.dedup_key}:1",
             transition_count=1,
             missing_gates=missing_gates,
+            analysis_json=analysis_json,
         )
         session.add(row)
         await session.flush()
         return StoredTransition(changed=True, signal=row)
 
     changed = row.state != evaluation.state.value
+    row.missing_gates = missing_gates
+    row.analysis_json = analysis_json
     if changed:
         row.state = evaluation.state.value
         row.transition_count += 1
         row.dedup_key = f"{evaluation.dedup_key}:{row.transition_count}"
-        row.missing_gates = missing_gates
-        await session.flush()
+    await session.flush()
     return StoredTransition(changed=changed, signal=row)
 
 

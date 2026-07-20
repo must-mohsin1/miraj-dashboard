@@ -71,6 +71,12 @@ export default async function NowPage() {
             direction: signal.direction,
             state: signal.state,
             missingGates: signal.missing_gates ?? [],
+            analysis: signal.analysis ? {
+              entry: signal.analysis.entry,
+              invalidation: signal.analysis.invalidation,
+              targetOne: signal.analysis.target_one,
+              riskReward: signal.analysis.risk_reward,
+            } : null,
             updatedAt: signal.updated_at ?? null,
           }))}
           notifications={desk.notification_outbox.map((notification) => ({

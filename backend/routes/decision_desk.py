@@ -29,6 +29,7 @@ from backend.schemas import (
     DecisionDeskNotificationChannel,
     DecisionDeskNotificationOutboxItem,
     DecisionDeskResponse,
+    DecisionDeskSetupAnalysis,
     DecisionDeskSignal,
     DecisionDeskWatchlistPair,
 )
@@ -46,6 +47,15 @@ def _missing_gates(value: str | None) -> list[str]:
     except (TypeError, ValueError):
         return []
     return [gate for gate in decoded if isinstance(gate, str)] if isinstance(decoded, list) else []
+
+
+def _setup_analysis(value: str | None) -> DecisionDeskSetupAnalysis | None:
+    """Decode only complete, numeric setup evidence from the persisted signal."""
+    try:
+        decoded = json.loads(value or "{}")
+        return DecisionDeskSetupAnalysis.model_validate(decoded)
+    except (TypeError, ValueError):
+        return None
 
 
 def _channel_is_configured(channel: AlertChannel) -> bool:
@@ -142,6 +152,7 @@ async def now(
             direction=signal.direction,
             state=signal.state,
             missing_gates=_missing_gates(signal.missing_gates),
+            analysis=_setup_analysis(signal.analysis_json),
             created_at=signal.created_at,
             updated_at=signal.updated_at,
         )

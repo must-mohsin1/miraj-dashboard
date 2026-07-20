@@ -112,11 +112,21 @@ class DecisionDeskWatchlistPair(BaseModel):
     mexc_symbol: Optional[str] = None
 
 
+class DecisionDeskSetupAnalysis(BaseModel):
+    entry: float
+    invalidation: float
+    target_one: float
+    risk_reward: float
+    swing_high: float
+    swing_low: float
+
+
 class DecisionDeskSignal(BaseModel):
     pair: str
     direction: str
     state: str
     missing_gates: list[str]
+    analysis: Optional[DecisionDeskSetupAnalysis] = None
     created_at: datetime
     updated_at: datetime
 

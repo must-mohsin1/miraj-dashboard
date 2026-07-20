@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_session_factory
 from backend.models import AlertChannel, AlertHistory, RealtimeNotification, RealtimeSignal, WatchlistPair
-from backend.realtime.lifecycle import Confirmation, SignalEvaluation, SignalLifecycle, SignalState
+from backend.realtime.lifecycle import Confirmation, SetupAnalysis, SignalEvaluation, SignalLifecycle, SignalState
 from backend.realtime.mexc_contracts import classify_market_scope, fetch_mexc_contract_catalogue
 from backend.realtime.mexc_stream import (
     MEXC_CONTRACT_WS_URL,
@@ -118,17 +118,27 @@ def _format_notification(signal: RealtimeSignal) -> str:
     direction = cast(str, signal.direction)
     checked_at = (updated_at or datetime.datetime.utcnow()).strftime("%Y-%m-%d %H:%M UTC")
     missing = json.loads(cast(Optional[str], signal.missing_gates) or "[]")
+    try:
+        analysis = json.loads(cast(Optional[str], signal.analysis_json) or "{}")
+    except (TypeError, ValueError):
+        analysis = {}
     header = f"**{state} — {pair} {direction}**"
 
     if state == SignalState.ACTIONABLE.value:
+        levels = ""
+        if isinstance(analysis, dict) and all(key in analysis for key in ("entry", "invalidation", "target_one", "risk_reward")):
+            levels = (
+                f"Setup levels: entry {analysis['entry']:.8g} | invalidation {analysis['invalidation']:.8g} | "
+                f"target 1 {analysis['target_one']:.8g} | R:R {analysis['risk_reward']:.2f}\n"
+            )
         return "\n".join(
             (
                 header,
                 f"Closed-candle review: {checked_at}",
                 "Confirmation: higher-timeframe alignment, entry/OTE zone, retest, 5m close, "
                 "15m QQE, and volume were all confirmed.",
-                "Manual review: open Miraj to validate current price, entry, stop/invalidation, target, "
-                "position size, and account exposure before any order.",
+                levels.rstrip(),
+                "Manual review: validate current price and account exposure before any order.",
                 "Mode: advisory only — no order has been placed.",
             )
         )
@@ -256,6 +266,18 @@ class CandleStrategy:
         )
         volume = five[-1].volume > _mean([c.volume for c in five[-21:-1]])
         invalidated = price < swing_low if long else price > swing_high
+        invalidation = swing_low if long else swing_high
+        target_one = swing_high if long else swing_low
+        risk = abs(price - invalidation)
+        reward = abs(target_one - price)
+        analysis = SetupAnalysis(
+            entry=price,
+            invalidation=invalidation,
+            target_one=target_one,
+            risk_reward=reward / risk if risk > 0 else 0.0,
+            swing_high=swing_high,
+            swing_low=swing_low,
+        )
         return Confirmation(
             symbol=symbol,
             direction=direction,
@@ -267,6 +289,7 @@ class CandleStrategy:
             volume_confirmed=volume,
             invalidation_hit=invalidated,
             data_fresh=data_fresh,
+            analysis=analysis,
         )
 
     def _closed(self, symbol: str, interval: str, minimum: int) -> list[KlineCandle] | None:

@@ -92,6 +92,7 @@ async def test_now_returns_authenticated_user_watchlist_scope_and_persisted_sign
                     dedup_key="BTCUSDT:LONG:ACTIONABLE:1",
                     transition_count=1,
                     missing_gates="[]",
+                    analysis_json='{"entry": 100.0, "invalidation": 95.0, "target_one": 110.0, "risk_reward": 2.0, "swing_high": 110.0, "swing_low": 95.0}',
                     created_at=observed_at,
                     updated_at=observed_at,
                 ),
@@ -126,6 +127,7 @@ async def test_now_returns_authenticated_user_watchlist_scope_and_persisted_sign
             "direction": "LONG",
             "state": "ACTIONABLE",
             "missing_gates": [],
+            "analysis": {"entry": 100.0, "invalidation": 95.0, "target_one": 110.0, "risk_reward": 2.0, "swing_high": 110.0, "swing_low": 95.0},
             "created_at": "2026-07-17T12:00:00",
             "updated_at": "2026-07-17T12:00:00",
         }

@@ -1,10 +1,20 @@
 export type DecisionDeskSignalState = "WATCH" | "READY" | "ACTIONABLE" | "INVALIDATED" | "STALE";
 
+export interface DecisionDeskSetupAnalysis {
+  entry: number;
+  invalidation: number;
+  target_one: number;
+  risk_reward: number;
+  swing_high: number;
+  swing_low: number;
+}
+
 export interface DecisionDeskSignal {
   pair: string;
   direction: string;
   state: DecisionDeskSignalState;
   missing_gates: string[];
+  analysis?: DecisionDeskSetupAnalysis | null;
   updated_at: string;
 }
 
