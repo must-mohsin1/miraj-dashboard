@@ -9,5 +9,6 @@ describe("Next Docker build", () => {
     );
 
     expect(dockerfile).toContain("ENV API_URL=http://web:8000");
+    expect(dockerfile).toContain("ENV NEXT_PUBLIC_API_URL=");
   });
 });
