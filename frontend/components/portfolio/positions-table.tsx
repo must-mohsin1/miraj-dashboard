@@ -194,38 +194,11 @@ function PositionRow({
   pnlPositive,
   alert = null,
 }: PositionRowProps) {
-  const [flash, setFlash] = useState<"up" | "down" | null>(null);
   const [showAlertTooltip, setShowAlertTooltip] = useState(false);
-  const prevMarkRef = useRef<number | null>(null);
-  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    if (liveMark == null) return;
-    const prev = prevMarkRef.current;
-    if (prev != null && liveMark > prev) {
-      setFlash("up");
-    } else if (prev != null && liveMark < prev) {
-      setFlash("down");
-    }
-    prevMarkRef.current = liveMark;
-
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    flashTimerRef.current = setTimeout(() => setFlash(null), 600);
-
-    return () => {
-      if (flashTimerRef.current) {
-        clearTimeout(flashTimerRef.current);
-        flashTimerRef.current = null;
-      }
-    };
-  }, [liveMark]);
-
-  const markColor =
-    flash === "up"
-      ? "text-emerald-400"
-      : flash === "down"
-        ? "text-red-400"
-        : "text-slate-300";
+  // Kill tick urgency (DESIGN.md): live numbers update silently. Direction
+  // color belongs to verdicts and P&L, never to per-tick price movement.
+  const markColor = "text-slate-300";
 
   const hasAlert = alert && alert.alerts && alert.alerts.length > 0;
   const isDanger = alert?.max_severity === "DANGER";
@@ -247,10 +220,6 @@ function PositionRow({
           {position.symbol}
           {liveMark != null && (
             <span className="relative flex h-1.5 w-1.5" aria-hidden title="Live price">
-              <span
-                className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
-                style={{ animationDuration: "1.5s" }}
-              />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
             </span>
           )}

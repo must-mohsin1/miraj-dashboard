@@ -41,39 +41,6 @@ export function LivePriceBadge({
   className = "",
   precision = 2,
 }: LivePriceBadgeProps) {
-  const [flash, setFlash] = useState<FlashDirection>(null);
-  const prevPriceRef = useRef<number | null>(null);
-  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!price) return;
-    const next = price.price;
-    const prev = prevPriceRef.current;
-    if (prev != null && next > prev) {
-      setFlash("up");
-    } else if (prev != null && next < prev) {
-      setFlash("down");
-    }
-    prevPriceRef.current = next;
-
-    // Clear the flash after 600 ms so it pulses once per tick
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    flashTimerRef.current = setTimeout(() => setFlash(null), 600);
-
-    return () => {
-      if (flashTimerRef.current) {
-        clearTimeout(flashTimerRef.current);
-        flashTimerRef.current = null;
-      }
-    };
-  }, [price]);
-
-  // Reset when the symbol changes (e.g. navigating between pairs).
-  useEffect(() => {
-    prevPriceRef.current = null;
-    setFlash(null);
-  }, [symbol]);
-
   const formattedPrice = price
     ? price.price.toLocaleString(undefined, {
         minimumFractionDigits: precision,
@@ -81,25 +48,14 @@ export function LivePriceBadge({
       })
     : "—";
 
-  // Price colour: green flash on up, red flash on down, slate when idle
-  const priceColor =
-    flash === "up"
-      ? "text-emerald-400"
-      : flash === "down"
-        ? "text-red-400"
-        : "text-slate-100";
-
-  // Background flash for the whole pill
-  const bgFlash =
-    flash === "up"
-      ? "bg-emerald-500/10"
-      : flash === "down"
-        ? "bg-red-500/10"
-        : "bg-slate-800/60";
+  // Kill tick urgency (DESIGN.md): the price updates silently — no flash,
+  // no per-tick color. Direction color belongs to verdicts and P&L only.
+  const priceColor = "text-slate-100";
+  const bgFlash = "bg-slate-800/60";
 
   return (
     <span
-      className={`inline-flex items-center gap-2 rounded-full border border-slate-700 px-2.5 py-0.5 text-xs font-medium transition-colors duration-300 ${bgFlash} ${className}`}
+      className={`inline-flex items-center gap-2 border border-slate-700 px-2.5 py-0.5 text-xs font-medium ${bgFlash} ${className}`}
     >
       {/* LIVE indicator with pulsing dot */}
       <span className="flex items-center gap-1.5">

@@ -150,39 +150,9 @@ interface BalanceRowProps {
 }
 
 function BalanceRow({ balance, usdValue, pct, usdPositive, livePrice }: BalanceRowProps) {
-  const [flash, setFlash] = useState<"up" | "down" | null>(null);
-  const prevPriceRef = useRef<number | null>(null);
-  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (livePrice == null) return;
-    const prev = prevPriceRef.current;
-    if (prev != null && livePrice > prev) {
-      setFlash("up");
-    } else if (prev != null && livePrice < prev) {
-      setFlash("down");
-    }
-    prevPriceRef.current = livePrice;
-
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    flashTimerRef.current = setTimeout(() => setFlash(null), 600);
-
-    return () => {
-      if (flashTimerRef.current) {
-        clearTimeout(flashTimerRef.current);
-        flashTimerRef.current = null;
-      }
-    };
-  }, [livePrice]);
-
-  const valueColor =
-    flash === "up"
-      ? "text-emerald-400"
-      : flash === "down"
-        ? "text-red-400"
-        : usdPositive
-          ? "text-emerald-400"
-          : "text-slate-500";
+  // Kill tick urgency (DESIGN.md): values update silently; color marks
+  // portfolio composition, never per-tick movement.
+  const valueColor = usdPositive ? "text-emerald-400" : "text-slate-500";
 
   return (
     <TableRow
@@ -193,10 +163,6 @@ function BalanceRow({ balance, usdValue, pct, usdPositive, livePrice }: BalanceR
           {balance.asset}
           {livePrice != null && (
             <span className="relative flex h-1.5 w-1.5" aria-hidden title="Live price">
-              <span
-                className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
-                style={{ animationDuration: "1.5s" }}
-              />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
             </span>
           )}

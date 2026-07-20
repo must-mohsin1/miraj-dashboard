@@ -244,23 +244,21 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
           Back to Analysis
         </Link>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-emerald-400" />
-              <h1 className="text-2xl font-bold tracking-tight text-slate-100">
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Analysis
+            </p>
+            <div className="flex items-baseline gap-3">
+              <h1 className="font-verdict text-4xl text-slate-100 sm:text-5xl">
                 {result.symbol}
               </h1>
               <span
-                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${dirMeta.className}`}
+                className={`inline-flex items-center gap-1 border px-2.5 py-0.5 text-xs font-semibold ${dirMeta.className}`}
               >
                 <span>{dirMeta.arrow}</span>
                 {dirMeta.label}
               </span>
             </div>
-            <p className="text-sm text-slate-400">
-              Full confluence analysis: macro → OHLCV → indicators → QQE → SMC →
-              patterns → trade plan.
-            </p>
           </div>
           <div className="flex items-center gap-2">
             {cachedAt && (
@@ -283,6 +281,7 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
             )}
           </div>
         </div>
+        <hr className="rule-brass border-0" />
       </header>
 
       {/* ── Metric Trends (compact trend arrows on key metrics) ── */}

@@ -93,13 +93,13 @@ export function VerdictCard({ verdict }: VerdictCardProps) {
         {/* State + bias — separate facts, separate chips */}
         <div className="flex flex-wrap items-center gap-2">
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-semibold ${meta.chip}`}
+            className={`inline-flex items-center gap-1.5 border px-3 py-1 text-sm font-semibold ${meta.chip}`}
           >
             <Icon className="h-4 w-4" />
             {verdict.display}
           </span>
           <span
-            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${biasClass}`}
+            className={`inline-flex items-center gap-1 border px-2.5 py-0.5 text-xs font-semibold ${biasClass}`}
           >
             Bias: {verdict.bias}
           </span>
