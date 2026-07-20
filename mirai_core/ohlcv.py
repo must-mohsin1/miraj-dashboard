@@ -6,8 +6,10 @@ For 4H: downloads 1H data and resamples.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
+from urllib import parse, request
 
 import pandas as pd
 import yfinance as yf
@@ -107,4 +109,46 @@ def fetch_all_timeframes(
         "4h": fetch_4h(symbol),
         "1h": fetch_hourly(symbol),
         "15m": fetch_15min(symbol),
+    }
+
+
+_MEXC_KLINE_URL = "https://contract.mexc.com/api/v1/contract/kline/{symbol}"
+_MEXC_TIMEFRAMES = {
+    "weekly": "Week1",
+    "daily": "Day1",
+    "4h": "Hour4",
+    "1h": "Min60",
+    "15m": "Min15",
+}
+
+
+def fetch_mexc_ohlcv(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
+    """Fetch public MEXC Contract candles as scanner-compatible OHLCV data."""
+    url = _MEXC_KLINE_URL.format(symbol=symbol)
+    query = parse.urlencode({"interval": interval, "limit": limit})
+    try:
+        with request.urlopen(request.Request(f"{url}?{query}"), timeout=15) as response:
+            payload = json.loads(response.read())
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        columns = ("time", "open", "high", "low", "close", "vol")
+        if not all(isinstance(data.get(column), list) for column in columns):
+            return pd.DataFrame()
+        frame = pd.DataFrame({
+            "Open": data["open"],
+            "High": data["high"],
+            "Low": data["low"],
+            "Close": data["close"],
+            "Volume": data["vol"],
+        }, index=pd.to_datetime(data["time"], unit="s", utc=True))
+        return frame.astype(float).sort_index()
+    except Exception as exc:
+        logger.warning("MEXC OHLCV fetch failed for %s %s: %s", symbol, interval, exc)
+        return pd.DataFrame()
+
+
+def fetch_mexc_all_timeframes(symbol: str) -> dict[str, pd.DataFrame]:
+    """Return the scanner's five timeframes from an MEXC Contract symbol."""
+    return {
+        timeframe: fetch_mexc_ohlcv(symbol, interval)
+        for timeframe, interval in _MEXC_TIMEFRAMES.items()
     }

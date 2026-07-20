@@ -62,7 +62,14 @@ def validate_symbol(symbol: str) -> bool:
         return False
 
 
-def run_scan(symbol: str) -> dict[str, Any]:
+def fetch_scan_timeframes(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
+    """Load scanner candles from Yahoo or a catalogue-verified MEXC contract."""
+    if mexc_symbol is not None:
+        return ohlcv.fetch_mexc_all_timeframes(mexc_symbol)
+    return ohlcv.fetch_all_timeframes(symbol)
+
+
+def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
     """Run the full analysis pipeline for *symbol*.
 
     Returns a response dict with keys:
@@ -90,7 +97,7 @@ def run_scan(symbol: str) -> dict[str, Any]:
     # ── 2. OHLCV (5 TFs) — critical step ───────────────────────────
     timeframes: dict[str, Any] = {}
     try:
-        timeframes = ohlcv.fetch_all_timeframes(symbol)
+        timeframes = fetch_scan_timeframes(symbol, mexc_symbol)
         has_any = any(
             df is not None and not df.empty for df in timeframes.values()
         )

@@ -53,3 +53,33 @@ class TestFetchOhlcv:
         assert set(tfs.keys()) == {"weekly", "daily", "4h", "1h", "15m"}
         for name, df in tfs.items():
             assert isinstance(df, pd.DataFrame), f"{name} is not a DataFrame"
+
+
+class TestMexcOhlcv:
+    def test_fetch_mexc_all_timeframes_converts_contract_klines(self, monkeypatch):
+        """An active MEXC contract yields scanner-compatible frames."""
+        intervals = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"success":true,"data":{"time":[1720000000],"open":[1],"high":[2],"low":[0.5],"close":[1.5],"vol":[42]}}'
+
+        def fake_urlopen(request, timeout):
+            intervals.append(request.full_url)
+            return Response()
+
+        monkeypatch.setattr(ohlcv.request, "urlopen", fake_urlopen)
+
+        frames = ohlcv.fetch_mexc_all_timeframes("HYPE_USDT")
+
+        assert set(frames) == {"weekly", "daily", "4h", "1h", "15m"}
+        assert all(list(frame.columns) == ["Open", "High", "Low", "Close", "Volume"] for frame in frames.values())
+        assert frames["daily"].iloc[0].to_dict() == {"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 42.0}
+        assert any("interval=Week1" in url for url in intervals)
+        assert any("interval=Min15" in url for url in intervals)

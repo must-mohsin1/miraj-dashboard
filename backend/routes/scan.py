@@ -30,6 +30,8 @@ from backend.database import get_session
 from backend.models import Analysis, User, WatchlistPair
 from backend.obsidian import get_vault_path, is_sync_enabled, sync_scan_result
 
+from backend.realtime.mexc_contracts import classify_market_scope, fetch_mexc_contract_catalogue
+from backend.realtime.mexc_stream import to_mexc_symbol
 from backend.services.analysis_service import get_cached_or_none, run_scan, validate_symbol
 from backend.services.export_service import generate_csv, generate_pdf
 
@@ -101,6 +103,15 @@ class ScanErrorResponse(BaseModel):
     detail: str
 
 
+async def resolve_mexc_scan_symbol(symbol: str) -> str | None:
+    """Return an active MEXC contract only when catalogue evidence verifies it."""
+    catalogue = await fetch_mexc_contract_catalogue()
+    market_scope, normalized = classify_market_scope(symbol, catalogue)
+    if market_scope != "mexc_realtime" or normalized is None:
+        return None
+    return to_mexc_symbol(normalized)
+
+
 # ── Route ────────────────────────────────────────────────────────────────
 
 
@@ -134,12 +145,15 @@ async def scan_symbol(
             detail=f"Invalid symbol format: '{symbol}'. Expected XXX-USD or XXX-USDT (e.g. BTC-USD).",
         )
 
-    # ── Validate symbol exists via yfinance ─────────────────────────
+    # ── Validate symbol exists via Yahoo Finance or active MEXC catalogue ──
+    mexc_symbol = None
     if not validate_symbol(symbol):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid symbol: '{symbol}' is not a valid trading pair on Yahoo Finance",
-        )
+        mexc_symbol = await resolve_mexc_scan_symbol(symbol)
+        if mexc_symbol is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid symbol: '{symbol}' is not available from Yahoo Finance or an active MEXC Contract market",
+            )
 
     # ── Check for fresh cache ──────────────────────────────────────
     cached = get_cached_or_none(symbol)
@@ -149,7 +163,7 @@ async def scan_symbol(
     # ── Run pipeline (with 30s timeout to prevent indefinite hangs) ─
     try:
         result = await asyncio.wait_for(
-            asyncio.to_thread(run_scan, symbol),
+            asyncio.to_thread(run_scan, symbol, mexc_symbol),
             timeout=SCAN_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
