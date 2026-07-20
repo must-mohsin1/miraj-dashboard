@@ -44,13 +44,148 @@ def _find_swing_lows(
     return _find_swing_highs(-series, distance, prominence_factor)
 
 
+def annotate_zones(
+    zones: list[dict[str, object]],
+    df: pd.DataFrame,
+    timeframe: str = "4h",
+) -> list[dict[str, object]]:
+    """Attach actionability metadata to detected zones, in place.
+
+    Each zone dict gains additive keys — existing keys (``type``, ``zone``,
+    ``index``) are never modified:
+
+    - ``timeframe``: scanner timeframe the zone was detected on
+    - ``age_bars`` / ``age_days``: how long ago the zone printed
+    - ``distance_pct``: signed percent from current price to the nearest
+      zone edge (negative = zone below spot, positive = above, 0 = inside)
+    - ``direction_match``: ``"bullish"`` | ``"bearish"`` — the trade side
+      this zone supports as a pullback entry
+    - ``actionable``: True when the zone is correctly positioned and within
+      ``config.SMC_ACTIONABLE_PULLBACK`` of spot — the same rule
+      ``_extract_price_levels`` applies when selecting entry zones
+    - ``reason``: human-readable justification for ``actionable``
+
+    Fields that cannot be computed (missing index, empty df, malformed
+    zone) are set to ``None`` rather than omitted, so the schema is stable.
+    """
+    try:
+        current_price: float | None = float(df["Close"].iloc[-1])
+        if not np.isfinite(current_price) or current_price <= 0:
+            current_price = None
+    except Exception:
+        current_price = None
+    last_ts = df.index[-1] if len(df) else None
+    bar_hours = config.TIMEFRAME_BAR_HOURS.get(timeframe)
+    max_pullback = config.SMC_ACTIONABLE_PULLBACK
+
+    for z in zones:
+        if not isinstance(z, dict):
+            continue
+        z["timeframe"] = timeframe
+
+        # ── Age relative to the latest bar ─────────────────────────
+        age_bars: int | None = None
+        age_days: float | None = None
+        idx_val = z.get("index")
+        if idx_val is not None and len(df):
+            try:
+                pos = df.index.get_loc(idx_val)
+                if isinstance(pos, slice):
+                    pos = pos.start
+                elif not isinstance(pos, (int, np.integer)):
+                    pos = int(np.flatnonzero(pos)[0])
+                age_bars = int(len(df) - 1 - int(pos))
+            except Exception:
+                age_bars = None
+        if idx_val is not None and last_ts is not None:
+            try:
+                age_days = round(
+                    float((last_ts - idx_val).total_seconds()) / 86400.0, 2
+                )
+            except Exception:
+                age_days = None
+        if age_days is None and age_bars is not None and bar_hours:
+            age_days = round(age_bars * bar_hours / 24.0, 2)
+        z["age_bars"] = age_bars
+        z["age_days"] = age_days
+
+        # ── Trade side this zone supports ──────────────────────────
+        type_l = str(z.get("type", "")).lower()
+        direction_match = type_l if type_l in ("bullish", "bearish") else None
+        z["direction_match"] = direction_match
+
+        # ── Distance from spot + pullback validity ─────────────────
+        zone = z.get("zone", (None, None))
+        bounds_ok = (
+            isinstance(zone, (tuple, list))
+            and len(zone) >= 2
+            and zone[0] is not None
+            and zone[1] is not None
+        )
+        if not bounds_ok:
+            z["distance_pct"] = None
+            z["actionable"] = False
+            z["reason"] = "zone bounds unavailable"
+            continue
+        if current_price is None:
+            z["distance_pct"] = None
+            z["actionable"] = False
+            z["reason"] = "current price unavailable — cannot assess the zone"
+            continue
+        low, high = sorted((float(zone[0]), float(zone[1])))
+        if high < current_price:
+            distance_pct = (high - current_price) / current_price * 100.0
+        elif low > current_price:
+            distance_pct = (low - current_price) / current_price * 100.0
+        else:
+            distance_pct = 0.0
+        z["distance_pct"] = round(distance_pct, 4)
+
+        if direction_match is None:
+            z["actionable"] = False
+            z["reason"] = f"unrecognised zone type {z.get('type')!r}"
+            continue
+
+        if direction_match == "bullish":
+            correctly_positioned = low <= current_price
+            gap = max(0.0, (current_price - high) / current_price)
+        else:
+            correctly_positioned = high >= current_price
+            gap = max(0.0, (low - current_price) / current_price)
+        actionable = bool(correctly_positioned and gap <= max_pullback)
+
+        max_pct = max_pullback * 100.0
+        if low <= current_price <= high:
+            reason = "price is inside the zone"
+        elif not correctly_positioned:
+            side = "below" if direction_match == "bullish" else "above"
+            trade = "long" if direction_match == "bullish" else "short"
+            reason = f"price is {side} the zone — not positioned for a {trade} pullback"
+        elif actionable:
+            reason = (
+                f"{abs(distance_pct):.2f}% from price — "
+                f"within the {max_pct:g}% pullback range"
+            )
+        else:
+            reason = (
+                f"{abs(distance_pct):.2f}% from price — "
+                f"beyond the {max_pct:g}% pullback range"
+            )
+        z["actionable"] = actionable
+        z["reason"] = reason
+
+    return zones
+
+
 def find_order_blocks(
     df: pd.DataFrame,
     lookback: int = config.SMC_LOOKBACK,
+    timeframe: str = "4h",
 ) -> list[dict[str, object]]:
     """Detect Order Blocks using the 3-candle method.
 
-    Returns list of dicts with keys: type, zone (low, high), index.
+    Returns list of dicts with keys: type, zone (low, high), index, plus
+    the actionability metadata documented on ``annotate_zones``.
     """
     data = df.tail(lookback)
     obs: list[dict[str, object]] = []
@@ -80,16 +215,18 @@ def find_order_blocks(
                         "index": data.index[i - 1],
                     }
                 )
-    return obs[-5:]  # last 5
+    return annotate_zones(obs[-5:], df, timeframe=timeframe)  # last 5
 
 
 def find_fvgs(
     df: pd.DataFrame,
     lookback: int = config.SMC_LOOKBACK,
+    timeframe: str = "4h",
 ) -> list[dict[str, object]]:
     """Detect Fair Value Gaps (3-candle imbalance).
 
-    Returns list of dicts with keys: type, zone (low, high), index.
+    Returns list of dicts with keys: type, zone (low, high), index, plus
+    the actionability metadata documented on ``annotate_zones``.
     """
     data = df.tail(lookback)
     fvgs: list[dict[str, object]] = []
@@ -112,7 +249,7 @@ def find_fvgs(
                     "index": data.index[i],
                 }
             )
-    return fvgs[-5:]
+    return annotate_zones(fvgs[-5:], df, timeframe=timeframe)
 
 
 def detect_rsi_divergences(
@@ -385,15 +522,18 @@ def classify_structure(df: pd.DataFrame) -> dict[str, Any]:
 
 def analyze(
     df: pd.DataFrame,
+    timeframe: str = "4h",
 ) -> dict[str, object]:
     """Run full SMC analysis on a DataFrame and return all detections.
 
     Returns dict with keys: order_blocks, fvgs, divergences,
-    liquidity_grabs, trend_lines.
+    liquidity_grabs, trend_lines. Order blocks and FVGs carry the
+    actionability metadata documented on ``annotate_zones``, stamped with
+    *timeframe*.
     """
     return {
-        "order_blocks": find_order_blocks(df),
-        "fvgs": find_fvgs(df),
+        "order_blocks": find_order_blocks(df, timeframe=timeframe),
+        "fvgs": find_fvgs(df, timeframe=timeframe),
         "divergences": detect_rsi_divergences(df["Close"]),
         "liquidity_grabs": find_liquidity_grabs(df),
         "trend_lines": find_trend_lines(df),

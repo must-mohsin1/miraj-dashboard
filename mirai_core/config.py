@@ -63,6 +63,20 @@ SMC_LOOKBACK = 100
 SWING_DISTANCE = 3
 SWING_PROMINENCE = 0.5
 LIQUIDITY_RECOVERY_BARS = 3
+# Max distance (fraction of spot) a direction-matched zone may sit from price
+# and still count as an actionable pullback entry. Shared by detection-time
+# zone metadata (smc.annotate_zones) and selection-time entry gating
+# (analysis_service._extract_price_levels) so the two can never drift.
+SMC_ACTIONABLE_PULLBACK = 0.03
+# Bar duration per scanner timeframe key — fallback for zone age_days when
+# the candle index is not datetime-like.
+TIMEFRAME_BAR_HOURS = {
+    "15m": 0.25,
+    "1h": 1.0,
+    "4h": 4.0,
+    "daily": 24.0,
+    "weekly": 168.0,
+}
 
 # ── Confluence scoring ─────────────────────────────────────────────────────
 SCORE_TRADE_THRESHOLD = 10

@@ -705,7 +705,11 @@ def _extract_price_levels(
     outside the actionable pullback range remain visible in SMC output, but
     are not relabelled as executable entries.
     """
-    from mirai_core.config import ATR_STOP_MULTIPLIER, RISK_PERCENT
+    from mirai_core.config import (
+        ATR_STOP_MULTIPLIER,
+        RISK_PERCENT,
+        SMC_ACTIONABLE_PULLBACK,
+    )
 
     levels: dict[str, Any] = {}
     daily = timeframes.get("daily")
@@ -725,7 +729,7 @@ def _extract_price_levels(
     entry_zone_high: float | None = None
     is_long = direction.upper() == "LONG"
     wanted_type = "bullish" if is_long else "bearish"
-    max_distance = 0.03
+    max_distance = SMC_ACTIONABLE_PULLBACK
     if cp is not None:
         candidates: list[tuple[float, float, float]] = []
         for ob in obs:
@@ -988,6 +992,20 @@ def _build_rsi_series(rsi_data: Any) -> list[float]:
     return []
 
 
+# Detection-time actionability metadata attached by smc.annotate_zones;
+# passed through to the UI so chart overlays and zone tables can label
+# zones with age / distance / validity. Absent on legacy zones → None.
+_ZONE_META_KEYS = (
+    "timeframe",
+    "age_bars",
+    "age_days",
+    "distance_pct",
+    "direction_match",
+    "actionable",
+    "reason",
+)
+
+
 def _normalize_obs(obs: Any) -> list[dict[str, Any]]:
     """Normalize order blocks to a consistent dict format for the UI."""
     if not isinstance(obs, list):
@@ -997,13 +1015,16 @@ def _normalize_obs(obs: Any) -> list[dict[str, Any]]:
         if not isinstance(ob, dict):
             continue
         zone = ob.get("zone", (None, None))
-        result.append({
+        entry = {
             "start_time": ob.get("start_time") or ob.get("time", ""),
             "end_time": ob.get("end_time", ""),
             "price_high": float(zone[1]) if isinstance(zone, (list, tuple)) and len(zone) > 1 and zone[1] is not None else None,
             "price_low": float(zone[0]) if isinstance(zone, (list, tuple)) and len(zone) > 0 and zone[0] is not None else None,
             "type": ob.get("type", "bullish"),
-        })
+        }
+        for key in _ZONE_META_KEYS:
+            entry[key] = ob.get(key)
+        result.append(entry)
     return result
 
 
@@ -1016,10 +1037,13 @@ def _normalize_fvgs(fvgs: Any) -> list[dict[str, Any]]:
         if not isinstance(fvg, dict):
             continue
         zone = fvg.get("zone", (None, None))
-        result.append({
+        entry = {
             "start_time": fvg.get("start_time") or fvg.get("time", ""),
             "end_time": fvg.get("end_time", ""),
             "price_high": float(zone[1]) if isinstance(zone, (list, tuple)) and len(zone) > 1 and zone[1] is not None else None,
             "price_low": float(zone[0]) if isinstance(zone, (list, tuple)) and len(zone) > 0 and zone[0] is not None else None,
-        })
+        }
+        for key in _ZONE_META_KEYS:
+            entry[key] = fvg.get(key)
+        result.append(entry)
     return result

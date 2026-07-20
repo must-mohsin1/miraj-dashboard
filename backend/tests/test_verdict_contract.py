@@ -3,6 +3,10 @@
 Covers the scenario matrix that produced the July forced-long defect:
 bull-aligned, bear-aligned, mixed/conflicting, distant (stale) zone,
 missing regime data, and a 2R path blocked by an opposing zone.
+
+Also covers the detection-time zone metadata (smc.annotate_zones): the
+annotated ``actionable`` flag must agree with the selection-time zone
+gate, and the metadata must survive the UI normalizers additively.
 """
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ import os
 import sys
 
 import pandas as pd
+import pytest
 
 PROJECT_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,7 +25,10 @@ if PROJECT_ROOT not in sys.path:
 from backend.services.analysis_service import (
     _determine_trade_direction,
     _extract_price_levels,
+    _normalize_fvgs,
+    _normalize_obs,
 )
+from mirai_core import smc as smc_module
 from mirai_core.verdict import Bias, ScanVerdict, build_verdict, derive_bias
 
 
@@ -201,3 +209,103 @@ def test_bias_supermajority_reports_lean():
         "bear",
     )
     assert bias is Bias.SHORT
+
+
+# ── Zone metadata: detection-time facts agree with the selection gate ───
+
+
+ZONE_META_KEYS = (
+    "timeframe", "age_bars", "age_days", "distance_pct",
+    "direction_match", "actionable", "reason",
+)
+
+
+def _four_h_at(price: float = 100.0, bars: int = 12) -> pd.DataFrame:
+    index = pd.date_range("2025-01-01", periods=bars, freq="4h")
+    return pd.DataFrame(
+        {
+            "Open": [price] * bars,
+            "High": [price + 0.5] * bars,
+            "Low": [price - 0.5] * bars,
+            "Close": [price] * bars,
+        },
+        index=index,
+    )
+
+
+def test_annotated_nearby_zone_metadata_agrees_with_ready_long():
+    df_4h = _four_h_at(100.0)
+    zones = smc_module.annotate_zones(
+        [{"type": "Bullish", "zone": (98.0, 99.0), "index": df_4h.index[4]}], df_4h
+    )
+    verdict = _verdict_for(BULL_STRUCTURE, GREEN_QQE, {"regime": "bull"}, zones)
+
+    z = zones[0]
+    assert z["timeframe"] == "4h"
+    assert z["age_bars"] == 7
+    assert z["age_days"] == pytest.approx(7 * 4 / 24, abs=0.01)
+    assert z["distance_pct"] == pytest.approx(-1.0, abs=1e-6)
+    assert z["direction_match"] == "bullish"
+    assert z["actionable"] is True
+    # the selection-time gate agrees, and the additive keys did not disturb
+    # the verdict path
+    assert verdict["state"] == ScanVerdict.READY_LONG.value
+    zone_gate = next(g for g in verdict["gates"] if g["id"] == "zone")
+    assert zone_gate["passed"] is True
+
+
+def test_annotated_distant_zone_metadata_agrees_with_watch():
+    df_4h = _four_h_at(100.0)
+    zones = smc_module.annotate_zones(
+        [{"type": "Bullish", "zone": (80.0, 81.0), "index": df_4h.index[0]}], df_4h
+    )
+    verdict = _verdict_for(BULL_STRUCTURE, GREEN_QQE, {"regime": "bull"}, zones)
+
+    z = zones[0]
+    assert z["actionable"] is False
+    assert z["distance_pct"] == pytest.approx(-19.0, abs=1e-6)
+    assert "beyond" in z["reason"]
+    assert verdict["state"] == ScanVerdict.WATCH.value
+    assert verdict["actionable"] is False
+
+
+# ── Normalizers surface zone metadata to the UI payload additively ──────
+
+
+def test_normalizers_surface_zone_metadata_additively():
+    df_4h = _four_h_at(100.0)
+    obs = smc_module.annotate_zones(
+        [{"type": "Bullish", "zone": (98.0, 99.0), "index": df_4h.index[4]}], df_4h
+    )
+    fvgs = smc_module.annotate_zones(
+        [{"type": "Bearish", "zone": (101.0, 102.0), "index": df_4h.index[6]}], df_4h
+    )
+
+    ob_row = _normalize_obs(obs)[0]
+    # pre-existing normalized keys unchanged
+    assert ob_row["price_low"] == 98.0 and ob_row["price_high"] == 99.0
+    assert ob_row["type"] == "Bullish"
+    for key in ZONE_META_KEYS:
+        assert key in ob_row
+    assert ob_row["actionable"] is True
+    assert ob_row["age_bars"] == 7
+    assert ob_row["direction_match"] == "bullish"
+
+    fvg_row = _normalize_fvgs(fvgs)[0]
+    assert fvg_row["price_low"] == 101.0 and fvg_row["price_high"] == 102.0
+    for key in ZONE_META_KEYS:
+        assert key in fvg_row
+    assert fvg_row["direction_match"] == "bearish"
+    assert fvg_row["actionable"] is True  # 1% above spot — valid short pullback
+    assert fvg_row["distance_pct"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_normalizers_tolerate_unannotated_zones():
+    # cached pre-metadata payloads must still normalize; new keys default None
+    ob_row = _normalize_obs([{"type": "Bullish", "zone": (98.0, 99.0)}])[0]
+    assert ob_row["price_low"] == 98.0 and ob_row["price_high"] == 99.0
+    for key in ZONE_META_KEYS:
+        assert ob_row[key] is None
+    fvg_row = _normalize_fvgs([{"type": "Bearish", "zone": (101.0, 102.0)}])[0]
+    for key in ZONE_META_KEYS:
+        assert fvg_row[key] is None
