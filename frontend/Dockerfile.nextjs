@@ -33,12 +33,12 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/ .
 
 # Next.js collects anonymous telemetry — disable in CI/Docker.
+# Rewrites are compiled by `next build`, so use the Docker service hostname
+# here rather than relying on the runner's runtime environment.
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV API_URL=http://web:8000
 
 # Build with standalone output (configured in next.config.ts).
-# API_URL / NEXT_PUBLIC_API_URL are not set at build time — the rewrites in
-# next.config.ts proxy `/api/*` at runtime, so the client never needs a
-# hardcoded origin.
 RUN npm run build
 
 # ── Stage 3: runner ────────────────────────────────────────────────────────
