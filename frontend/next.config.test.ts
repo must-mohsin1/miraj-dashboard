@@ -6,8 +6,11 @@ describe("Next API proxy", () => {
 
     const rewrites = await nextConfig.rewrites!();
     expect(rewrites).toContainEqual({
-      source: "/api/:path*",
-      destination: "http://localhost:8000/api/:path*",
+      source: "/api/v1/:path*",
+      destination: "http://localhost:8000/api/v1/:path*",
     });
+    expect(rewrites).not.toContainEqual(
+      expect.objectContaining({ source: "/api/auth/:path*" })
+    );
   });
 });
