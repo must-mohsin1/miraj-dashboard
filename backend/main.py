@@ -28,6 +28,7 @@ from backend.routes import (
     auth_router,
     charts_router,
     dca_validation_router,
+    decision_desk_router,
     desktop_router,
     history_router,
     journal_router,
@@ -180,6 +181,7 @@ app.include_router(charts_router)
 app.include_router(journal_router)
 app.include_router(trading_router)
 app.include_router(dca_validation_router)
+app.include_router(decision_desk_router)
 app.include_router(desktop_router)
 
 

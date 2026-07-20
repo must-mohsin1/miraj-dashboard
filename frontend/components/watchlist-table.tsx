@@ -575,7 +575,26 @@ export function WatchlistTable({ token }: WatchlistTableProps) {
                 return (
                   <TableRow key={pair.id} className="border-slate-800">
                     <TableCell className="font-medium text-slate-100">
-                      {pair.pair}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>{pair.pair}</span>
+                        {pair.market_scope === "mexc_realtime" ? (
+                          <Badge
+                            variant="outline"
+                            className="border-emerald-700/50 bg-emerald-500/10 text-emerald-400"
+                            title={pair.mexc_symbol ? `Verified MEXC contract: ${pair.mexc_symbol}` : "Verified MEXC realtime contract"}
+                          >
+                            MEXC realtime
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-700/50 bg-amber-500/10 text-amber-300"
+                            title="Research-only: not verified as a MEXC Contract perpetual"
+                          >
+                            Research only
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <LivePriceBadge

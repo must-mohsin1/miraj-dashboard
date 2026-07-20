@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.auth import get_current_user
 from backend.database import get_session
 from backend.models import User, WatchlistPair
+from backend.realtime.mexc_contracts import classify_market_scope, fetch_mexc_contract_catalogue
 from backend.schemas import (
     WatchlistListResponse,
     WatchlistPairCreateRequest,
@@ -58,8 +59,9 @@ async def _get_next_sort_order(
     return (row + 1) if row is not None else 0
 
 
-def _enrich_pair(pair: WatchlistPair) -> WatchlistPairWithScore:
+def _enrich_pair(pair: WatchlistPair, catalogue: set[str] | frozenset[str] | None) -> WatchlistPairWithScore:
     """Convert an ORM WatchlistPair to the enriched response model."""
+    market_scope, mexc_symbol = classify_market_scope(pair.pair, catalogue)
     return WatchlistPairWithScore(
         id=pair.id,
         user_id=pair.user_id,
@@ -68,6 +70,8 @@ def _enrich_pair(pair: WatchlistPair) -> WatchlistPairWithScore:
         created_at=pair.created_at,
         score=None,
         status="Active",
+        market_scope=market_scope,
+        mexc_symbol=mexc_symbol,
     )
 
 
@@ -113,7 +117,7 @@ async def add_watchlist_pair(
     session.add(pair)
     await session.flush()
     await session.refresh(pair)
-    return _enrich_pair(pair)
+    return _enrich_pair(pair, await fetch_mexc_contract_catalogue())
 
 
 @router.get(
@@ -131,7 +135,8 @@ async def list_watchlist(
         .order_by(WatchlistPair.sort_order.asc())
     )
     rows = list(result.scalars().all())
-    enriched = [_enrich_pair(p) for p in rows]
+    catalogue = await fetch_mexc_contract_catalogue()
+    enriched = [_enrich_pair(p, catalogue) for p in rows]
     return WatchlistListResponse(total=len(enriched), pairs=enriched)
 
 

@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_session_factory
 from backend.models import AlertChannel, AlertHistory, RealtimeNotification, RealtimeSignal, WatchlistPair
 from backend.realtime.lifecycle import Confirmation, SignalEvaluation, SignalLifecycle, SignalState
+from backend.realtime.mexc_contracts import classify_market_scope, fetch_mexc_contract_catalogue
 from backend.realtime.mexc_stream import (
     MEXC_CONTRACT_WS_URL,
     KlineCandle,
@@ -280,26 +281,23 @@ class MexcMonitoringWorker:
         self._stop.set()
 
     @staticmethod
-    def _supported_watchlist_symbol(symbol: str) -> str | None:
-        """Return a normalized MEXC Contract symbol, or exclude unsupported watchlist entries."""
-        normalized = symbol.strip().upper().replace("_", "").replace("-", "").replace("/", "")
-        # The dashboard's generic spot-style watchlist stores BTC-USD; MEXC
-        # Contract executes the corresponding USDT perpetual as BTC_USDT.
-        if normalized.endswith("USD") and not normalized.endswith("USDT"):
-            normalized = f"{normalized}T"
-        try:
-            to_mexc_symbol(normalized)
-        except ValueError:
-            return None
-        return normalized
+    def _supported_watchlist_symbol(symbol: str, catalogue: set[str] | frozenset[str] | None) -> str | None:
+        """Return only catalogue-verified MEXC symbols; never subscribe by syntax."""
+        _, mexc_symbol = classify_market_scope(symbol, catalogue)
+        return mexc_symbol
 
     async def _load_watchlist(self) -> None:
+        catalogue = await fetch_mexc_contract_catalogue()
+        self._users_by_symbol.clear()
+        if catalogue is None:
+            logger.warning("MEXC Contract catalogue unavailable; no symbols will be subscribed")
+            return
         async with get_session_factory()() as session:
             rows = (await session.execute(select(WatchlistPair))).scalars().all()
         for row in rows:
-            symbol = self._supported_watchlist_symbol(row.pair)
+            symbol = self._supported_watchlist_symbol(row.pair, catalogue)
             if symbol is None:
-                logger.warning("Skipping unsupported non-MEXC-USDT watchlist pair: %s", row.pair)
+                logger.warning("Skipping watchlist pair absent from MEXC Contract catalogue: %s", row.pair)
                 continue
             self._users_by_symbol[symbol].add(row.user_id)
         logger.info("Real-time worker loaded %d supported MEXC watchlist pairs", len(self._users_by_symbol))
