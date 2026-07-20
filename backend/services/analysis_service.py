@@ -63,11 +63,86 @@ def validate_symbol(symbol: str) -> bool:
         return False
 
 
+def _mexc_contract_candidate(symbol: str) -> Optional[str]:
+    """Map a scanner symbol (BASE-USD / BASE-USDT) to its MEXC perpetual name."""
+    s = symbol.strip().upper()
+    for suffix in ("-USDT", "-USD"):
+        if s.endswith(suffix):
+            base = s[: -len(suffix)]
+            if base and base.isalnum():
+                return f"{base}_USDT"
+    return None
+
+
+def _has_any_data(timeframes: dict[str, Any]) -> bool:
+    return any(df is not None and not df.empty for df in timeframes.values())
+
+
 def fetch_scan_timeframes(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
-    """Load scanner candles from Yahoo or a catalogue-verified MEXC contract."""
+    """Load scanner candles from Yahoo or a catalogue-verified MEXC contract.
+
+    When no explicit *mexc_symbol* is supplied and Yahoo has nothing at all
+    for the symbol (e.g. HYPE-USD, which Yahoo does not list), the derived
+    ``BASE_USDT`` MEXC contract is tried before giving up — so every
+    ``run_scan`` caller (scheduler, DCA, position alerts, batch scanner)
+    gets the fallback, not just the manual scan route.  A bogus contract
+    simply returns empty frames, which keeps the existing "no OHLCV data"
+    error behaviour intact.
+    """
     if mexc_symbol is not None:
         return ohlcv.fetch_mexc_all_timeframes(mexc_symbol)
-    return ohlcv.fetch_all_timeframes(symbol)
+    timeframes = ohlcv.fetch_all_timeframes(symbol)
+    if _has_any_data(timeframes):
+        return timeframes
+    candidate = _mexc_contract_candidate(symbol)
+    if candidate is None:
+        return timeframes
+    logger.info("Yahoo returned no data for %s — trying MEXC contract %s", symbol, candidate)
+    mexc_timeframes = ohlcv.fetch_mexc_all_timeframes(candidate)
+    return mexc_timeframes if _has_any_data(mexc_timeframes) else timeframes
+
+
+_OHLC_RESAMPLE_AGG = {
+    "Open": "first",
+    "High": "max",
+    "Low": "min",
+    "Close": "last",
+    "Volume": "sum",
+}
+
+#: Rebuild rules for empty scanner timeframes: target → (source candidates, rule).
+_TF_BACKFILL_SOURCES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("daily", ("4h", "1h"), "1D"),
+    ("weekly", ("daily", "4h"), "1W"),
+)
+
+
+def _backfill_missing_timeframes(timeframes: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild empty higher timeframes from intraday data.
+
+    One throttled upstream call must not blank the chart or the daily/weekly
+    indicators: an empty daily frame is resampled from 4h (or 1h) data and an
+    empty weekly frame from daily, so a partial fetch degrades gracefully
+    instead of silently dropping the chart and regime inputs.
+    """
+    for target, sources, rule in _TF_BACKFILL_SOURCES:
+        existing = timeframes.get(target)
+        if existing is not None and not existing.empty:
+            continue
+        for source in sources:
+            src = timeframes.get(source)
+            if src is None or src.empty:
+                continue
+            rebuilt = src.resample(rule).agg(_OHLC_RESAMPLE_AGG)
+            rebuilt.dropna(how="all", inplace=True)
+            if not rebuilt.empty:
+                logger.warning(
+                    "%s timeframe empty — rebuilt %d bars by resampling %s data",
+                    target, len(rebuilt), source,
+                )
+                timeframes[target] = rebuilt
+                break
+    return timeframes
 
 
 def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
@@ -108,6 +183,7 @@ def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
             "OHLCV fetched: %s",
             {k: len(v) for k, v in timeframes.items() if v is not None and not v.empty},
         )
+        timeframes = _backfill_missing_timeframes(timeframes)
     except RuntimeError:
         raise
     except Exception as exc:
@@ -331,9 +407,14 @@ def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
         data["fvgs"] = []
 
     now_ts = time.time()
-    _cache[symbol] = {"data": data, "cached_at": now_ts}
+    if data["candles"]:
+        _cache[symbol] = {"data": data, "cached_at": now_ts}
+        return _build_cached_response(symbol, _cache[symbol])
 
-    return _build_cached_response(symbol, _cache[symbol])
+    # A candle-less result must not be pinned for CACHE_TTL — return it
+    # uncached so the next request retries upstream immediately.
+    logger.warning("Scan for %s produced no chart candles — result not cached", symbol)
+    return _build_cached_response(symbol, {"data": data, "cached_at": now_ts})
 
 
 #: Chart-only plot series stripped before persisting a scan result.  They are

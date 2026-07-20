@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Optional
 from urllib import parse, request
 
@@ -122,28 +123,56 @@ _MEXC_TIMEFRAMES = {
 }
 
 
-def fetch_mexc_ohlcv(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
-    """Fetch public MEXC Contract candles as scanner-compatible OHLCV data."""
+_MEXC_RETRY_DELAY_SECONDS = 1.0
+
+
+def fetch_mexc_ohlcv(
+    symbol: str, interval: str, limit: int = 200, retries: int = 1
+) -> pd.DataFrame:
+    """Fetch public MEXC Contract candles as scanner-compatible OHLCV data.
+
+    MEXC signals throttling with an HTTP 200 / ``success: false`` body rather
+    than an error status, so a malformed or empty payload is logged and
+    retried once instead of silently becoming an empty frame (one throttled
+    kline call in a burst used to blank the daily chart with no trace).
+    """
     url = _MEXC_KLINE_URL.format(symbol=symbol)
     query = parse.urlencode({"interval": interval, "limit": limit})
-    try:
-        with request.urlopen(request.Request(f"{url}?{query}"), timeout=15) as response:
-            payload = json.loads(response.read())
-        data = payload.get("data", {}) if isinstance(payload, dict) else {}
-        columns = ("time", "open", "high", "low", "close", "vol")
-        if not all(isinstance(data.get(column), list) for column in columns):
-            return pd.DataFrame()
-        frame = pd.DataFrame({
-            "Open": data["open"],
-            "High": data["high"],
-            "Low": data["low"],
-            "Close": data["close"],
-            "Volume": data["vol"],
-        }, index=pd.to_datetime(data["time"], unit="s", utc=True))
-        return frame.astype(float).sort_index()
-    except Exception as exc:
-        logger.warning("MEXC OHLCV fetch failed for %s %s: %s", symbol, interval, exc)
-        return pd.DataFrame()
+    columns = ("time", "open", "high", "low", "close", "vol")
+
+    for attempt in range(1, retries + 2):
+        try:
+            with request.urlopen(request.Request(f"{url}?{query}"), timeout=15) as response:
+                payload = json.loads(response.read())
+        except Exception as exc:
+            logger.warning(
+                "MEXC OHLCV fetch failed for %s %s (attempt %d/%d): %s",
+                symbol, interval, attempt, retries + 1, exc,
+            )
+        else:
+            data = payload.get("data", {}) if isinstance(payload, dict) else {}
+            if (
+                isinstance(data, dict)
+                and all(isinstance(data.get(column), list) for column in columns)
+                and data["time"]
+            ):
+                frame = pd.DataFrame({
+                    "Open": data["open"],
+                    "High": data["high"],
+                    "Low": data["low"],
+                    "Close": data["close"],
+                    "Volume": data["vol"],
+                }, index=pd.to_datetime(data["time"], unit="s", utc=True))
+                return frame.astype(float).sort_index()
+            code = payload.get("code") if isinstance(payload, dict) else None
+            message = payload.get("message") if isinstance(payload, dict) else None
+            logger.warning(
+                "MEXC returned no kline data for %s %s (code=%s message=%r attempt %d/%d)",
+                symbol, interval, code, message, attempt, retries + 1,
+            )
+        if attempt <= retries:
+            time.sleep(_MEXC_RETRY_DELAY_SECONDS)
+    return pd.DataFrame()
 
 
 def fetch_mexc_all_timeframes(symbol: str) -> dict[str, pd.DataFrame]:
