@@ -177,15 +177,28 @@ def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
     else:
         pattern_result = {"error": "No daily data for patterns"}
 
-    # ── 7. Confluence scoring ──────────────────────────────────────
+    # ── 7. Direction, entry eligibility, and confluence scoring ────
+    bmsb_data = _build_bmsb_data(timeframes, ind_results)
+    direction = _determine_trade_direction(structure_results, qqe_signals, bmsb_data)
+    price_levels = (
+        _extract_price_levels(
+            timeframes, smc_result, direction=direction, require_actionable_zone=True
+        )
+        if direction
+        else {}
+    )
+    entry_actionable = bool(price_levels.get("entry_is_actionable"))
     conf_data = _build_confluence_data(
         macro_data=macro_data,
         ind_results=ind_results,
         qqe_results=qqe_results,
         smc_result=smc_result,
         pattern_result=pattern_result,
+        direction=direction,
+        entry_actionable=entry_actionable,
     )
 
+    conf_result = confluence.ConfluenceResult()
     try:
         conf_result = confluence.score(conf_data)
         score_breakdown = conf_result.to_dict()
@@ -203,18 +216,37 @@ def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
         if rsi_series is not None and hasattr(rsi_series, "iloc") and len(rsi_series) > 0:
             rsi_val = float(rsi_series.iloc[-1])
 
-    price_levels = _extract_price_levels(timeframes, smc_result, direction="LONG")
-
-    try:
-        trade_plan_result = trade_plan.generate_trade_plan(
-            confluence_result=conf_result,
-            data=price_levels,
-            direction="LONG",
-            rsi_current=rsi_val,
-        )
-    except Exception as exc:
-        logger.error("Trade plan generation failed: %s", exc)
-        trade_plan_result = {"trade_decision": False, "error": str(exc)}
+    if direction is None:
+        trade_plan_result = {
+            "trade_decision": False,
+            "direction": "NEUTRAL",
+            "verdict": "NO TRADE TODAY",
+            "reasoning": (
+                "Weekly regime, structure, and QQE momentum are not aligned; "
+                "no directional setup is actionable."
+            ),
+        }
+    elif not entry_actionable:
+        trade_plan_result = {
+            "trade_decision": False,
+            "direction": "NEUTRAL",
+            "verdict": "WAIT FOR ENTRY ZONE",
+            "reasoning": (
+                f"{direction} context exists, but no nearby, direction-matched "
+                "4H order block is within the 3% actionable-entry range."
+            ),
+        }
+    else:
+        try:
+            trade_plan_result = trade_plan.generate_trade_plan(
+                confluence_result=conf_result,
+                data=price_levels,
+                direction=direction,
+                rsi_current=rsi_val,
+            )
+        except Exception as exc:
+            logger.error("Trade plan generation failed: %s", exc)
+            trade_plan_result = {"trade_decision": False, "error": str(exc)}
 
     # ── 9. Chart (daily, last 100 bars) ────────────────────────────
     chart_html: Optional[str] = None
@@ -228,28 +260,6 @@ def run_scan(symbol: str, mexc_symbol: str | None = None) -> dict[str, Any]:
 
     # ── Assemble result ────────────────────────────────────────────
     trade_plan_flat: dict[str, Any] = _build_flat_trade_plan(trade_plan_result)
-
-    # ── Extract BMSB from weekly indicators ──────────────────────
-    bmsb_data: Optional[dict[str, Any]] = None
-    weekly_ind = ind_results.get("weekly", {})
-    if isinstance(weekly_ind, dict) and "error" not in weekly_ind:
-        bmsb_raw = weekly_ind.get("bmsb")
-        if bmsb_raw and isinstance(bmsb_raw, dict):
-            sma_series = bmsb_raw.get("sma20")
-            ema_series = bmsb_raw.get("ema21")
-            sma_val = float(sma_series.iloc[-1]) if sma_series is not None and hasattr(sma_series, "iloc") and len(sma_series) > 0 else None
-            ema_val = float(ema_series.iloc[-1]) if ema_series is not None and hasattr(ema_series, "iloc") and len(ema_series) > 0 else None
-            weekly_df = timeframes.get("weekly")
-            current_price = float(weekly_df["Close"].iloc[-1]) if weekly_df is not None and not weekly_df.empty else None
-            if sma_val is not None and ema_val is not None and current_price is not None:
-                band_value = min(sma_val, ema_val)
-                bmsb_data = {
-                    "sma_20w": sma_val,
-                    "ema_21w": ema_val,
-                    "current_price": current_price,
-                    "status": "above" if current_price >= band_value else "below",
-                    "regime": "bull" if current_price >= band_value else "bear",
-                }
 
     data: dict[str, Any] = {
         "symbol": symbol,
@@ -367,6 +377,8 @@ def _build_confluence_data(
     qqe_results: dict[str, Any],
     smc_result: dict[str, Any],
     pattern_result: dict[str, Any],
+    direction: str | None = None,
+    entry_actionable: bool = False,
 ) -> dict[str, Any]:
     """Build the ``data`` dict expected by ``confluence.score()``.
 
@@ -385,6 +397,15 @@ def _build_confluence_data(
     daily = ind_results.get("daily", {})
     weekly = ind_results.get("weekly", {})
     h4 = ind_results.get("4h", {})
+    directional_qqe = (
+        all(
+            str(qqe_results.get(tf, {}).get("trend", "")).upper()
+            == ("GREEN" if direction == "LONG" else "RED")
+            for tf in ("daily", "4h", "1h")
+        )
+        if direction
+        else False
+    )
 
     return {
         # ── Regime ──
@@ -393,32 +414,32 @@ def _build_confluence_data(
         "btc_d_aligned": bool(btc_d is not None and btc_d > 50),
         "weekly_200ma_position": _ema_above(weekly, 200),
         "usdt_d_favourable": bool(usdt_d is not None and usdt_d < 5.0),
-        "bmsb_aligned": bool(weekly.get("bmsb")),
+        "bmsb_aligned": direction is not None,
         "fear_greed_aligned": bool(fg_value is not None and fg_value < 50),
         # ── Location ──
-        "demand_supply_zone": bool(len(smc_obs) > 0 or len(smc_fvgs) > 0),
-        "ote_overlap": bool(len(smc_obs) > 0),
-        "order_block_at_zone": bool(len(smc_obs) > 0),
-        "fvg_at_zone": bool(len(smc_fvgs) > 0),
-        "liquidity_grab_before_ote": bool(len(smc_lg) > 0),
-        "trend_line_at_zone": bool(len(smc_tl) > 0),
+        "demand_supply_zone": entry_actionable,
+        "ote_overlap": entry_actionable,
+        "order_block_at_zone": entry_actionable,
+        "fvg_at_zone": entry_actionable and bool(len(smc_fvgs) > 0),
+        "liquidity_grab_before_ote": entry_actionable and bool(len(smc_lg) > 0),
+        "trend_line_at_zone": entry_actionable and bool(len(smc_tl) > 0),
         # ── Confirmation ──
         "h4_structure_aligned": _ema_aligned(h4),
         "daily_rsi_confirms": _rsi_in_range(daily, 30, 70),
         "h4_rsi_confirms": _rsi_in_range(h4, 30, 70),
         "bb_not_squeezing": not bool(daily.get("bb_squeeze", False)),
-        "qqe_aligned": _has_green_signal(qqe_results),
+        "qqe_aligned": directional_qqe,
         "m15_structure_aligned": _ema_aligned(ind_results.get("15m", {})),
         "rsi_divergence_present": bool(len(smc_divs) > 0),
         "chart_pattern_confirmed": _has_confirmed_pattern(pattern_result),
         "ema_ribbon_aligned": _ribbon_aligned(daily),
         # ── Volume & Retest ──
-        "volume_confirming": True,
-        "retest_confirmed": bool(len(smc_obs) > 0),
-        "no_fakeout": True,
+        "volume_confirming": entry_actionable,
+        "retest_confirmed": entry_actionable,
+        "no_fakeout": entry_actionable,
         # ── Risk ──
-        "target_2r_available": bool(len(smc_tl) > 0),
-        "clean_stop_level": bool(len(smc_obs) > 0),
+        "target_2r_available": entry_actionable and bool(len(smc_tl) > 0),
+        "clean_stop_level": entry_actionable,
         "no_news_risk": True,
     }
 
@@ -596,17 +617,76 @@ def _ribbon_aligned(tf_data: Any) -> bool:
     return len(vals) >= 2 and vals[0] > vals[-1]
 
 
+def _build_bmsb_data(
+    timeframes: dict[str, Any], ind_results: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Return the current weekly Bull Market Support Band state."""
+    weekly_ind = ind_results.get("weekly", {})
+    if not isinstance(weekly_ind, dict) or "error" in weekly_ind:
+        return None
+    bmsb_raw = weekly_ind.get("bmsb")
+    if not isinstance(bmsb_raw, dict):
+        return None
+    sma_series = bmsb_raw.get("sma20")
+    ema_series = bmsb_raw.get("ema21")
+    weekly_df = timeframes.get("weekly")
+    if weekly_df is None or weekly_df.empty:
+        return None
+    if not all(series is not None and hasattr(series, "iloc") and len(series) > 0 for series in (sma_series, ema_series)):
+        return None
+    sma_val = float(getattr(sma_series, "iloc")[-1])
+    ema_val = float(getattr(ema_series, "iloc")[-1])
+    current_price = float(weekly_df["Close"].iloc[-1])
+    band_value = min(sma_val, ema_val)
+    return {
+        "sma_20w": sma_val,
+        "ema_21w": ema_val,
+        "current_price": current_price,
+        "status": "above" if current_price >= band_value else "below",
+        "regime": "bull" if current_price >= band_value else "bear",
+    }
+
+
+def _determine_trade_direction(
+    structure_results: dict[str, Any],
+    qqe_signals: dict[str, Any],
+    bmsb_data: dict[str, Any] | None,
+) -> str | None:
+    """Return a direction only when regime, structure, and momentum agree."""
+    labels = {
+        tf: str(structure_results.get(tf, {}).get("label", "")).upper()
+        for tf in ("weekly", "daily", "4h")
+    }
+    trends = {
+        tf: str(qqe_signals.get(tf, {}).get("trend", "")).upper()
+        for tf in ("daily", "4h", "1h")
+    }
+    regime = str((bmsb_data or {}).get("regime", "")).lower()
+
+    bullish_structure = all(label in {"HH", "HL"} for label in labels.values())
+    bearish_structure = all(label in {"LL", "LH"} for label in labels.values())
+    bullish_momentum = all(trend == "GREEN" for trend in trends.values())
+    bearish_momentum = all(trend == "RED" for trend in trends.values())
+
+    if regime == "bull" and bullish_structure and bullish_momentum:
+        return "LONG"
+    if regime == "bear" and bearish_structure and bearish_momentum:
+        return "SHORT"
+    return None
+
+
 def _extract_price_levels(
     timeframes: dict[str, Any],
     smc_result: dict[str, Any],
     direction: str = "LONG",
+    require_actionable_zone: bool = False,
 ) -> dict[str, Any]:
     """Extract price levels for trade plan generation.
 
-    Computes entry zone from the first order block (if any), then derives
-    a volatility-based stop loss using ATR, and take-profit levels as
-    risk multiples.  Falls back to a percentage-based offset when ATR is
-    unavailable.
+    Selects a nearby, direction-matched order block for the entry zone, then
+    derives a volatility-based stop loss and take-profit levels. Order blocks
+    outside the actionable pullback range remain visible in SMC output, but
+    are not relabelled as executable entries.
     """
     from mirai_core.config import ATR_STOP_MULTIPLIER, RISK_PERCENT
 
@@ -622,17 +702,46 @@ def _extract_price_levels(
 
     cp = levels.get("current_price")
 
-    # ── Entry zone from SMC order blocks ───────────────────────────
+    # ── Entry zone from a nearby, direction-matched SMC order block ─
     obs = smc_result.get("order_blocks", [])
     entry_zone_low: float | None = None
     entry_zone_high: float | None = None
-    if obs:
-        zone = obs[0].get("zone", (None, None))
-        if zone[0] is not None:
-            entry_zone_low = float(zone[0])
-            entry_zone_high = float(zone[1])
+    is_long = direction.upper() == "LONG"
+    wanted_type = "bullish" if is_long else "bearish"
+    max_distance = 0.03
+    if cp is not None:
+        candidates: list[tuple[float, float, float]] = []
+        for ob in obs:
+            if str(ob.get("type", "")).lower() != wanted_type:
+                continue
+            zone = ob.get("zone", (None, None))
+            if not isinstance(zone, (tuple, list)) or len(zone) < 2:
+                continue
+            if zone[0] is None or zone[1] is None:
+                continue
+            low, high = sorted((float(zone[0]), float(zone[1])))
+            if is_long:
+                distance = max(0.0, (cp - high) / cp)
+                correctly_positioned = low <= cp
+            else:
+                distance = max(0.0, (low - cp) / cp)
+                correctly_positioned = high >= cp
+            if correctly_positioned and distance <= max_distance:
+                candidates.append((distance, low, high))
+        if candidates:
+            _, entry_zone_low, entry_zone_high = min(candidates)
             levels["entry_zone_low"] = entry_zone_low
             levels["entry_zone_high"] = entry_zone_high
+            levels["entry_is_actionable"] = True
+        else:
+            levels["entry_is_actionable"] = False
+            if not require_actionable_zone and obs:
+                zone = obs[0].get("zone", (None, None))
+                if isinstance(zone, (tuple, list)) and len(zone) >= 2 and zone[0] is not None:
+                    entry_zone_low = float(zone[0])
+                    entry_zone_high = float(zone[1])
+                    levels["entry_zone_low"] = entry_zone_low
+                    levels["entry_zone_high"] = entry_zone_high
 
     # ── Effective entry price ─────────────────────────────────────
     entry_price: float | None
