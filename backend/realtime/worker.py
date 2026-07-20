@@ -18,7 +18,7 @@ import time
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,6 +110,54 @@ async def send_realtime_alert(
         )
 
 
+def _format_notification(signal: RealtimeSignal) -> str:
+    """Render honest manual-decision context from persisted lifecycle evidence."""
+    updated_at = cast(Optional[datetime.datetime], signal.updated_at)
+    state = cast(str, signal.state)
+    pair = cast(str, signal.pair)
+    direction = cast(str, signal.direction)
+    checked_at = (updated_at or datetime.datetime.utcnow()).strftime("%Y-%m-%d %H:%M UTC")
+    missing = json.loads(cast(Optional[str], signal.missing_gates) or "[]")
+    header = f"**{state} — {pair} {direction}**"
+
+    if state == SignalState.ACTIONABLE.value:
+        return "\n".join(
+            (
+                header,
+                f"Closed-candle review: {checked_at}",
+                "Confirmation: higher-timeframe alignment, entry/OTE zone, retest, 5m close, "
+                "15m QQE, and volume were all confirmed.",
+                "Manual review: open Miraj to validate current price, entry, stop/invalidation, target, "
+                "position size, and account exposure before any order.",
+                "Mode: advisory only — no order has been placed.",
+            )
+        )
+    if state == SignalState.INVALIDATED.value:
+        return "\n".join(
+            (
+                header,
+                f"Closed-candle review: {checked_at}",
+                "Status: the previously tracked thesis has been invalidated. Do not initiate this setup "
+                "until a new confirmed lifecycle is produced.",
+                "Manual review: reassess exposure, invalidation level, and market structure in Miraj.",
+                "Mode: advisory only — no order has been placed.",
+            )
+        )
+
+    # Existing queued rows from an earlier release can still be dispatched after
+    # upgrade. Frame them as expired operational data, never as trade analysis.
+    gate_text = ", ".join(missing) or "fresh market data"
+    return "\n".join(
+        (
+            header,
+            f"Recorded: {checked_at}",
+            f"Status: expired/unavailable context ({gate_text}).",
+            "This is not a trade setup and requires no action. Review the Decision Desk if feed health is needed.",
+            "Mode: advisory only — no order has been placed.",
+        )
+    )
+
+
 async def dispatch_pending_notifications(session_factory: Any) -> None:
     """Deliver committed outbox rows; failures remain pending for a later retry."""
     async with session_factory() as session:
@@ -128,11 +176,7 @@ async def dispatch_pending_notifications(session_factory: Any) -> None:
             if signal_row is None or channel is None or not channel.enabled:
                 notification.status = "cancelled"
                 continue
-            text = (
-                f"*{signal_row.state}* — {signal_row.pair} {signal_row.direction}\n"
-                "Mode: advisory/manual execution only\n"
-                f"Signal: `{notification.dedup_key}`"
-            )
+            text = _format_notification(signal_row)
             try:
                 config = json.loads(channel.config or "{}")
                 if channel.channel_type == "telegram" and config.get("chat_id"):

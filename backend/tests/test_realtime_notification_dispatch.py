@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.database import Base
 from backend.models import AlertChannel, RealtimeNotification, RealtimeSignal, User
-from backend.realtime.worker import dispatch_pending_notifications
+from backend.realtime.lifecycle import SignalEvaluation, SignalState
+from backend.realtime.store import enqueue_transition_notifications
+from backend.realtime.worker import _format_notification, dispatch_pending_notifications
 
 
 def test_failed_pending_notification_remains_pending_with_incremented_attempts(monkeypatch):
@@ -39,3 +41,36 @@ def test_failed_pending_notification_remains_pending_with_incremented_attempts(m
         await engine.dispose()
 
     asyncio.run(scenario())
+
+
+def test_stale_transition_is_persisted_but_not_enqueued_for_delivery():
+    async def scenario():
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            session.add(User(id=22, username="stale", email="stale@example.com", hashed_password="x"))
+            session.add(AlertChannel(user_id=22, channel_type="discord", config="{}", enabled=1))
+            signal = RealtimeSignal(
+                user_id=22, pair="DOGEUSDT", direction="SHORT", state="STALE", dedup_key="DOGEUSDT:SHORT:STALE:1"
+            )
+            session.add(signal)
+            await session.flush()
+            evaluation = SignalEvaluation(SignalState.STALE, False, "DOGEUSDT:SHORT:STALE", ("fresh market data",))
+            await enqueue_transition_notifications(session, signal, evaluation)
+            assert (await session.execute(select(RealtimeNotification))).scalars().all() == []
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_actionable_message_includes_confirmation_and_manual_risk_review():
+    signal = RealtimeSignal(
+        pair="BTCUSDT", direction="LONG", state="ACTIONABLE", dedup_key="BTCUSDT:LONG:ACTIONABLE:1", missing_gates="[]"
+    )
+    text = _format_notification(signal)
+    assert "Closed-candle review:" in text
+    assert "higher-timeframe alignment" in text
+    assert "entry, stop/invalidation, target, position size" in text
+    assert "no order has been placed" in text

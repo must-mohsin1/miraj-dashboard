@@ -71,7 +71,10 @@ async def enqueue_transition_notifications(
     session: AsyncSession, signal: RealtimeSignal, evaluation: SignalEvaluation
 ) -> None:
     """Create committed pending delivery records before any network call."""
-    if evaluation.state.value not in {"ACTIONABLE", "INVALIDATED", "STALE"}:
+    # STALE is persisted for audit and shown in the Decision Desk, but it is
+    # deliberately not pushed as a trade alert. A silent/expired feed contains
+    # no current market thesis and must not resemble a decision-ready setup.
+    if evaluation.state.value not in {"ACTIONABLE", "INVALIDATED"}:
         return
     channels = (
         await session.execute(
