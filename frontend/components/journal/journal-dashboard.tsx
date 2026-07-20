@@ -41,11 +41,14 @@ interface JournalDashboardProps {
   token?: string | null;
   /** Exchange slug for the analytics summary (default "mexc"). */
   exchange?: string;
+  /** Symbol supplied by a read-only manual journal prefill link. */
+  prefillSymbol?: string;
 }
 
 export function JournalDashboard({
   token: tokenProp,
   exchange = "mexc",
+  prefillSymbol,
 }: JournalDashboardProps) {
   const [entries, setEntries] = useState<TradeJournalEntry[]>([]);
   const [summary, setSummary] = useState<JournalSummaryResponse | null>(null);
@@ -347,6 +350,7 @@ export function JournalDashboard({
         entry={editingEntry}
         token={tokenProp ?? null}
         exchange={exchange}
+        defaultSymbol={prefillSymbol}
         onSaved={refreshAll}
       />
     </div>

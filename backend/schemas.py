@@ -121,10 +121,46 @@ class DecisionDeskSignal(BaseModel):
     updated_at: datetime
 
 
+class DecisionDeskNotificationChannel(BaseModel):
+    channel_type: str
+    enabled: bool
+    configured: bool
+    updated_at: datetime
+
+
+class DecisionDeskNotificationOutboxItem(BaseModel):
+    pair: str
+    direction: str
+    signal_state: str
+    channel_type: str
+    status: str
+    attempts: int
+    created_at: datetime
+    next_attempt_at: Optional[datetime] = None
+    sent_at: Optional[datetime] = None
+    error: Optional[str] = None
+
+
+class DecisionDeskAccountPosition(BaseModel):
+    symbol: str
+    side: str
+    size: float
+
+
+class DecisionDeskAccountReconciliation(BaseModel):
+    exchange: str
+    freshness: str
+    last_reconciled_at: Optional[datetime] = None
+    positions: list[DecisionDeskAccountPosition] = Field(default_factory=list)
+
+
 class DecisionDeskResponse(BaseModel):
     generated_at: datetime
     watchlist: list[DecisionDeskWatchlistPair]
     signals: list[DecisionDeskSignal]
+    notification_channels: list[DecisionDeskNotificationChannel]
+    notification_outbox: list[DecisionDeskNotificationOutboxItem]
+    account_reconciliation: list[DecisionDeskAccountReconciliation]
 
 
 # ── Pair Settings ───────────────────────────────────────────────────────────

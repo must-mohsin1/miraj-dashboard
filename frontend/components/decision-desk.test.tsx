@@ -77,4 +77,73 @@ describe("DecisionDesk", () => {
     expect(screen.getByText("ETH-USD — LONG")).toBeInTheDocument();
     expect(screen.getByText("SNDK-USD")).toBeInTheDocument();
   });
+
+  it("shows durable notification evidence without treating configured or failed delivery as sent", () => {
+    render(
+      <DecisionDesk
+        notifications={[
+          {
+            pair: "BTC-USD",
+            direction: "LONG",
+            state: "ACTIONABLE",
+            channelType: "discord",
+            status: "sent",
+            sentAt: "2026-07-20T14:30:00Z",
+            lastError: null,
+          },
+          {
+            pair: "ETH-USD",
+            direction: "SHORT",
+            state: "WATCH",
+            channelType: "discord",
+            status: "failed",
+            sentAt: null,
+            lastError: "Webhook rejected",
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Notification evidence" })).toBeInTheDocument();
+    expect(screen.getByText("BTC-USD — LONG — discord")).toBeInTheDocument();
+    expect(screen.getByText("Sent at: 2026-07-20T14:30:00Z")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Error: Webhook rejected")).toBeInTheDocument();
+    expect(screen.queryByText("Delivered")).not.toBeInTheDocument();
+  });
+
+  it("makes unavailable and stale account truth explicit and offers only a manual journal prefill", () => {
+    const { rerender } = render(
+      <DecisionDesk
+        accountTruth={{
+          status: "unavailable",
+          asOf: null,
+          positions: [],
+          reason: "No successful authenticated refresh is available.",
+        }}
+      />
+    );
+
+    expect(screen.getByText("Account truth unavailable.")).toBeInTheDocument();
+    expect(screen.getByText("No successful authenticated refresh is available.")).toBeInTheDocument();
+
+    rerender(
+      <DecisionDesk
+        accountTruth={{
+          status: "stale",
+          asOf: "2026-07-20T13:00:00Z",
+          positions: [{ symbol: "BTC_USDT", side: "long", size: 0.5 }],
+          reason: null,
+        }}
+      />
+    );
+
+    expect(screen.getByText("Account truth stale.")).toBeInTheDocument();
+    expect(screen.getByText("Account snapshot: 2026-07-20T13:00:00Z")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Journal BTC_USDT position" })).toHaveAttribute(
+      "href",
+      "/journal?exchange=mexc&symbol=BTC_USDT"
+    );
+    expect(screen.queryByRole("button", { name: /trade|buy|sell/i })).not.toBeInTheDocument();
+  });
 });

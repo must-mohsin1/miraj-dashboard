@@ -73,6 +73,25 @@ export default async function NowPage() {
             missingGates: signal.missing_gates ?? [],
             updatedAt: signal.updated_at ?? null,
           }))}
+          notifications={desk.notification_outbox.map((notification) => ({
+            pair: notification.pair,
+            direction: notification.direction,
+            state: notification.signal_state,
+            channelType: notification.channel_type,
+            status: notification.status,
+            sentAt: notification.sent_at,
+            lastError: notification.error,
+          }))}
+          accountTruth={(() => {
+            const account = desk.account_reconciliation.find((item) => item.exchange.toLowerCase() === "mexc")
+              ?? desk.account_reconciliation[0];
+            return account ? {
+              status: account.freshness,
+              asOf: account.last_reconciled_at,
+              positions: account.positions,
+              reason: account.freshness === "unavailable" ? "No successful authenticated account reconciliation is cached." : null,
+            } : null;
+          })()}
           lastUpdated={desk.generated_at ?? null}
         />
       ) : (

@@ -25,13 +25,16 @@ export const dynamic = "force-dynamic";
 const KNOWN_EXCHANGES = ["mexc", "binance", "bybit"];
 
 interface PageProps {
-  searchParams: Promise<{ exchange?: string }>;
+  searchParams: Promise<{ exchange?: string; symbol?: string }>;
 }
 
 export default async function JournalPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const rawExchange = (params.exchange ?? "mexc").toLowerCase();
   const exchange = KNOWN_EXCHANGES.includes(rawExchange) ? rawExchange : "mexc";
+  const requestedSymbol = (params.symbol ?? "").trim().toUpperCase();
+  // A navigation prefill is display-only and constrained to an exchange symbol shape.
+  const prefillSymbol = /^[A-Z0-9_-]{1,30}$/.test(requestedSymbol) ? requestedSymbol : undefined;
 
   const token = await getAccessToken();
 
@@ -51,7 +54,7 @@ export default async function JournalPage({ searchParams }: PageProps) {
         </p>
       </header>
 
-      <JournalDashboard token={token} exchange={exchange} />
+      <JournalDashboard token={token} exchange={exchange} prefillSymbol={prefillSymbol} />
     </div>
   );
 }

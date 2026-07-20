@@ -55,6 +55,8 @@ interface JournalEntryDialogProps {
   token: string | null;
   /** Optional default exchange slug applied to new entries. */
   exchange?: string;
+  /** Safe navigation prefill for a manual create form; never submitted automatically. */
+  defaultSymbol?: string;
   /** Called after a successful create/update so the parent can refresh. */
   onSaved: () => void;
 }
@@ -65,6 +67,7 @@ export function JournalEntryDialog({
   entry,
   token,
   exchange,
+  defaultSymbol,
   onSaved,
 }: JournalEntryDialogProps) {
   const isEdit = entry !== null;
@@ -105,7 +108,7 @@ export function JournalEntryDialog({
       setPnl(entry.pnl != null ? String(entry.pnl) : "");
       setScreenshots(entry.screenshots ?? []);
     } else {
-      setSymbol("");
+      setSymbol(defaultSymbol ?? "");
       setTags([]);
       setTagsText("");
       setNotes("");
@@ -117,7 +120,7 @@ export function JournalEntryDialog({
     }
     setShowError(false);
     setUploadError(null);
-  }, [open, entry]);
+  }, [open, entry, defaultSymbol]);
 
   // ── Tags chip handling ─────────────────────────────────────────────────
   function addTagFromInput() {

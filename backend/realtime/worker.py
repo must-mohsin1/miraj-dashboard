@@ -248,6 +248,12 @@ class MexcMonitoringWorker:
         self._last_stale_check_at = 0.0
         self._heartbeat_path = os.environ.get("MONITOR_HEARTBEAT_FILE", "/tmp/mexc-monitor.heartbeat")
         self._users_by_symbol: dict[str, set[int]] = defaultdict(set)
+        try:
+            configured_refresh = float(os.environ.get("WATCHLIST_REFRESH_SECONDS", "60"))
+        except ValueError:
+            configured_refresh = 60.0
+        self._watchlist_refresh_seconds = min(3600.0, max(15.0, configured_refresh))
+        self._last_watchlist_refresh_at = 0.0
 
     def _touch_heartbeat(self) -> None:
         with open(self._heartbeat_path, "w", encoding="utf-8") as heartbeat:
@@ -255,16 +261,27 @@ class MexcMonitoringWorker:
 
     async def run(self) -> None:
         await self._load_watchlist()
+        self._last_watchlist_refresh_at = time.monotonic()
         if not self._users_by_symbol:
             logger.warning("Real-time worker has no watchlist pairs; stopping")
             return
         needs_reconciliation = True
         while not self._stop.is_set():
             try:
+                # A runtime catalogue/watchlist change can legitimately leave no
+                # symbols. Do not open an empty socket; remain fail-closed while
+                # periodically checking whether eligible membership returns.
+                if not self._users_by_symbol:
+                    await self._wait_to_reconnect(self._seconds_until_watchlist_refresh())
+                    if await self._refresh_watchlist_if_due():
+                        needs_reconciliation = True
+                    continue
                 if needs_reconciliation:
                     await self._hydrate_history()
                     needs_reconciliation = False
-                await self._stream_once()
+                membership_changed = await self._stream_once()
+                if membership_changed:
+                    needs_reconciliation = True
             except Exception as exc:
                 needs_reconciliation = True
                 logger.exception("MEXC stream failed; reconciling before reconnect in 5 seconds: %s", exc)
@@ -287,10 +304,16 @@ class MexcMonitoringWorker:
         return mexc_symbol
 
     async def _load_watchlist(self) -> None:
+        """Atomically replace subscriptions with catalogue-verified membership.
+
+        A catalogue outage intentionally produces an empty membership: retaining
+        an old subscription would violate the fail-closed eligibility contract.
+        """
         catalogue = await fetch_mexc_contract_catalogue()
-        self._users_by_symbol.clear()
+        next_membership: dict[str, set[int]] = defaultdict(set)
         if catalogue is None:
             logger.warning("MEXC Contract catalogue unavailable; no symbols will be subscribed")
+            self._users_by_symbol = next_membership
             return
         async with get_session_factory()() as session:
             rows = (await session.execute(select(WatchlistPair))).scalars().all()
@@ -299,8 +322,27 @@ class MexcMonitoringWorker:
             if symbol is None:
                 logger.warning("Skipping watchlist pair absent from MEXC Contract catalogue: %s", row.pair)
                 continue
-            self._users_by_symbol[symbol].add(row.user_id)
+            next_membership[symbol].add(row.user_id)
+        self._users_by_symbol = next_membership
         logger.info("Real-time worker loaded %d supported MEXC watchlist pairs", len(self._users_by_symbol))
+
+    def _seconds_until_watchlist_refresh(self) -> float:
+        due_at = self._last_watchlist_refresh_at + self._watchlist_refresh_seconds
+        return max(0.001, due_at - time.monotonic())
+
+    async def _refresh_watchlist_if_due(self) -> bool:
+        """Refresh subscriptions on a bounded interval and report membership changes."""
+        now = time.monotonic()
+        if now - self._last_watchlist_refresh_at < self._watchlist_refresh_seconds:
+            return False
+        previous = {symbol: set(users) for symbol, users in self._users_by_symbol.items()}
+        self._last_watchlist_refresh_at = now
+        await self._load_watchlist()
+        current = {symbol: set(users) for symbol, users in self._users_by_symbol.items()}
+        changed = current != previous
+        if changed:
+            logger.info("MEXC watchlist membership changed; reconnecting stream")
+        return changed
 
     async def _hydrate_history(self) -> None:
         """Backfill enough public MEXC candles before evaluating live frames."""
@@ -320,7 +362,7 @@ class MexcMonitoringWorker:
         logger.info("MEXC candle backfill completed for %d symbols", len(self._users_by_symbol))
         self._touch_heartbeat()
 
-    async def _stream_once(self) -> None:
+    async def _stream_once(self) -> bool:
         try:
             import websockets
         except ImportError as exc:
@@ -331,8 +373,14 @@ class MexcMonitoringWorker:
                     await socket.send(json.dumps(build_kline_subscription(symbol, interval)))
             logger.info("Connected to MEXC market stream for %d symbols", len(self._users_by_symbol))
             while not self._stop.is_set():
+                # Check before receiving too: a busy stream must not postpone a
+                # periodic membership refresh indefinitely.
+                if await self._refresh_watchlist_if_due():
+                    return True
                 try:
-                    raw = await asyncio.wait_for(socket.recv(), timeout=30)
+                    raw = await asyncio.wait_for(
+                        socket.recv(), timeout=min(30, self._seconds_until_watchlist_refresh())
+                    )
                 except asyncio.TimeoutError:
                     await socket.send(json.dumps({"method": "ping"}))
                     await self._check_stale_symbols()
@@ -352,6 +400,7 @@ class MexcMonitoringWorker:
                     continue
                 if self._strategy.add(interval, candle):
                     await self._evaluate_symbol(candle.symbol)
+        return False
 
     def _is_symbol_fresh(self, symbol: str) -> bool:
         last_frame_at = self._last_frame_by_symbol.get(symbol)

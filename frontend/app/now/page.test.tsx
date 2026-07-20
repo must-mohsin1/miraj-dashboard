@@ -37,4 +37,43 @@ describe("Decision Desk Now page", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Manual review and execution only/)).toBeInTheDocument();
   });
+
+  it("renders notification and authenticated account evidence from the now contract", async () => {
+    mockedServerFetch.mockResolvedValueOnce({
+      generated_at: "2026-07-20T14:30:00Z",
+      watchlist: [],
+      signals: [],
+      notification_channels: [],
+      notification_outbox: [
+        {
+          pair: "BTC_USDT",
+          direction: "LONG",
+          signal_state: "ACTIONABLE",
+          channel_type: "discord",
+          status: "sent",
+          attempts: 1,
+          created_at: "2026-07-20T14:29:00Z",
+          next_attempt_at: null,
+          sent_at: "2026-07-20T14:29:00Z",
+          error: null,
+        },
+      ],
+      account_reconciliation: [{
+        exchange: "mexc",
+        freshness: "stale",
+        last_reconciled_at: "2026-07-20T14:00:00Z",
+        positions: [{ symbol: "BTC_USDT", side: "long", size: 1 }],
+      }],
+    });
+    const NowPage = (await import("./page")).default;
+
+    render(await NowPage());
+
+    expect(screen.getByText("Sent at: 2026-07-20T14:29:00Z")).toBeInTheDocument();
+    expect(screen.getByText("Account truth stale.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Journal BTC_USDT position" })).toHaveAttribute(
+      "href",
+      "/journal?exchange=mexc&symbol=BTC_USDT"
+    );
+  });
 });
