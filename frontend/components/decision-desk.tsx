@@ -119,7 +119,7 @@ function AccountTruth({ accountTruth }: { accountTruth: DecisionDeskAccountTruth
   return (
     <Card className="border-slate-800 bg-slate-900/60 lg:col-span-3">
       <CardHeader className="pb-2">
-        <h2 className="text-base font-semibold text-slate-100">Account truth</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Account truth</h2>
       </CardHeader>
       <CardContent className="space-y-3 text-sm text-slate-400">
         <p className={status === "fresh" ? "text-emerald-400" : "text-amber-400"}>
@@ -167,19 +167,64 @@ export function DecisionDesk({
   const watchOrReady = signals.filter((signal) => ["WATCH", "READY"].includes(signal.state.toUpperCase()));
   const invalidatedOrStale = signals.filter((signal) => ["INVALIDATED", "STALE"].includes(signal.state.toUpperCase()));
 
+  // Front-page verdict (INK & OXIDE): honest by construction. "No trade
+  // today." is only printed when a real snapshot backs it; with no data at
+  // all the desk says so instead of inferring calm.
+  const dataAvailable = Boolean(
+    lastUpdated || marketRegime || signals.length > 0 || confirmedSetups.length > 0
+  );
+  const verdictText = !dataAvailable
+    ? "Desk unavailable."
+    : actionable.length > 0
+      ? `Ready: ${actionable.length} ${actionable.length === 1 ? "setup" : "setups"}.`
+      : "No trade today.";
+  const verdictReason = !dataAvailable
+    ? "No persisted advisory snapshot is available. Nothing is inferred from market data."
+    : actionable.length > 0
+      ? "Confirmed records have cleared every gate. Review the evidence below before any manual execution."
+      : "No lifecycle record has cleared every gate. The desk stands down; candidates and evidence follow below.";
+  const deskDate = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
   return (
-    <section className="grid gap-4 lg:grid-cols-3" aria-label="Decision Desk">
-      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-base font-semibold text-slate-100">Market Regime</h2></CardHeader><CardContent className="text-sm text-slate-400">{marketRegime ?? "Market regime unavailable."}</CardContent></Card>
-      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-base font-semibold text-slate-100">Confirmed Setups</h2></CardHeader><CardContent className="space-y-2 text-sm text-slate-400">{confirmedSetups.length === 0 ? "No confirmed setups at this time." : <ul className="space-y-2">{confirmedSetups.map((setup) => <li key={setup} className="flex items-start gap-2"><Badge className="mt-0.5 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/15">Confirmed</Badge><span>{setup}</span></li>)}</ul>}</CardContent></Card>
-      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-base font-semibold text-slate-100">Watch / Research-only</h2></CardHeader><CardContent className="text-sm text-slate-400">{watchSummary ?? "No watch or research-only items supplied."}</CardContent></Card>
-      {realtimePairCount !== undefined ? <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-base font-semibold text-slate-100">Market Scope</h2></CardHeader><CardContent className="text-sm text-slate-400">{`${realtimePairCount} MEXC realtime ${realtimePairCount === 1 ? "pair" : "pairs"}`}</CardContent></Card> : null}
-      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-base font-semibold text-slate-100">Actionable</h2></CardHeader><CardContent className="text-sm text-slate-400"><SignalList signals={actionable} emptyMessage="No actionable lifecycle records at this time." /></CardContent></Card>
-      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-base font-semibold text-slate-100">Watch / Ready</h2></CardHeader><CardContent className="text-sm text-slate-400"><SignalList signals={watchOrReady} emptyMessage="No watch or ready lifecycle records at this time." /></CardContent></Card>
-      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-base font-semibold text-slate-100">Invalidated / Stale</h2></CardHeader><CardContent className="text-sm text-slate-400"><SignalList signals={invalidatedOrStale} emptyMessage="No invalidated or stale lifecycle records at this time." /></CardContent></Card>
-      <Card className="border-slate-800 bg-slate-900/60 lg:col-span-3"><CardHeader className="pb-2"><h2 className="text-base font-semibold text-slate-100">Notification evidence</h2></CardHeader><CardContent className="text-sm text-slate-400"><NotificationEvidence notifications={notifications} /></CardContent></Card>
+    <section className="space-y-8" aria-label="Decision Desk">
+      {/* ── Masthead + monumental verdict — the front page ── */}
+      <header>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 pb-2.5 text-[13px] text-slate-500">
+          <span className="font-mono text-slate-300">{deskDate}</span>
+          {lastUpdated ? (
+            <>
+              <span aria-hidden>·</span>
+              <span>
+                as of <span className="font-mono">{lastUpdated}</span>
+              </span>
+            </>
+          ) : null}
+        </div>
+        <hr className="rule-brass border-0" />
+        <p className="font-verdict pb-3 pt-7 text-6xl text-slate-100 sm:text-7xl lg:text-8xl">
+          {verdictText}
+        </p>
+        <p className="max-w-[64ch] text-base text-slate-500">{verdictReason}</p>
+      </header>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Market Regime</h2></CardHeader><CardContent className="text-sm text-slate-400">{marketRegime ?? "Market regime unavailable."}</CardContent></Card>
+      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Confirmed Setups</h2></CardHeader><CardContent className="space-y-2 text-sm text-slate-400">{confirmedSetups.length === 0 ? "No confirmed setups at this time." : <ul className="space-y-2">{confirmedSetups.map((setup) => <li key={setup} className="flex items-start gap-2"><Badge className="mt-0.5 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/15">Confirmed</Badge><span>{setup}</span></li>)}</ul>}</CardContent></Card>
+      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Watch / Research-only</h2></CardHeader><CardContent className="text-sm text-slate-400">{watchSummary ?? "No watch or research-only items supplied."}</CardContent></Card>
+      {realtimePairCount !== undefined ? <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Market Scope</h2></CardHeader><CardContent className="text-sm text-slate-400">{`${realtimePairCount} MEXC realtime ${realtimePairCount === 1 ? "pair" : "pairs"}`}</CardContent></Card> : null}
+      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Actionable</h2></CardHeader><CardContent className="text-sm text-slate-400"><SignalList signals={actionable} emptyMessage="No actionable lifecycle records at this time." /></CardContent></Card>
+      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Watch / Ready</h2></CardHeader><CardContent className="text-sm text-slate-400"><SignalList signals={watchOrReady} emptyMessage="No watch or ready lifecycle records at this time." /></CardContent></Card>
+      <Card className="border-slate-800 bg-slate-900/60"><CardHeader className="pb-2"><h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Invalidated / Stale</h2></CardHeader><CardContent className="text-sm text-slate-400"><SignalList signals={invalidatedOrStale} emptyMessage="No invalidated or stale lifecycle records at this time." /></CardContent></Card>
+      <Card className="border-slate-800 bg-slate-900/60 lg:col-span-3"><CardHeader className="pb-2"><h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Notification evidence</h2></CardHeader><CardContent className="text-sm text-slate-400"><NotificationEvidence notifications={notifications} /></CardContent></Card>
       <AccountTruth accountTruth={accountTruth} />
-      {researchOnlyPairs.length > 0 ? <Card className="border-slate-800 bg-slate-900/60 lg:col-span-3"><CardHeader className="pb-2"><h2 className="text-base font-semibold text-slate-100">Research-only pairs</h2></CardHeader><CardContent className="flex flex-wrap gap-2 text-sm text-slate-400">{researchOnlyPairs.map((pair) => <Badge key={pair} className="bg-amber-500/15 text-amber-400 hover:bg-amber-500/15">{pair}</Badge>)}</CardContent></Card> : null}
-      <p className="lg:col-span-3 text-xs text-slate-500">Manual review and execution only. This desk is advisory and never places trades.{lastUpdated ? <span>{` Last updated: ${lastUpdated}`}</span> : null}</p>
+      {researchOnlyPairs.length > 0 ? <Card className="border-slate-800 bg-slate-900/60 lg:col-span-3"><CardHeader className="pb-2"><h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Research-only pairs</h2></CardHeader><CardContent className="flex flex-wrap gap-2 text-sm text-slate-400">{researchOnlyPairs.map((pair) => <Badge key={pair} className="bg-amber-500/15 text-amber-400 hover:bg-amber-500/15">{pair}</Badge>)}</CardContent></Card> : null}
+      </div>
+      <p className="text-xs text-slate-500">Manual review and execution only. This desk is advisory and never places trades.{lastUpdated ? <span>{` Last updated: ${lastUpdated}`}</span> : null}</p>
     </section>
   );
 }

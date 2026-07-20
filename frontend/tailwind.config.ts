@@ -51,7 +51,9 @@ const config: Config = {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["var(--font-inter)", "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: ["General Sans", "ui-sans-serif", "system-ui", "sans-serif"],
+        serif: ["var(--font-fraunces)", "Fraunces", "Georgia", "serif"],
+        mono: ["var(--font-jbmono)", "JetBrains Mono", "ui-monospace", "monospace"],
       },
     },
   },

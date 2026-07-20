@@ -54,6 +54,14 @@ interface VerdictCardProps {
   verdict: ScanVerdictData | null | undefined;
 }
 
+/** "NO TRADE TODAY" → "No trade today." — the verdict is an authored ruling. */
+function sentenceCase(label: string): string {
+  const t = label.trim();
+  if (!t) return t;
+  const sentence = t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+  return sentence.endsWith(".") ? sentence : `${sentence}.`;
+}
+
 export function VerdictCard({ verdict }: VerdictCardProps) {
   if (!verdict) return null;
 
@@ -77,6 +85,11 @@ export function VerdictCard({ verdict }: VerdictCardProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* The verdict voice: serif, sentence case, full stop (DESIGN.md) */}
+        <p className="font-verdict text-4xl text-slate-100 sm:text-5xl">
+          {sentenceCase(verdict.display)}
+        </p>
+
         {/* State + bias — separate facts, separate chips */}
         <div className="flex flex-wrap items-center gap-2">
           <span

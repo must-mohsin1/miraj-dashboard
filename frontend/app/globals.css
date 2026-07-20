@@ -2,72 +2,66 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-:root {
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
-  --card: 0 0% 100%;
-  --card-foreground: 222.2 84% 4.9%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222.2 84% 4.9%;
-  --primary: 222.2 47.4% 11.2%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 210 40% 96.1%;
-  --secondary-foreground: 222.2 47.4% 11.2%;
-  --muted: 210 40% 96.1%;
-  --muted-foreground: 215.4 16.3% 46.9%;
-  --accent: 210 40% 96.1%;
-  --accent-foreground: 222.2 47.4% 11.2%;
-  --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 214.3 31.8% 91.4%;
-  --input: 214.3 31.8% 91.4%;
-  --ring: 222.2 84% 4.9%;
-  --radius: 0.625rem;
+/* ── INK & OXIDE — design tokens (see DESIGN.md) ──────────────────────────
+   Light = "Print edition" (paper + ink), Dark = "Ink edition" (default).
+   Chroma is reserved for meaning: verdict metals + brass accent only. */
 
-  /* P&L semantic colors (used in light + dark) */
-  --profit: 142 71% 45%;
+:root {
+  /* Print edition */
+  --background: 37 41% 93%;          /* paper #F4EFE6 */
+  --foreground: 40 12% 9%;           /* ink #1B1914 */
+  --card: 40 31% 89%;                /* #EDE7DB */
+  --card-foreground: 40 12% 9%;
+  --popover: 37 41% 93%;
+  --popover-foreground: 40 12% 9%;
+  --primary: 40 12% 9%;              /* ink buttons on paper */
+  --primary-foreground: 37 41% 93%;
+  --secondary: 40 21% 84%;
+  --secondary-foreground: 40 12% 9%;
+  --muted: 40 21% 84%;
+  --muted-foreground: 42 12% 39%;    /* #6E6757 */
+  --accent: 40 21% 84%;
+  --accent-foreground: 40 12% 9%;
+  --destructive: 11 45% 47%;         /* rust, print-deepened */
+  --destructive-foreground: 37 41% 93%;
+  --border: 40 21% 76%;              /* #CFC6B4 */
+  --input: 40 21% 76%;
+  --ring: 39 39% 39%;                /* brass, print-deepened #8A6F3C */
+  --radius: 0rem;                    /* the desk has square corners */
+
+  /* P&L semantics — verdigris / rust */
+  --profit: 155 21% 42%;
   --profit-foreground: 0 0% 100%;
-  --loss: 0 84% 60%;
+  --loss: 11 45% 47%;
   --loss-foreground: 0 0% 100%;
 }
 
 .dark {
-  /* slate-950 base background */
-  --background: 222 47% 3.5%;
-  --foreground: 210 40% 98%;
+  /* Ink edition */
+  --background: 40 11% 5%;           /* warm ink #0F0E0C — never slate */
+  --foreground: 40 31% 89%;          /* paper #EDE7DB — never pure white */
+  --card: 34 10% 8%;                 /* desk #161411 */
+  --card-foreground: 40 31% 89%;
+  --popover: 34 10% 8%;
+  --popover-foreground: 40 31% 89%;
+  --primary: 40 31% 89%;             /* paper buttons on ink */
+  --primary-foreground: 40 11% 5%;
+  --secondary: 35 13% 10%;           /* raised #1D1A16 */
+  --secondary-foreground: 40 31% 89%;
+  --muted: 35 13% 10%;
+  --muted-foreground: 41 9% 51%;     /* #8E8778 */
+  --accent: 35 13% 10%;
+  --accent-foreground: 40 31% 89%;
+  --destructive: 11 51% 56%;         /* rust #C96A55 */
+  --destructive-foreground: 40 11% 5%;
+  --border: 36 14% 15%;              /* hairline #2A2620 */
+  --input: 36 14% 15%;
+  --ring: 39 42% 59%;                /* brass #C2A36B */
 
-  /* slate-900 card surfaces */
-  --card: 222 32% 9%;
-  --card-foreground: 210 40% 98%;
-
-  --popover: 222 47% 6%;
-  --popover-foreground: 210 40% 98%;
-
-  /* Emerald accent for the trading theme */
-  --primary: 142 71% 45%;
-  --primary-foreground: 0 0% 100%;
-
-  --secondary: 217 33% 14%;
-  --secondary-foreground: 210 40% 98%;
-
-  --muted: 217 33% 14%;
-  --muted-foreground: 215 20% 65%;
-
-  --accent: 217 33% 16%;
-  --accent-foreground: 210 40% 98%;
-
-  --destructive: 0 72% 51%;
-  --destructive-foreground: 0 0% 100%;
-
-  --border: 217 33% 16%;
-  --input: 217 33% 16%;
-  --ring: 142 71% 45%;
-
-  /* P&L: green-500 / red-500 */
-  --profit: 142 71% 45%;
-  --profit-foreground: 0 0% 100%;
-  --loss: 0 84% 60%;
-  --loss-foreground: 0 0% 100%;
+  --profit: 155 22% 54%;             /* verdigris #6CA98F */
+  --profit-foreground: 40 11% 5%;
+  --loss: 11 51% 56%;                /* rust #C96A55 */
+  --loss-foreground: 40 11% 5%;
 }
 
 @theme inline {
@@ -97,13 +91,97 @@
   --color-loss: hsl(var(--loss));
   --color-loss-foreground: hsl(var(--loss-foreground));
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  /* Square corners across the system (DESIGN.md: radius 0; broadsheet columns) */
+  --radius-sm: 0rem;
+  --radius-md: 0rem;
+  --radius-lg: 0rem;
+  --radius-xl: 0rem;
+  --radius-2xl: 0rem;
+  --radius-3xl: 0rem;
 
-  /* Monospace stack for numeric/tabular data */
-  --font-mono: ui-monospace, "SFMono-Regular", "Menlo", "Consolas", monospace;
+  /* ── Three voices: serif verdicts, sans interface, mono numbers ── */
+  --font-sans: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-fraunces), "Fraunces", Georgia, serif;
+  --font-mono: var(--font-jbmono), "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* ── Brass — the only non-semantic accent (masthead rules + focus) ── */
+  --color-brass-300: #D4BC90;
+  --color-brass-400: #C2A36B;
+  --color-brass-500: #AC8C52;
+  --color-brass-600: #8A6F3C;
+
+  /* ── Warm ink neutrals — every slate-* utility remaps here ── */
+  --color-slate-50: #F4EFE6;
+  --color-slate-100: #EDE7DB;
+  --color-slate-200: #DDD3BE;
+  --color-slate-300: #C6BBA3;
+  --color-slate-400: #A69D8C;   /* stone — NO_TRADE ink */
+  --color-slate-500: #8E8778;
+  --color-slate-600: #6E6757;
+  --color-slate-700: #4A4438;
+  --color-slate-800: #2A2620;   /* hairline border */
+  --color-slate-900: #161411;   /* desk surface */
+  --color-slate-950: #0F0E0C;   /* warm ink bg */
+
+  /* ── Verdigris (READY_LONG / profit) — emerald-* and green-* remap ── */
+  --color-emerald-50: #EEF5F1;
+  --color-emerald-100: #DCEAE3;
+  --color-emerald-200: #BCD6C9;
+  --color-emerald-300: #9AC2B0;
+  --color-emerald-400: #6CA98F;
+  --color-emerald-500: #578F77;
+  --color-emerald-600: #467560;
+  --color-emerald-700: #385D4D;
+  --color-emerald-800: #2B473B;
+  --color-emerald-900: #1F332B;
+  --color-emerald-950: #14211C;
+  --color-green-50: #EEF5F1;
+  --color-green-100: #DCEAE3;
+  --color-green-200: #BCD6C9;
+  --color-green-300: #9AC2B0;
+  --color-green-400: #6CA98F;
+  --color-green-500: #578F77;
+  --color-green-600: #467560;
+  --color-green-700: #385D4D;
+  --color-green-800: #2B473B;
+  --color-green-900: #1F332B;
+  --color-green-950: #14211C;
+
+  /* ── Rust (READY_SHORT / loss / destructive) — red-* remap ── */
+  --color-red-50: #F9EEEB;
+  --color-red-100: #F2DCD6;
+  --color-red-200: #E5BAAE;
+  --color-red-300: #D89785;
+  --color-red-400: #C96A55;
+  --color-red-500: #B85A46;
+  --color-red-600: #994938;
+  --color-red-700: #7A3A2D;
+  --color-red-800: #5C2C22;
+  --color-red-900: #422019;
+  --color-red-950: #2B1510;
+
+  /* ── Ochre (WATCH / warnings) — amber-* remap ── */
+  --color-amber-50: #F8F1E4;
+  --color-amber-100: #F0E2C8;
+  --color-amber-200: #E4CB99;
+  --color-amber-300: #DBB472;
+  --color-amber-400: #D19A4A;
+  --color-amber-500: #BE8735;
+  --color-amber-600: #9C6F2B;
+  --color-amber-700: #7C5822;
+  --color-amber-800: #5D421A;
+  --color-amber-900: #423012;
+  --color-amber-950: #2B1F0C;
+
+  /* ── Ash (INVALIDATED / STALE — the palette's only cool hue) ── */
+  --color-ash-300: #A3A0AE;
+  --color-ash-400: #8B8897;
+  --color-ash-500: #7E7B8A;
+  --color-ash-600: #666372;
+  --color-violet-300: #A3A0AE;
+  --color-violet-400: #8B8897;
+  --color-violet-500: #7E7B8A;
+  --color-violet-600: #666372;
 }
 
 @layer base {
@@ -115,7 +193,6 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
   /* Tabular numbers everywhere by default — essential for price tables */
@@ -127,7 +204,7 @@
 }
 
 @layer components {
-  /* P&L color helpers — green-500 for profit, red-500 for loss */
+  /* P&L color helpers — verdigris for profit, rust for loss */
   .text-profit {
     @apply text-green-500;
   }
@@ -139,6 +216,24 @@
   }
   .bg-loss {
     @apply bg-red-500/10;
+  }
+
+  /* The verdict voice: serif, sentence case, ends with a full stop.
+     Used ONLY for verdict statements and page mastheads (DESIGN.md). */
+  .font-verdict {
+    font-family: var(--font-serif);
+    font-weight: 550;
+    font-optical-sizing: auto;
+    letter-spacing: -0.015em;
+    line-height: 1.02;
+  }
+
+  /* Brass hairline under mastheads — the only decorative color use allowed */
+  .rule-brass {
+    border-top: 1px solid #C2A36B;
+  }
+  :root:not(.dark) .rule-brass {
+    border-top-color: #8A6F3C;
   }
 
   /* Slate truncation guards used across the dashboard */
