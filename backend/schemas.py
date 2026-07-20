@@ -104,6 +104,29 @@ class WatchlistRemoveResponse(BaseModel):
     detail: str = "Pair removed"
 
 
+# ── Decision Desk ───────────────────────────────────────────────────────────
+
+class DecisionDeskWatchlistPair(BaseModel):
+    pair: str
+    market_scope: str
+    mexc_symbol: Optional[str] = None
+
+
+class DecisionDeskSignal(BaseModel):
+    pair: str
+    direction: str
+    state: str
+    missing_gates: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class DecisionDeskResponse(BaseModel):
+    generated_at: datetime
+    watchlist: list[DecisionDeskWatchlistPair]
+    signals: list[DecisionDeskSignal]
+
+
 # ── Pair Settings ───────────────────────────────────────────────────────────
 
 class PairSettingsUpdateRequest(BaseModel):

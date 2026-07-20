@@ -169,6 +169,24 @@ export function AlertPreferencesForm({
           </CardTitle>
         </CardHeader>
         <CardContent>
+          <p className="mb-4 text-sm text-slate-400">
+            Telegram can be configured in this dashboard today. Discord and
+            email delivery are coming soon and cannot be configured here.
+          </p>
+          <dl className="mb-4 grid gap-2 rounded-lg border border-slate-800 p-3 text-sm sm:grid-cols-3">
+            <ChannelDeliveryState
+              label="Telegram"
+              state={deliveryState(channels, "telegram")}
+            />
+            <ChannelDeliveryState
+              label="Discord"
+              state={deliveryState(channels, "discord")}
+            />
+            <ChannelDeliveryState
+              label="Email"
+              state={deliveryState(channels, "email")}
+            />
+          </dl>
           {channels.length === 0 ? (
             <p className="text-sm text-slate-400">
               No alert channels configured. Add a Telegram channel below to
@@ -367,6 +385,33 @@ function summariseChannel(ch: AlertChannel): string {
     return email ? String(email) : "Configured";
   }
   return "Configured";
+}
+
+function deliveryState(channels: AlertChannel[], channelType: string): string {
+  const configuredChannels = channels.filter(
+    (channel) => channel.channel_type === channelType
+  );
+
+  if (configuredChannels.length === 0) return "Not configured";
+
+  return configuredChannels.some((channel) => channel.enabled)
+    ? "Configured — enabled"
+    : "Configured — disabled";
+}
+
+function ChannelDeliveryState({
+  label,
+  state,
+}: {
+  label: string;
+  state: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 sm:flex-col sm:items-start">
+      <dt className="font-medium text-slate-200">{label}</dt>
+      <dd className="text-slate-400">{state}</dd>
+    </div>
+  );
 }
 
 export default AlertPreferencesForm;

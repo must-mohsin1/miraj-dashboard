@@ -11,6 +11,7 @@ import {
   CandlestickChart,
   ChevronLeft,
   NotebookPen,
+  Activity,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -39,6 +40,7 @@ export interface NavItem {
 
 export const navItems: NavItem[] = [
   { href: "/", label: "Home", icon: Home },
+  { href: "/now", label: "Decision Desk", icon: Activity },
   { href: "/macro", label: "Macro Dashboard", icon: TrendingUp },
   { href: "/scanner", label: "Scanner", icon: Search },
   { href: "/analysis", label: "Analysis", icon: BarChart3 },
