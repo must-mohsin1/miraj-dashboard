@@ -26,6 +26,8 @@ import type { EquityCurvePoint } from "@/lib/types";
 
 interface EquityCurveProps {
   points: EquityCurvePoint[];
+  basis?: string | null;
+  unavailableReason?: string | null;
 }
 
 const TOOLTIP_STYLE = {
@@ -81,12 +83,15 @@ function EquityTooltip({ active, payload }: {
   );
 }
 
-export function EquityCurve({ points }: EquityCurveProps) {
+export function EquityCurve({ points, basis, unavailableReason }: EquityCurveProps) {
   if (!points || points.length === 0) {
+    const reason = unavailableReason ? unavailableReason.replaceAll("_", " ") : "no account equity data";
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-sm text-slate-400">
-        No equity history yet. The curve will populate as portfolio snapshots
-        are recorded on each refresh.
+        <div>Account equity unavailable — {reason}</div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          PortfolioSnapshot.total_balance_usd is missing; realised-PnL reconstruction is shown separately.
+        </div>
       </div>
     );
   }
@@ -110,8 +115,11 @@ export function EquityCurve({ points }: EquityCurveProps) {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
       <h3 className="mb-3 text-sm font-medium text-slate-300">
-        Equity Curve
+        Account Equity Curve
       </h3>
+      <div className="mb-3 text-xs text-muted-foreground">
+        Basis: {basis === "account_snapshot" ? "Account snapshot" : "Account equity data"}
+      </div>
       <div className="h-72 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart

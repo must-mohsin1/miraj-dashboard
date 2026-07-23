@@ -94,6 +94,27 @@ export function HealthScorePanel({ token, exchange }: HealthScorePanelProps) {
 
   if (!data) return null;
 
+  if (data.grade === null || data.health_score === null) {
+    return (
+      <div className="border border-border bg-card/60 p-4">
+        <div className="flex items-center gap-2 text-sm text-card-foreground">
+          <Shield className="h-4 w-4 text-muted-foreground" />
+          <span>Not applicable</span>
+        </div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          {readableHealthReason(data.health_reason)}
+        </div>
+        {data.recommendations.length > 0 && (
+          <ul className="mt-3 space-y-1.5">
+            {data.recommendations.map((rec, i) => (
+              <li key={i} className="text-sm text-card-foreground">{rec}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
   // ── Colour helpers ───────────────────────────────────────────────────
   const gradeColors: Record<string, string> = {
     A: "bg-emerald-500 text-white",
@@ -247,3 +268,9 @@ function MetricBar({ label, value, icon, goodDirection, barColor }: MetricBarPro
 }
 
 export default HealthScorePanel;
+
+function readableHealthReason(reason?: string | null): string {
+  if (reason === "no_open_positions") return "No open positions";
+  if (reason === "no_snapshot_data") return "No snapshot data";
+  return reason ? reason.replaceAll("_", " ") : "Unavailable";
+}

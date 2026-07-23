@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, TrendingUp, TrendingDown, Activity, BarChart3 } from "lucide-react";
+import { Loader2, Activity, BarChart3 } from "lucide-react";
 import {
   LineChart,
   Line,
@@ -19,9 +19,9 @@ import type { BenchmarkResponse } from "@/lib/types";
  * BenchmarkComparison — Client Component.
  *
  * Fetches `GET /api/v1/analytics/benchmark?symbol=BTC-USD&days=30&exchange=...`
- * and renders:
- *  - Recharts line chart: portfolio vs BTC buy-and-hold (both indexed to 0% at start)
- *  - Summary stats: portfolio return %, BTC return %, alpha, beta
+ * and renders BTC buy-and-hold return plus an explicit unavailable state for
+ * account-return comparison. Phase 0 must not turn closed-position PnL into a
+ * portfolio/account return, alpha, or beta.
  *
  * Auto-refreshes every 5 minutes.
  */
@@ -106,53 +106,32 @@ export function BenchmarkComparison({ token, exchange }: BenchmarkComparisonProp
   if (!data) return null;
 
   const points = data.points ?? [];
-  const portPositive = data.portfolio_return_pct >= 0;
   const btcPositive = data.btc_return_pct >= 0;
-  const alphaPositive = data.alpha >= 0;
+  const unavailableReason = readableReason(data.unavailable_reason || "capital_history_missing");
 
   // Thin date labels for the X axis
   const chartData = points.map((p) => ({
     date: p.date.slice(5), // "MM-DD"
-    portfolio: Number(p.portfolio_return_pct.toFixed(2)),
     btc: Number(p.btc_return_pct.toFixed(2)),
   }));
 
   return (
     <div className="space-y-4">
       {/* ── Summary stat cards ───────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard
-          label="Portfolio Return"
-          value={`${data.portfolio_return_pct.toFixed(2)}%`}
-          positive={portPositive}
-          icon={<TrendingUp className="h-4 w-4" />}
-        />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <StatCard
           label="BTC Return"
           value={`${data.btc_return_pct.toFixed(2)}%`}
           positive={btcPositive}
           icon={<BarChart3 className="h-4 w-4" />}
         />
-        <StatCard
-          label="Alpha"
-          value={`${data.alpha.toFixed(2)}%`}
-          positive={alphaPositive}
-          icon={<Activity className="h-4 w-4" />}
-          hint="Portfolio − BTC"
-        />
-        <StatCard
-          label="Beta"
-          value={data.beta !== null ? data.beta.toFixed(2) : "—"}
-          positive={data.beta !== null && data.beta < 1}
-          icon={<Activity className="h-4 w-4" />}
-          hint="Cov / Var"
-        />
+        <UnavailableCard reason={unavailableReason} />
       </div>
 
       {/* ── Chart ────────────────────────────────────────────────────── */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <h3 className="mb-4 text-sm font-medium text-slate-300">
-          Cumulative Return (Indexed to 0% at Start)
+        <h3 className="mb-4 text-sm font-medium text-card-foreground">
+          BTC Benchmark Return (Indexed to 0% at Start)
         </h3>
         <div className="h-72 w-full">
           {points.length === 0 ? (
@@ -193,23 +172,13 @@ export function BenchmarkComparison({ token, exchange }: BenchmarkComparisonProp
                   labelStyle={{ color: "#94a3b8" }}
                   formatter={(value, name) => [
                     `${Number(value).toFixed(2)}%`,
-                    name === "portfolio" ? "Portfolio" : "BTC",
+                    name === "btc" ? "BTC" : name,
                   ]}
                   labelFormatter={(label) => `Date: ${label}`}
                 />
                 <Legend
                   wrapperStyle={{ fontSize: "12px", color: "#94a3b8" }}
-                  formatter={(value: string) =>
-                    value === "portfolio" ? "Portfolio" : "BTC (Buy & Hold)"
-                  }
-                />
-                <Line
-                  type="monotone"
-                  dataKey="portfolio"
-                  stroke="#22c55e"
-                  strokeWidth={2}
-                  dot={false}
-                  name="portfolio"
+                  formatter={() => "BTC (Buy & Hold)"}
                 />
                 <Line
                   type="monotone"
@@ -227,9 +196,9 @@ export function BenchmarkComparison({ token, exchange }: BenchmarkComparisonProp
       </div>
 
       {/* ── Footnote ─────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-2.5 text-xs text-slate-500">
+      <div className="flex items-center gap-2 border border-border bg-card/60 px-4 py-2.5 text-xs text-muted-foreground">
         <Activity className="h-3 w-3 shrink-0" />
-        {data.days}-day comparison against {data.symbol}. BTC data via yfinance.
+        {data.days}-day benchmark against {data.symbol}. Account-return comparison unavailable until complete capital history exists. BTC data via yfinance.
         {refreshing && " Refreshing…"}
       </div>
     </div>
@@ -237,6 +206,29 @@ export function BenchmarkComparison({ token, exchange }: BenchmarkComparisonProp
 }
 
 // ── Stat card sub-component ──────────────────────────────────────────────
+
+function UnavailableCard({ reason }: { reason: string }) {
+  return (
+    <div className="border border-border bg-card/60 p-3">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Activity className="h-4 w-4" />
+        Account-return benchmark unavailable
+      </div>
+      <p className="mt-1 text-sm font-medium text-card-foreground">
+        {sentenceCase(reason)}; closed-position PnL is not account return.
+      </p>
+    </div>
+  );
+}
+
+function readableReason(reason: string): string {
+  return reason.replaceAll("_", " ");
+}
+
+function sentenceCase(value: string): string {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
 
 interface StatCardProps {
   label: string;

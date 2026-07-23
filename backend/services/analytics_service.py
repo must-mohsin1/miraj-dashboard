@@ -4,9 +4,6 @@ All functions are async and accept an ``AsyncSession`` so they can be called
 directly from route handlers. They read from the already-cached
 ``PositionHistory``, ``PortfolioSnapshot`` and ``PortfolioBalance`` tables
 (no outbound exchange API calls).
-
-Math is done with the Python standard library (``statistics``, ``math``) so
-no extra numeric dependencies are required.
 """
 
 from __future__ import annotations
@@ -16,6 +13,7 @@ import math
 import statistics
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,10 +33,9 @@ async def compute_performance_metrics(
 ) -> Dict[str, Any]:
     """Compute trading performance metrics from closed positions.
 
-    Returns a dict with:
-      win_rate, profit_factor, sharpe_ratio, max_drawdown, max_drawdown_percent,
-      average_win, average_loss, total_trades, winning_trades, losing_trades,
-      best_trade, worst_trade, total_pnl, total_pnl_percent.
+    Phase 0 only supports closed-position realised PnL reconstruction. Account
+    return, conventional account-equity drawdown, and conventional Sharpe remain
+    unavailable until capital/equity history is complete.
     """
     result = await session.execute(
         select(PositionHistory)
@@ -55,60 +52,58 @@ async def compute_performance_metrics(
     if total_trades == 0:
         return _empty_metrics()
 
-    pnls = [p.pnl for p in positions]
-    pnl_pcts = [p.pnl_percent for p in positions]
+    pnls = [float(p.pnl or 0.0) for p in positions]
 
     winning = [p for p in pnls if p > 0]
     losing = [p for p in pnls if p < 0]
-    # Break-even trades (pnl == 0) count as neither win nor loss for win-rate,
-    # but they ARE included in total_trades. Following common convention,
-    # break-even is excluded from win_rate denominator only if there are
-    # winning or losing trades; otherwise included as neutral.
     winning_trades = len(winning)
     losing_trades = len(losing)
 
-    # Win rate: wins / total closed positions (excluding break-even from the
-    # denominator would be another convention; we use wins/total for clarity).
     win_rate = (winning_trades / total_trades) * 100 if total_trades else 0.0
 
-    # Profit factor: gross_profit / abs(gross_loss)
     gross_profit = sum(winning)
-    gross_loss = abs(sum(losing))  # positive number
+    gross_loss = abs(sum(losing))
     profit_factor: Optional[float]
     if gross_loss == 0:
-        profit_factor = None  # no losing trades → "∞" on the frontend
+        profit_factor = None
     else:
         profit_factor = gross_profit / gross_loss
 
-    # Average win / loss
     average_win = statistics.mean(winning) if winning else 0.0
     average_loss = statistics.mean(losing) if losing else 0.0
 
-    # Best / worst trade
     best_trade = max(pnls) if pnls else 0.0
     worst_trade = min(pnls) if pnls else 0.0
-
-    # Total PnL
     total_pnl = sum(pnls)
-    total_pnl_percent = sum(pnl_pcts)
 
-    # Sharpe ratio (simplified, per-trade): mean(pnl) / std(pnl) * sqrt(n)
-    sharpe_ratio: Optional[float] = None
+    trade_quality_score: Optional[float] = None
     if len(pnls) >= 2:
         std_pnl = statistics.stdev(pnls)
         if std_pnl != 0:
             mean_pnl = statistics.mean(pnls)
-            sharpe_ratio = (mean_pnl / std_pnl) * math.sqrt(len(pnls))
+            trade_quality_score = (mean_pnl / std_pnl) * math.sqrt(len(pnls))
 
-    # Max drawdown: largest peak-to-trough decline in cumulative PnL
-    max_drawdown, max_drawdown_percent = _compute_max_drawdown(pnls)
+    realised_pnl_drawdown_usd, realised_pnl_drawdown_pct = _compute_max_drawdown(pnls)
+    rounded_trade_quality = round(trade_quality_score, 4) if trade_quality_score is not None else None
+    rounded_drawdown_usd = round(realised_pnl_drawdown_usd, 2)
+    rounded_drawdown_pct = round(realised_pnl_drawdown_pct, 2) if realised_pnl_drawdown_pct is not None else None
 
     return {
         "win_rate": round(win_rate, 2),
         "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
-        "sharpe_ratio": round(sharpe_ratio, 4) if sharpe_ratio is not None else None,
-        "max_drawdown": round(max_drawdown, 2),
-        "max_drawdown_percent": round(max_drawdown_percent, 2) if max_drawdown_percent is not None else None,
+        "trade_quality_score": rounded_trade_quality,
+        "trade_quality_basis": "per_trade_pnl_dispersion",
+        "realised_pnl_drawdown_usd": rounded_drawdown_usd,
+        "realised_pnl_drawdown_pct": rounded_drawdown_pct,
+        "drawdown_basis": "cumulative_closed_pnl",
+        "account_equity_drawdown_usd": None,
+        "account_equity_drawdown_pct": None,
+        "account_equity_drawdown_reason": "capital_history_missing",
+        # Backward-compatible aliases retained for Phase 0 clients. New UI uses
+        # the explicit replacement names above.
+        "sharpe_ratio": rounded_trade_quality,
+        "max_drawdown": rounded_drawdown_usd,
+        "max_drawdown_percent": rounded_drawdown_pct,
         "average_win": round(average_win, 2),
         "average_loss": round(average_loss, 2),
         "total_trades": total_trades,
@@ -117,18 +112,34 @@ async def compute_performance_metrics(
         "best_trade": round(best_trade, 2),
         "worst_trade": round(worst_trade, 2),
         "total_pnl": round(total_pnl, 2),
-        "total_pnl_percent": round(total_pnl_percent, 2),
+        "total_pnl_basis": "MEXC-reported closed-position PnL",
+        "total_pnl_percent": None,
+        "total_pnl_percent_reason": "capital_history_missing",
+        "account_return_pct": None,
+        "account_return_pct_reason": "capital_history_missing",
+        "source": "PositionHistory.pnl",
+        "basis": "closed_position_reconstruction",
+        "complete": False,
+        "unavailable_reason": "capital_history_missing",
     }
 
 
 def _empty_metrics() -> Dict[str, Any]:
-    """Return a metrics dict with zeroed / None values when no trades exist."""
+    """Return metrics with unsupported account-return fields marked unavailable."""
     return {
         "win_rate": 0.0,
         "profit_factor": None,
+        "trade_quality_score": None,
+        "trade_quality_basis": "per_trade_pnl_dispersion",
+        "realised_pnl_drawdown_usd": 0.0,
+        "realised_pnl_drawdown_pct": 0.0,
+        "drawdown_basis": "cumulative_closed_pnl",
+        "account_equity_drawdown_usd": None,
+        "account_equity_drawdown_pct": None,
+        "account_equity_drawdown_reason": "capital_history_missing",
         "sharpe_ratio": None,
         "max_drawdown": 0.0,
-        "max_drawdown_percent": None,
+        "max_drawdown_percent": 0.0,
         "average_win": 0.0,
         "average_loss": 0.0,
         "total_trades": 0,
@@ -137,28 +148,27 @@ def _empty_metrics() -> Dict[str, Any]:
         "best_trade": 0.0,
         "worst_trade": 0.0,
         "total_pnl": 0.0,
-        "total_pnl_percent": 0.0,
+        "total_pnl_basis": "MEXC-reported closed-position PnL",
+        "total_pnl_percent": None,
+        "total_pnl_percent_reason": "capital_history_missing",
+        "account_return_pct": None,
+        "account_return_pct_reason": "capital_history_missing",
+        "source": "PositionHistory.pnl",
+        "basis": "closed_position_reconstruction",
+        "complete": False,
+        "unavailable_reason": "capital_history_missing",
     }
 
 
 def _compute_max_drawdown(pnls: List[float]) -> tuple[float, Optional[float]]:
-    """Compute the largest peak-to-trough decline in cumulative PnL.
-
-    Walks the cumulative PnL series, tracking the running peak. At each step
-    the drawdown is ``peak - cumulative``. Returns ``(max_drawdown_abs,
-    max_drawdown_pct)`` where the percentage is relative to the peak (or
-    ``None`` when the peak is zero / negative).
-
-    A positive ``max_drawdown_abs`` means the portfolio dropped by that many
-    USD from its highest cumulative-PnL point to the subsequent trough.
-    """
+    """Compute drawdown of cumulative realised closed-position PnL."""
     if not pnls:
-        return 0.0, None
+        return 0.0, 0.0
 
     cumulative = 0.0
-    peak = 0.0  # start at 0 (no trades yet → equity baseline)
+    peak = 0.0
     max_dd = 0.0
-    max_dd_pct: Optional[float] = None
+    max_dd_pct: Optional[float] = 0.0
 
     for pnl in pnls:
         cumulative += pnl
@@ -167,10 +177,7 @@ def _compute_max_drawdown(pnls: List[float]) -> tuple[float, Optional[float]]:
         drawdown = peak - cumulative
         if drawdown > max_dd:
             max_dd = drawdown
-            if peak > 0:
-                max_dd_pct = (drawdown / peak) * 100
-            else:
-                max_dd_pct = None
+            max_dd_pct = (drawdown / peak) * 100 if peak > 0 else None
 
     return max_dd, max_dd_pct
 
@@ -182,14 +189,11 @@ async def get_equity_curve(
     session: AsyncSession,
     user_id: int,
     exchange: str,
-) -> List[Dict[str, Any]]:
-    """Return ``[{timestamp, total_value}]`` from PortfolioSnapshot history.
+) -> Dict[str, Any]:
+    """Return account-equity points from ``PortfolioSnapshot.total_balance_usd``.
 
-    ``total_value`` is ``total_balance_usd`` when available, otherwise falls
-    back to the cumulative realised PnL reconstructed from PositionHistory.
-
-    Snapshots are ordered by timestamp ascending so the curve reads
-    left-to-right chronologically.
+    Null snapshot balances are omitted. Phase 0 does not fallback to unrealised
+    PnL or realised-PnL reconstruction because those are not account equity.
     """
     result = await session.execute(
         select(PortfolioSnapshot)
@@ -201,59 +205,50 @@ async def get_equity_curve(
     )
     snapshots: List[PortfolioSnapshot] = list(result.scalars().all())
 
-    if not snapshots:
-        return []
-
-    # Check whether any snapshot has a non-null total_balance_usd.
-    has_balance = any(s.total_balance_usd is not None for s in snapshots)
-
     points: List[Dict[str, Any]] = []
-    if has_balance:
-        # Use total_balance_usd, falling back to forward-filled last known
-        # value for snapshots where it was None.
-        last_value: Optional[float] = None
-        for s in snapshots:
-            val = s.total_balance_usd
-            if val is not None:
-                last_value = val
-            points.append({
-                "timestamp": _iso_ts(s.timestamp),
-                "total_value": round(last_value, 2) if last_value is not None else 0.0,
-            })
-    else:
-        # No balance data — reconstruct equity from cumulative PnL.
-        # Build a map of timestamp → running cumulative pnl.
-        pnls = await _cumulative_pnl_by_timestamp(session, user_id, exchange)
-        # Align cumulative PnL to snapshot timestamps.
-        cumulative = 0.0
-        # Sort snapshot timestamps; for each, sum pnls up to that timestamp.
-        for s in snapshots:
-            ts = s.timestamp
-            # Add all trade pnls closed at or before this snapshot timestamp.
-            # (pnls list is pre-sorted; we track a cursor.)
-            # Simpler: use the snapshot's own total_pnl_usd as the equity proxy.
-            cumulative = s.total_pnl_usd
-            points.append({
-                "timestamp": _iso_ts(ts),
-                "total_value": round(cumulative, 2),
-            })
+    for snapshot in snapshots:
+        if snapshot.total_balance_usd is None:
+            continue
+        points.append(
+            {
+                "timestamp": _iso_ts(snapshot.timestamp),
+                "total_value": round(float(snapshot.total_balance_usd), 2),
+                "basis": "account_snapshot",
+            }
+        )
 
-    return points
+    has_null_snapshots = any(snapshot.total_balance_usd is None for snapshot in snapshots)
+    if not points:
+        return {
+            "points": [],
+            "basis": None,
+            "source": "PortfolioSnapshot.total_balance_usd",
+            "complete": False,
+            "unavailable_reason": "no_account_equity_data",
+        }
+
+    return {
+        "points": points,
+        "basis": "account_snapshot",
+        "source": "PortfolioSnapshot.total_balance_usd",
+        "complete": not has_null_snapshots,
+        "unavailable_reason": None,
+    }
 
 
-# ── Daily PnL ───────────────────────────────────────────────────────────────
+# ── Daily / period PnL ──────────────────────────────────────────────────────
 
 
 async def get_daily_pnl(
     session: AsyncSession,
     user_id: int,
     exchange: str,
-) -> List[Dict[str, Any]]:
-    """Aggregate PositionHistory PnL by close_time date.
-
-    Returns ``[{date, pnl}]`` sorted ascending, where ``date`` is
-    ``YYYY-MM-DD``.
-    """
+    timezone_name: str = "UTC",
+    from_ts: Optional[datetime] = None,
+    to_ts: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Aggregate PositionHistory PnL by local close-time date."""
+    tz = _load_timezone(timezone_name)
     result = await session.execute(
         select(PositionHistory)
         .where(
@@ -265,20 +260,83 @@ async def get_daily_pnl(
     positions: List[PositionHistory] = list(result.scalars().all())
 
     daily: Dict[str, float] = {}
-    for p in positions:
-        if p.close_time is None:
+    for position in positions:
+        if position.close_time is None:
             continue
-        # Normalise to date string (UTC).
-        ct = p.close_time
-        if ct.tzinfo is not None:
-            ct = ct.astimezone(timezone.utc).replace(tzinfo=None)
-        date_str = ct.strftime("%Y-%m-%d")
-        daily[date_str] = daily.get(date_str, 0.0) + p.pnl
+        close_utc = _as_utc(position.close_time)
+        if from_ts is not None and close_utc < _as_utc(from_ts):
+            continue
+        if to_ts is not None and close_utc > _as_utc(to_ts):
+            continue
+        date_str = close_utc.astimezone(tz).strftime("%Y-%m-%d")
+        daily[date_str] = daily.get(date_str, 0.0) + float(position.pnl or 0.0)
 
-    return [
-        {"date": date, "pnl": round(pnl, 2)}
-        for date, pnl in sorted(daily.items())
-    ]
+    return {
+        "exchange": exchange,
+        "timezone": timezone_name,
+        "period": {
+            "from": _iso_ts(from_ts) if from_ts else None,
+            "to": _iso_ts(to_ts) if to_ts else None,
+        },
+        "source": "PositionHistory.close_time",
+        "basis": "MEXC-reported closed-position PnL grouped by local date",
+        "complete": False,
+        "unavailable_reason": None,
+        "days": [
+            {"date": date, "pnl": round(pnl, 2)}
+            for date, pnl in sorted(daily.items())
+        ],
+    }
+
+
+async def get_period_pnl(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+    timezone_name: str = "UTC",
+    group_by: str = "week",
+    from_ts: Optional[datetime] = None,
+    to_ts: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Aggregate PositionHistory PnL by day/week/month in a local timezone."""
+    tz = _load_timezone(timezone_name)
+    result = await session.execute(
+        select(PositionHistory)
+        .where(PositionHistory.user_id == user_id, PositionHistory.exchange == exchange)
+        .order_by(PositionHistory.close_time.asc().nullslast())
+    )
+    positions: List[PositionHistory] = list(result.scalars().all())
+
+    buckets: Dict[str, float] = {}
+    for position in positions:
+        if position.close_time is None:
+            continue
+        close_utc = _as_utc(position.close_time)
+        if from_ts is not None and close_utc < _as_utc(from_ts):
+            continue
+        if to_ts is not None and close_utc > _as_utc(to_ts):
+            continue
+        local = close_utc.astimezone(tz)
+        if group_by == "day":
+            key = local.strftime("%Y-%m-%d")
+        elif group_by == "month":
+            key = local.strftime("%Y-%m")
+        elif group_by == "week":
+            iso = local.isocalendar()
+            key = f"{iso.year}-W{iso.week:02d}"
+        else:
+            raise ValueError(f"Unsupported group_by: {group_by}")
+        buckets[key] = buckets.get(key, 0.0) + float(position.pnl or 0.0)
+
+    return {
+        "exchange": exchange,
+        "timezone": timezone_name,
+        "group_by": group_by,
+        "periods": [
+            {"period": period, "pnl": round(pnl, 2)}
+            for period, pnl in sorted(buckets.items())
+        ],
+    }
 
 
 # ── Allocation ─────────────────────────────────────────────────────────────
@@ -288,13 +346,24 @@ async def get_allocation(
     session: AsyncSession,
     user_id: int,
     exchange: str,
-) -> List[Dict[str, Any]]:
-    """Compute current asset allocation from the latest PortfolioBalance rows.
+    account_type: str = "spot",
+) -> Dict[str, Any]:
+    """Compute current asset allocation from PortfolioBalance rows.
 
-    Returns ``[{asset, usd_value, percentage}]`` sorted by USD value descending.
-    Balances with zero or null USD value are excluded. When all ``usd_value``
-    entries are null, an empty list is returned (frontend shows connect prompt).
+    Phase 0 labels the existing balance allocation as spot only. Futures
+    collateral allocation is unavailable until futures account snapshots exist.
     """
+    account_type = account_type.strip().lower()
+    if account_type != "spot":
+        return {
+            "account_type": account_type,
+            "items": [],
+            "source": None,
+            "basis": None,
+            "complete": False,
+            "unavailable_reason": "futures_equity_not_available",
+        }
+
     result = await session.execute(
         select(PortfolioBalance)
         .where(
@@ -304,63 +373,60 @@ async def get_allocation(
     )
     balances: List[PortfolioBalance] = list(result.scalars().all())
 
-    if not balances:
-        return []
+    base_response = {
+        "account_type": "spot",
+        "source": "PortfolioBalance",
+        "basis": "spot_balances_usd",
+    }
 
-    # Check if any usd_value is populated.
+    if not balances:
+        return {**base_response, "items": [], "complete": True, "unavailable_reason": None}
+
     has_usd = any(b.usd_value is not None and b.usd_value > 0 for b in balances)
     if not has_usd:
-        return []
+        return {
+            **base_response,
+            "items": [],
+            "complete": False,
+            "unavailable_reason": "spot_usd_values_missing",
+        }
 
     items: List[Dict[str, Any]] = []
     total_usd = 0.0
-    for b in balances:
-        val = b.usd_value
+    for balance in balances:
+        val = balance.usd_value
         if val is None or val <= 0:
             continue
-        items.append({"asset": b.asset, "usd_value": round(val, 2)})
-        total_usd += val
+        items.append({"asset": balance.asset, "usd_value": round(float(val), 2), "account_type": "spot"})
+        total_usd += float(val)
 
     for item in items:
         item["percentage"] = round((item["usd_value"] / total_usd) * 100, 2) if total_usd > 0 else 0.0
 
-    items.sort(key=lambda x: x["usd_value"], reverse=True)
-    return items
+    items.sort(key=lambda item: item["usd_value"], reverse=True)
+    return {**base_response, "items": items, "complete": True, "unavailable_reason": None}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
 def _iso_ts(ts: datetime) -> str:
-    """Return an ISO-8601 timestamp string (UTC)."""
+    """Return an ISO-8601 timestamp string normalised to UTC."""
+    return _as_utc(ts).isoformat()
+
+
+def _as_utc(ts: datetime) -> datetime:
+    """Treat naive datetimes as UTC and return an aware UTC datetime."""
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.isoformat()
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
 
 
-async def _cumulative_pnl_by_timestamp(
-    session: AsyncSession,
-    user_id: int,
-    exchange: str,
-) -> List[tuple[datetime, float]]:
-    """Return running cumulative PnL at each trade close_time (for equity fallback)."""
-    result = await session.execute(
-        select(PositionHistory.close_time, PositionHistory.pnl)
-        .where(
-            PositionHistory.user_id == user_id,
-            PositionHistory.exchange == exchange,
-        )
-        .order_by(PositionHistory.close_time.asc().nullslast())
-    )
-    rows = result.all()
-    cumulative = 0.0
-    out: List[tuple[datetime, float]] = []
-    for close_time, pnl in rows:
-        if close_time is None:
-            continue
-        cumulative += pnl
-        out.append((close_time, cumulative))
-    return out
+def _load_timezone(timezone_name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"Invalid timezone: {timezone_name}") from exc
 
 
 # ── Journal summary ─────────────────────────────────────────────────────────
@@ -377,26 +443,6 @@ async def get_journal_summary(
     exchange). Each entry's comma-separated ``tags`` field is split into
     individual tags; every tag receives a full attribution for the entry
     (i.e. an entry tagged ``"scalp,swing"`` contributes to both tags).
-
-    Returns::
-
-        {
-          "total_entries": int,
-          "tags": {
-            "scalp": {
-              "trade_count": int,
-              "total_pnl": float,
-              "winning_trades": int,
-              "losing_trades": int,
-              "win_rate": float,   # 0–100
-            },
-            ...
-          }
-        }
-
-    Entries with no tags are grouped under the special key ``"untagged"``.
-    Entries with a ``null`` ``pnl`` are counted toward ``trade_count`` but do
-    not contribute to PnL, win, loss, or win_rate figures.
     """
     stmt = select(TradeJournalEntry).where(TradeJournalEntry.user_id == user_id)
     if exchange:
@@ -407,10 +453,9 @@ async def get_journal_summary(
     tag_stats: Dict[str, Dict[str, Any]] = {}
     total_entries = len(entries)
 
-    for e in entries:
-        # Split the tags string into individual, normalised tag names.
-        if e.tags:
-            tags = [t.strip().lower() for t in e.tags.split(",") if t.strip()]
+    for entry in entries:
+        if entry.tags:
+            tags = [tag.strip().lower() for tag in entry.tags.split(",") if tag.strip()]
         else:
             tags = ["untagged"]
 
@@ -425,16 +470,14 @@ async def get_journal_summary(
                 },
             )
             bucket["trade_count"] += 1
-            if e.pnl is None:
-                # Entries without PnL are counted but excluded from PnL math.
+            if entry.pnl is None:
                 continue
-            bucket["total_pnl"] += e.pnl
-            if e.pnl > 0:
+            bucket["total_pnl"] += entry.pnl
+            if entry.pnl > 0:
                 bucket["winning_trades"] += 1
-            elif e.pnl < 0:
+            elif entry.pnl < 0:
                 bucket["losing_trades"] += 1
 
-    # Round totals and compute win rates (wins / (wins + losses)).
     for bucket in tag_stats.values():
         bucket["total_pnl"] = round(bucket["total_pnl"], 2)
         decisive = bucket["winning_trades"] + bucket["losing_trades"]

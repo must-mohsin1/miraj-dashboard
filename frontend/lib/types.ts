@@ -244,11 +244,19 @@ export interface PerformanceMetrics {
   win_rate: number;
   /** Gross profit / gross loss. `null` when there are zero losing trades (∞). */
   profit_factor: number | null;
-  /** Simplified per-trade Sharpe (mean/std*sqrt(n)). `null` when < 2 trades. */
+  trade_quality_score: number | null;
+  trade_quality_basis: string;
+  realised_pnl_drawdown_usd: number;
+  realised_pnl_drawdown_pct: number | null;
+  drawdown_basis: string;
+  account_equity_drawdown_usd?: number | null;
+  account_equity_drawdown_pct?: number | null;
+  account_equity_drawdown_reason?: string | null;
+  /** Backward-compatible alias of trade_quality_score. */
   sharpe_ratio: number | null;
-  /** Largest peak-to-trough decline in cumulative PnL (USD). */
+  /** Backward-compatible alias of realised_pnl_drawdown_usd. */
   max_drawdown: number;
-  /** Max drawdown as a percentage of the peak. `null` when peak is 0/negative. */
+  /** Backward-compatible alias of realised_pnl_drawdown_pct. */
   max_drawdown_percent: number | null;
   /** Mean PnL of winning trades. */
   average_win: number;
@@ -264,22 +272,34 @@ export interface PerformanceMetrics {
   best_trade: number;
   /** Worst single trade PnL. */
   worst_trade: number;
-  /** Total realised PnL. */
+  /** Dollar sum of MEXC-reported closed-position PnL. */
   total_pnl: number;
-  /** Total realised PnL %. */
-  total_pnl_percent: number;
+  total_pnl_basis: string;
+  total_pnl_percent: number | null;
+  total_pnl_percent_reason: string | null;
+  account_return_pct: number | null;
+  account_return_pct_reason: string | null;
+  source?: string | null;
+  basis?: string | null;
+  complete?: boolean;
+  unavailable_reason?: string | null;
 }
 
 /** A single point on the equity curve. */
 export interface EquityCurvePoint {
   timestamp: string;
   total_value: number;
+  basis?: string | null;
 }
 
 /** Response for `GET /api/v1/analytics/{exchange}/equity-curve`. */
 export interface EquityCurveResponse {
   exchange: string;
   points: EquityCurvePoint[];
+  basis: string | null;
+  source: string | null;
+  complete: boolean;
+  unavailable_reason: string | null;
 }
 
 /** A single day's PnL. */
@@ -292,6 +312,12 @@ export interface DailyPnlPoint {
 export interface DailyPnlResponse {
   exchange: string;
   days: DailyPnlPoint[];
+  timezone: string;
+  period: { from: string | null; to: string | null };
+  source?: string | null;
+  basis?: string | null;
+  complete?: boolean;
+  unavailable_reason?: string | null;
 }
 
 /** A single asset allocation entry. */
@@ -299,12 +325,18 @@ export interface AllocationItem {
   asset: string;
   usd_value: number;
   percentage: number;
+  account_type: "spot" | "futures";
 }
 
 /** Response for `GET /api/v1/analytics/{exchange}/allocation`. */
 export interface AllocationResponse {
   exchange: string;
+  account_type: "spot" | "futures";
   items: AllocationItem[];
+  source?: string | null;
+  basis?: string | null;
+  complete?: boolean;
+  unavailable_reason?: string | null;
 }
 
 // ── Trade attribution (scan linking) ────────────────────────────────────────
@@ -1025,12 +1057,14 @@ export interface RiskMetrics {
   long_exposure_usd: number;
   short_exposure_usd: number;
   avg_liquidation_distance_pct: number | null;
-  margin_usage_pct: number;
+  margin_usage_pct: number | null;
   total_margin_used: number;
   total_balance_usd: number | null;
   open_positions: number;
   /** 0–100 (higher = more risk). */
-  risk_score: number;
+  risk_score: number | null;
+  risk_reason?: string | null;
+  unavailable_reason?: string | null;
 }
 
 
@@ -1047,9 +1081,10 @@ export interface HealthScore {
   /** 0–100. Higher = more concentration risk. */
   concentration_risk: number;
   /** 0–100 weighted average (higher = healthier). */
-  health_score: number;
-  /** Letter grade: A / B / C / D / F. */
-  grade: string;
+  health_score: number | null;
+  /** Letter grade: A / B / C / D / F, or null when not applicable. */
+  grade: string | null;
+  health_reason?: string | null;
   /** Actionable recommendations to improve portfolio health. */
   recommendations: string[];
   open_positions: number;
@@ -1058,11 +1093,12 @@ export interface HealthScore {
 
 // ── Benchmark comparison ────────────────────────────────────────────────────
 
-/** A single day's benchmark + portfolio return data point. */
+/** A single day's benchmark return data point. */
 export interface BenchmarkPoint {
   date: string;
   btc_return_pct: number;
-  portfolio_return_pct: number;
+  /** Null in Phase 0 because closed-position PnL is not account return. */
+  portfolio_return_pct: number | null;
 }
 
 /** Response for `GET /api/v1/analytics/benchmark`. */
@@ -1070,13 +1106,18 @@ export interface BenchmarkResponse {
   symbol: string;
   days: number;
   btc_return_pct: number;
-  portfolio_return_pct: number;
-  /** portfolio_return_pct − btc_return_pct. */
-  alpha: number;
-  /** Beta of portfolio vs BTC (cov / var). Null when insufficient data. */
+  /** Null in Phase 0 because capital history is missing. */
+  portfolio_return_pct: number | null;
+  /** Null until account return exists. */
+  alpha: number | null;
+  /** Null until account return exists. */
   beta: number | null;
-  /** Daily indexed series — both indexed to 0% at start. */
+  /** Daily BTC indexed series; account-return series remains null in Phase 0. */
   points: BenchmarkPoint[];
+  source?: string | null;
+  basis?: string | null;
+  complete?: boolean;
+  unavailable_reason?: string | null;
 }
 
 // ── Pattern Detection ──────────────────────────────────────────────────────
