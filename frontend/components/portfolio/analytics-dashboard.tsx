@@ -224,7 +224,11 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
           ) : loading.equity ? (
             <LoadingState label="Loading equity curve…" />
           ) : (
-            <EquityCurve points={equity?.points ?? []} />
+            <EquityCurve
+              points={equity?.points ?? []}
+              basis={equity?.basis ?? null}
+              unavailableReason={equity?.unavailable_reason ?? null}
+            />
           )}
         </div>
       </TabsContent>
@@ -237,7 +241,7 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
           ) : loading.daily ? (
             <LoadingState label="Loading daily P&L…" />
           ) : (
-            <PnlHeatmap days={daily?.days ?? []} />
+            <PnlHeatmap days={daily?.days ?? []} timezone={daily?.timezone ?? "UTC"} />
           )}
 
           {/* Daily PnL summary table */}
@@ -292,7 +296,7 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
             <LoadingState label="Loading allocation…" />
           ) : allocation && allocation.items.length > 0 ? (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <AllocationPie items={allocation.items} />
+              <AllocationPie accountType={allocation.account_type} items={allocation.items} />
               <AllocationTable items={allocation.items} />
             </div>
           ) : (

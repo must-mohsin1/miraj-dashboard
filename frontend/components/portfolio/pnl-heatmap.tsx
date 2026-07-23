@@ -19,6 +19,7 @@ import type { DailyPnlPoint } from "@/lib/types";
 
 interface PnlHeatmapProps {
   days: DailyPnlPoint[];
+  timezone?: string;
 }
 
 const WEEKS = 12;
@@ -103,7 +104,7 @@ const MONTH_LABELS = [
 
 const DAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""];
 
-export function PnlHeatmap({ days }: PnlHeatmapProps) {
+export function PnlHeatmap({ days, timezone = "UTC" }: PnlHeatmapProps) {
   const maxAbs = useMemo(() => {
     if (days.length === 0) return 0;
     return Math.max(...days.map((d) => Math.abs(d.pnl)), 1);
@@ -142,7 +143,7 @@ export function PnlHeatmap({ days }: PnlHeatmapProps) {
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-sm font-medium text-slate-300">
-          P&amp;L Calendar — Last 12 Weeks
+          P&amp;L Calendar — Last 12 Weeks ({timezone})
         </h3>
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <span>Less</span>

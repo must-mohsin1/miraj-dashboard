@@ -22,6 +22,7 @@ import type { AllocationItem } from "@/lib/types";
 
 interface AllocationPieProps {
   items: AllocationItem[];
+  accountType?: "spot" | "futures";
 }
 
 /** Dark-theme palette for pie slices. */
@@ -71,7 +72,7 @@ function AllocationTooltip({ active, payload }: {
   );
 }
 
-export function AllocationPie({ items }: AllocationPieProps) {
+export function AllocationPie({ items, accountType = "spot" }: AllocationPieProps) {
   const data = useMemo(
     () =>
       items.map((item, i) => ({
@@ -95,8 +96,13 @@ export function AllocationPie({ items }: AllocationPieProps) {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
       <h3 className="mb-3 text-sm font-medium text-slate-300">
-        Asset Allocation
+        {accountType === "spot" ? "Spot Allocation" : "Futures Collateral Allocation"}
       </h3>
+      <div className="mb-3 text-xs text-muted-foreground">
+        {accountType === "spot"
+          ? "Spot holdings only — not futures collateral."
+          : "Futures collateral only."}
+      </div>
       <div className="h-64 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>

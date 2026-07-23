@@ -90,7 +90,19 @@ export function RiskMetricsPanel({ token, exchange }: RiskMetricsPanelProps) {
 
   if (!data) return null;
 
-  const risk = data.risk_score;
+  if (data.risk_reason === "no_open_futures_risk" || data.open_positions === 0) {
+    return (
+      <div className="border border-border bg-card/60 p-4">
+        <h3 className="text-sm font-semibold text-card-foreground">Risk Metrics</h3>
+        <div className="mt-3 text-sm font-medium text-foreground">No open futures risk</div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          Margin usage unavailable — {readableReason(data.unavailable_reason || "futures_equity_not_available")}
+        </div>
+      </div>
+    );
+  }
+
+  const risk = data.risk_score ?? 0;
   const riskColor = risk >= 60 ? "#ef4444" : risk >= 30 ? "#f97316" : "#22c55e";
   const riskLabel = risk >= 60 ? "High" : risk >= 30 ? "Moderate" : "Low";
 
@@ -188,12 +200,12 @@ export function RiskMetricsPanel({ token, exchange }: RiskMetricsPanelProps) {
           />
           <MetricCard
             label="Margin Usage"
-            value={`${data.margin_usage_pct.toFixed(1)}%`}
+            value={data.margin_usage_pct === null ? "—" : `${data.margin_usage_pct.toFixed(1)}%`}
             sublabel={usd(data.total_margin_used)}
             sublabelColor={
-              data.margin_usage_pct > 80
+              (data.margin_usage_pct ?? 0) > 80
                 ? "text-red-400"
-                : data.margin_usage_pct > 50
+                : (data.margin_usage_pct ?? 0) > 50
                   ? "text-amber-400"
                   : "text-slate-400"
             }
@@ -246,6 +258,10 @@ function usd(n: number): string {
   if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
   if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
   return `$${n.toFixed(2)}`;
+}
+
+function readableReason(reason: string): string {
+  return reason.replaceAll("_", " ");
 }
 
 export default RiskMetricsPanel;

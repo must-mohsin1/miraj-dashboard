@@ -8,7 +8,7 @@ GET /api/v1/analytics/{exchange}/daily-pnl      — daily PnL aggregation
 GET /api/v1/analytics/{exchange}/allocation     — current asset allocation
 GET /api/v1/analytics/{exchange}/risk           — real-time risk metrics
 GET /api/v1/analytics/{exchange}/health        — portfolio health score + grade
-GET /api/v1/analytics/benchmark                — BTC benchmark + portfolio cumulative return
+GET /api/v1/analytics/benchmark                — BTC benchmark; account-return comparison unavailable in Phase 0
 
 All endpoints require JWT auth (``Depends(get_current_user)``).
 """
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,7 +28,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.auth import get_current_user
 from backend.database import get_session
 from backend.models import (
-    PortfolioBalance,
     PortfolioPosition,
     PortfolioSnapshot,
     PositionHistory,
@@ -54,13 +54,17 @@ class PerformanceMetricsResponse(BaseModel):
     profit_factor: float | None = Field(
         description="Gross profit / gross loss. None when no losing trades (∞)."
     )
-    sharpe_ratio: float | None = Field(
-        description="Simplified per-trade Sharpe (mean/std*sqrt(n)). None when < 2 trades."
-    )
-    max_drawdown: float = Field(description="Largest peak-to-trough decline (USD)")
-    max_drawdown_percent: float | None = Field(
-        description="Max drawdown as % of peak. None when peak is 0/negative."
-    )
+    trade_quality_score: float | None = Field(None, description="Per-trade PnL dispersion score; not conventional Sharpe.")
+    trade_quality_basis: str = Field(description="Basis for trade_quality_score.")
+    realised_pnl_drawdown_usd: float = Field(description="Drawdown of cumulative closed-position PnL in USD.")
+    realised_pnl_drawdown_pct: float | None = Field(description="Drawdown of cumulative closed-position PnL as % of peak.")
+    drawdown_basis: str = Field(description="Basis for realised drawdown.")
+    account_equity_drawdown_usd: float | None = None
+    account_equity_drawdown_pct: float | None = None
+    account_equity_drawdown_reason: str | None = None
+    sharpe_ratio: float | None = Field(None, description="Backward-compatible alias of trade_quality_score.")
+    max_drawdown: float = Field(description="Backward-compatible alias of realised_pnl_drawdown_usd.")
+    max_drawdown_percent: float | None = Field(description="Backward-compatible alias of realised_pnl_drawdown_pct.")
     average_win: float = Field(description="Mean PnL of winning trades")
     average_loss: float = Field(description="Mean PnL of losing trades")
     total_trades: int = Field(description="Total closed positions")
@@ -68,18 +72,31 @@ class PerformanceMetricsResponse(BaseModel):
     losing_trades: int = Field(description="Count of losing trades")
     best_trade: float = Field(description="Best single trade PnL")
     worst_trade: float = Field(description="Worst single trade PnL")
-    total_pnl: float = Field(description="Total realised PnL")
-    total_pnl_percent: float = Field(description="Total realised PnL %")
+    total_pnl: float = Field(description="Dollar sum of MEXC-reported closed-position PnL")
+    total_pnl_basis: str = Field(description="Basis/source for total_pnl.")
+    total_pnl_percent: float | None = Field(None, description="Unavailable until capital history exists.")
+    total_pnl_percent_reason: str | None = None
+    account_return_pct: float | None = None
+    account_return_pct_reason: str | None = None
+    source: str | None = None
+    basis: str | None = None
+    complete: bool = False
+    unavailable_reason: str | None = None
 
 
 class EquityCurvePoint(BaseModel):
     timestamp: str
     total_value: float
+    basis: str | None = None
 
 
 class EquityCurveResponse(BaseModel):
     exchange: str
     points: List[EquityCurvePoint]
+    basis: str | None = None
+    source: str | None = None
+    complete: bool = False
+    unavailable_reason: str | None = None
 
 
 class DailyPnlPoint(BaseModel):
@@ -90,17 +107,29 @@ class DailyPnlPoint(BaseModel):
 class DailyPnlResponse(BaseModel):
     exchange: str
     days: List[DailyPnlPoint]
+    timezone: str = "UTC"
+    period: Dict[str, str | None] = Field(default_factory=dict)
+    source: str | None = None
+    basis: str | None = None
+    complete: bool = False
+    unavailable_reason: str | None = None
 
 
 class AllocationItem(BaseModel):
     asset: str
     usd_value: float
     percentage: float
+    account_type: str = "spot"
 
 
 class AllocationResponse(BaseModel):
     exchange: str
+    account_type: str = "spot"
     items: List[AllocationItem]
+    source: str | None = None
+    basis: str | None = None
+    complete: bool = False
+    unavailable_reason: str | None = None
 
 
 # ── Risk metrics ─────────────────────────────────────────────────────────
@@ -117,11 +146,13 @@ class RiskMetricsResponse(BaseModel):
     avg_liquidation_distance_pct: Optional[float] = Field(
         None, description="Average % distance from mark price to liquidation price"
     )
-    margin_usage_pct: float = Field(description="Total margin used / total balance (0–100)")
+    margin_usage_pct: Optional[float] = Field(None, description="Total margin used / futures equity (0–100); null when unavailable")
     total_margin_used: float
     total_balance_usd: Optional[float] = None
     open_positions: int
-    risk_score: float = Field(description="0–100, higher = more risk")
+    risk_score: Optional[float] = Field(None, description="0–100, higher = more risk; null when not applicable")
+    risk_reason: Optional[str] = None
+    unavailable_reason: Optional[str] = None
 
 
 # ── Journal analytics ──────────────────────────────────────────────────────
@@ -191,10 +222,11 @@ class HealthScoreResponse(BaseModel):
     concentration_risk: float = Field(
         description="0–100. Higher = more concentration (one asset > 50% of portfolio = high)."
     )
-    health_score: float = Field(
+    health_score: Optional[float] = Field(
         description="0–100 weighted average (lower risk = higher health)."
     )
-    grade: str = Field(description="Letter grade: A / B / C / D / F.")
+    grade: Optional[str] = Field(None, description="Letter grade: A / B / C / D / F, or null when not applicable.")
+    health_reason: Optional[str] = None
     recommendations: List[str] = Field(
         default_factory=list,
         description="Actionable recommendations to improve portfolio health.",
@@ -207,12 +239,13 @@ class HealthScoreResponse(BaseModel):
 
 
 class BenchmarkPoint(BaseModel):
-    """A single day's benchmark + portfolio return data point."""
+    """A single day's benchmark return data point."""
 
     date: str
     btc_return_pct: float = Field(description="BTC cumulative return % from start (indexed).")
-    portfolio_return_pct: float = Field(
-        description="Portfolio cumulative return % from start (indexed)."
+    portfolio_return_pct: Optional[float] = Field(
+        None,
+        description="Unavailable in Phase 0 because closed-position PnL is not account return.",
     )
 
 
@@ -222,18 +255,23 @@ class BenchmarkResponse(BaseModel):
     symbol: str
     days: int
     btc_return_pct: float = Field(description="Total BTC cumulative return % over the period.")
-    portfolio_return_pct: float = Field(
-        description="Total portfolio cumulative return % over the period."
+    portfolio_return_pct: Optional[float] = Field(
+        None,
+        description="Unavailable in Phase 0 because capital history is missing.",
     )
-    alpha: float = Field(description="portfolio_return_pct − btc_return_pct.")
+    alpha: Optional[float] = Field(None, description="Unavailable until account return exists.")
     beta: Optional[float] = Field(
         None,
-        description="Beta of portfolio vs BTC (cov / var). Null when insufficient data.",
+        description="Unavailable until account return exists.",
     )
     points: List[BenchmarkPoint] = Field(
         default_factory=list,
-        description="Daily indexed series — both indexed to 0% at start.",
+        description="Daily BTC indexed series; account-return series remains null in Phase 0.",
     )
+    source: str | None = None
+    basis: str | None = None
+    complete: bool = False
+    unavailable_reason: str | None = None
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -273,8 +311,13 @@ async def get_performance_metrics(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> PerformanceMetricsResponse:
-    """Return win rate, profit factor, Sharpe ratio, max drawdown and other
-    trading metrics computed from closed position history.
+    """Return realised closed-position PnL performance metrics.
+
+    Metrics include win rate, profit factor, MEXC-reported ``total_pnl``,
+    ``trade_quality_score`` from per-trade PnL dispersion, and
+    ``realised_pnl_drawdown_*`` from cumulative closed-position PnL. Account
+    return and account-equity drawdown remain unavailable until complete
+    account equity/capital history exists.
     """
     exchange_slug = _require_supported_exchange(exchange)
     metrics: Dict[str, Any] = await analytics_service.compute_performance_metrics(
@@ -293,19 +336,25 @@ async def get_equity_curve(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> EquityCurveResponse:
-    """Return the portfolio equity curve from snapshot history.
+    """Return account equity curve points from snapshot history.
 
-    Each point is ``{timestamp, total_value}``. When ``total_balance_usd`` is
-    null for all snapshots, the equity is reconstructed from cumulative
-    realised PnL (``total_pnl_usd``).
+    Each point is ``{timestamp, total_value}`` and is emitted only from a
+    snapshot with non-null ``total_balance_usd``. When no account-equity
+    snapshots are available, the response returns ``points=[]`` with
+    ``source=PortfolioSnapshot.total_balance_usd``, ``complete=False``, and
+    ``unavailable_reason=no_account_equity_data``.
     """
     exchange_slug = _require_supported_exchange(exchange)
-    points = await analytics_service.get_equity_curve(
+    curve = await analytics_service.get_equity_curve(
         session, current_user.id, exchange_slug
     )
     return EquityCurveResponse(
         exchange=exchange_slug,
-        points=[EquityCurvePoint(**p) for p in points],
+        points=[EquityCurvePoint(**p) for p in curve["points"]],
+        basis=curve.get("basis"),
+        source=curve.get("source"),
+        complete=curve.get("complete", False),
+        unavailable_reason=curve.get("unavailable_reason"),
     )
 
 
@@ -316,6 +365,9 @@ async def get_equity_curve(
 )
 async def get_daily_pnl(
     exchange: str,
+    timezone_name: str = Query("UTC", alias="timezone"),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to_: Optional[datetime] = Query(None, alias="to"),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> DailyPnlResponse:
@@ -324,12 +376,26 @@ async def get_daily_pnl(
     Each point is ``{date, pnl}`` where date is ``YYYY-MM-DD``.
     """
     exchange_slug = _require_supported_exchange(exchange)
-    days = await analytics_service.get_daily_pnl(
-        session, current_user.id, exchange_slug
-    )
+    try:
+        daily = await analytics_service.get_daily_pnl(
+            session,
+            current_user.id,
+            exchange_slug,
+            timezone_name=timezone_name,
+            from_ts=from_,
+            to_ts=to_,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return DailyPnlResponse(
         exchange=exchange_slug,
-        days=[DailyPnlPoint(**d) for d in days],
+        days=[DailyPnlPoint(**d) for d in daily["days"]],
+        timezone=daily["timezone"],
+        period=daily["period"],
+        source=daily.get("source"),
+        basis=daily.get("basis"),
+        complete=daily.get("complete", False),
+        unavailable_reason=daily.get("unavailable_reason"),
     )
 
 
@@ -340,6 +406,7 @@ async def get_daily_pnl(
 )
 async def get_allocation(
     exchange: str,
+    account_type: str = Query("spot", pattern="^(spot|futures)$"),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> AllocationResponse:
@@ -349,12 +416,17 @@ async def get_allocation(
     when no USD values are populated.
     """
     exchange_slug = _require_supported_exchange(exchange)
-    items = await analytics_service.get_allocation(
-        session, current_user.id, exchange_slug
+    allocation = await analytics_service.get_allocation(
+        session, current_user.id, exchange_slug, account_type=account_type
     )
     return AllocationResponse(
         exchange=exchange_slug,
-        items=[AllocationItem(**i) for i in items],
+        account_type=allocation["account_type"],
+        items=[AllocationItem(**i) for i in allocation["items"]],
+        source=allocation.get("source"),
+        basis=allocation.get("basis"),
+        complete=allocation.get("complete", False),
+        unavailable_reason=allocation.get("unavailable_reason"),
     )
 
 
@@ -384,14 +456,22 @@ async def get_risk_metrics(
     )
     positions = list(result.scalars().all())
 
-    # ── Load balances (for margin-usage denominator) ────────────────
-    bal_result = await session.execute(
-        select(PortfolioBalance).where(
-            PortfolioBalance.user_id == current_user.id,
-            PortfolioBalance.exchange == exchange_slug,
+    if not positions:
+        return RiskMetricsResponse(
+            exchange=exchange_slug,
+            total_exposure_usd=0.0,
+            net_exposure_usd=0.0,
+            long_exposure_usd=0.0,
+            short_exposure_usd=0.0,
+            avg_liquidation_distance_pct=None,
+            margin_usage_pct=None,
+            total_margin_used=0.0,
+            total_balance_usd=None,
+            open_positions=0,
+            risk_score=None,
+            risk_reason="no_open_futures_risk",
+            unavailable_reason="futures_equity_not_available",
         )
-    )
-    balances = list(bal_result.scalars().all())
 
     # ── Compute exposure metrics ────────────────────────────────────
     long_exposure = 0.0
@@ -428,21 +508,10 @@ async def get_risk_metrics(
         sum(liq_distances) / len(liq_distances) if liq_distances else None
     )
 
-    # ── Total balance (USD) ────────────────────────────────────────
-    # Use the sum of balance USD values (stablecoin-heavy portfolios).
+    # Phase 0 has no futures-equity snapshot table. Spot balances must not be
+    # used as the futures-collateral denominator, so margin usage remains null.
     total_balance_usd: Optional[float] = None
-    for b in balances:
-        usd_val = getattr(b, "usd_value", None)
-        if usd_val is not None:
-            if total_balance_usd is None:
-                total_balance_usd = 0.0
-            total_balance_usd += float(usd_val)
-
-    # ── Margin usage percentage ────────────────────────────────────
-    if total_balance_usd and total_balance_usd > 0:
-        margin_usage_pct = min(100.0, (total_margin_used / total_balance_usd) * 100.0)
-    else:
-        margin_usage_pct = 0.0
+    margin_usage_pct: Optional[float] = None
 
     # ── Risk score (0–100) ─────────────────────────────────────────
     risk_score = _compute_risk_score(
@@ -463,13 +532,15 @@ async def get_risk_metrics(
         avg_liquidation_distance_pct=(
             round(avg_liq_distance, 2) if avg_liq_distance is not None else None
         ),
-        margin_usage_pct=round(margin_usage_pct, 2),
+        margin_usage_pct=round(margin_usage_pct, 2) if margin_usage_pct is not None else None,
         total_margin_used=round(total_margin_used, 2),
         total_balance_usd=(
             round(total_balance_usd, 2) if total_balance_usd is not None else None
         ),
         open_positions=len(positions),
         risk_score=round(risk_score, 1),
+        risk_reason=None,
+        unavailable_reason="futures_equity_not_available",
     )
 
 
@@ -477,7 +548,7 @@ def _compute_risk_score(
     total_exposure_usd: float,
     net_exposure_usd: float,
     total_balance_usd: Optional[float],
-    margin_usage_pct: float,
+    margin_usage_pct: Optional[float],
     avg_liq_distance: Optional[float],
     open_positions: int,
 ) -> float:
@@ -503,8 +574,9 @@ def _compute_risk_score(
 
     # 2. Margin usage — 30 points max
     # 0% → 0, 50% → 15, 80% → 24, 100% → 30
-    usage_points = min(30.0, margin_usage_pct * 0.3)
-    score += usage_points
+    if margin_usage_pct is not None:
+        usage_points = min(30.0, margin_usage_pct * 0.3)
+        score += usage_points
 
     # 3. Liquidation proximity — 25 points max
     if avg_liq_distance is not None:
@@ -658,6 +730,43 @@ async def get_health_score(
     """
     exchange_slug = _require_supported_exchange(exchange)
 
+    snapshot_result = await session.execute(
+        select(PortfolioSnapshot)
+        .where(
+            PortfolioSnapshot.user_id == current_user.id,
+            PortfolioSnapshot.exchange == exchange_slug,
+        )
+        .order_by(PortfolioSnapshot.timestamp.desc())
+        .limit(1)
+    )
+    latest_snapshot = snapshot_result.scalar_one_or_none()
+    if latest_snapshot is None:
+        return HealthScoreResponse(
+            exchange=exchange_slug,
+            diversification_score=0.0,
+            correlation_risk=0.0,
+            concentration_risk=0.0,
+            health_score=None,
+            grade=None,
+            health_reason="no_snapshot_data",
+            recommendations=[],
+            open_positions=0,
+            unique_assets=0,
+        )
+    if latest_snapshot.open_positions == 0:
+        return HealthScoreResponse(
+            exchange=exchange_slug,
+            diversification_score=0.0,
+            correlation_risk=0.0,
+            concentration_risk=0.0,
+            health_score=None,
+            grade=None,
+            health_reason="no_open_positions",
+            recommendations=["No open futures risk."],
+            open_positions=0,
+            unique_assets=0,
+        )
+
     # ── Load open positions ─────────────────────────────────────────
     result = await session.execute(
         select(PortfolioPosition).where(
@@ -729,6 +838,7 @@ async def get_health_score(
         concentration_risk=concentration,
         health_score=health,
         grade=grade,
+        health_reason=None,
         recommendations=recommendations,
         open_positions=len(positions),
         unique_assets=num_assets,
@@ -867,7 +977,7 @@ def _fetch_btc_daily_closes(symbol: str, days: int) -> list[tuple[str, float]]:
 @router.get(
     "/benchmark",
     response_model=BenchmarkResponse,
-    summary="Benchmark comparison: BTC vs portfolio cumulative returns",
+    summary="Benchmark comparison: BTC return; account-return comparison unavailable in Phase 0",
 )
 async def get_benchmark(
     symbol: str = Query("BTC-USD", description="yfinance ticker for the benchmark asset"),
@@ -879,17 +989,15 @@ async def get_benchmark(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> BenchmarkResponse:
-    """Fetch a benchmark comparison between BTC buy-and-hold and the portfolio.
+    """Fetch BTC buy-and-hold benchmark data.
 
     * Fetches ``symbol`` (default BTC-USD) daily closes for the last ``days``
       days via yfinance and computes cumulative return % indexed to 0 at start.
-    * Aggregates portfolio PnL from ``PositionHistory`` by close-time date and
-      computes the cumulative return % indexed to 0 at start.
 
-    Returns aligned daily ``[{date, btc_return_pct, portfolio_return_pct}]``
-    points, plus summary statistics: total BTC return, total portfolio return,
-    alpha (portfolio − BTC), and beta (cov / var, or null with insufficient
-    overlapping data).
+    Phase 0 intentionally does not compute account/portfolio return, alpha, or
+    beta from ``PositionHistory`` closed-position PnL. Those fields stay null
+    with ``capital_history_missing`` until complete account equity/cash-flow
+    history exists.
     """
     # ── 1. Fetch BTC daily closes ──────────────────────────────────
     btc_closes = _fetch_btc_daily_closes(symbol, days)
@@ -905,73 +1013,31 @@ async def get_benchmark(
                 ret_pct = 0.0
             btc_series[date_str] = round(ret_pct, 4)
 
-    # ── 2. Portfolio daily PnL aggregation ──────────────────────────
-    exchange_slug = exchange.strip().lower()
-    port_daily = await analytics_service.get_daily_pnl(
-        session, current_user.id, exchange_slug
-    )
-    # port_daily is [{date, pnl}] sorted ascending.
-    # Index the portfolio return to 0% at the first available date.
-    port_series: dict[str, float] = {}
-    port_pnl_by_date: dict[str, float] = {d["date"]: d["pnl"] for d in port_daily}
-    # Express the cumulative PnL as a percentage of the total absolute
-    # cumulative PnL (or 1.0 to avoid division by zero) so the curve shape
-    # is meaningful relative to the first observation.
-    date_order = sorted(port_pnl_by_date.keys())
-    running = 0.0
-    for d in date_order:
-        running += port_pnl_by_date[d]
-    total_abs = abs(running) if running != 0 else 1.0
-    running = 0.0
-    for d in date_order:
-        running += port_pnl_by_date[d]
-        port_series[d] = round((running / total_abs) * 100.0, 4) if total_abs > 0 else 0.0
-
-    # ── 3. Merge into aligned daily points ───────────────────────────
-    all_dates = sorted(set(btc_series.keys()) | set(port_series.keys()))
+    # ── 2. Return BTC points only; account-return comparison is unavailable.
+    all_dates = sorted(btc_series.keys())
     points: list[BenchmarkPoint] = []
-    last_btc = 0.0
-    last_port: float = 0.0
     for d in all_dates:
-        if d in btc_series:
-            last_btc = btc_series[d]
-        if d in port_series:
-            last_port = port_series[d]
         points.append(
             BenchmarkPoint(
                 date=d,
-                btc_return_pct=round(last_btc, 4),
-                portfolio_return_pct=round(last_port, 4),
+                btc_return_pct=round(btc_series[d], 4),
+                portfolio_return_pct=None,
             )
         )
 
-    # ── 4. Summary stats: total returns, alpha, beta ────────────────
+    # ── 3. Summary stats: BTC only; account-return fields remain unavailable.
     btc_total = btc_series.get(all_dates[-1], 0.0) if all_dates else 0.0
-    # Use the last forward-filled point for portfolio total (not raw port_series dict,
-    # which only has dates with position closures).
-    port_total = points[-1].portfolio_return_pct if points else 0.0
-    alpha = round(port_total - btc_total, 4)
-
-    # Beta: cov(port, btc) / var(btc) over overlapping dates.
-    beta: Optional[float] = None
-    overlap = [d for d in all_dates if d in btc_series and d in port_series]
-    if len(overlap) >= 2:
-        btc_vals = [btc_series[d] for d in overlap]
-        port_vals = [port_series[d] for d in overlap]
-        n = len(overlap)
-        mean_btc = sum(btc_vals) / n
-        mean_port = sum(port_vals) / n
-        cov = sum((b - mean_btc) * (p - mean_port) for b, p in zip(btc_vals, port_vals)) / n
-        var_btc = sum((b - mean_btc) ** 2 for b in btc_vals) / n
-        if var_btc > 0:
-            beta = round(cov / var_btc, 4)
 
     return BenchmarkResponse(
         symbol=symbol,
         days=days,
         btc_return_pct=round(btc_total, 4),
-        portfolio_return_pct=round(port_total, 4),
-        alpha=alpha,
-        beta=beta,
+        portfolio_return_pct=None,
+        alpha=None,
+        beta=None,
         points=points,
+        source="PortfolioSnapshot.total_balance_usd",
+        basis=None,
+        complete=False,
+        unavailable_reason="capital_history_missing",
     )

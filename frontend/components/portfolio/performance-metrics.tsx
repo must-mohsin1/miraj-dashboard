@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import {
   TrendingUp,
   TrendingDown,
@@ -13,17 +14,6 @@ import {
 
 import { cn } from "@/lib/utils";
 import type { PerformanceMetrics } from "@/lib/types";
-
-/**
- * PerformanceMetrics — Client Component.
- *
- * Renders a grid of stat cards summarising trading performance:
- * Win Rate (with progress bar), Profit Factor, Sharpe Ratio, Max Drawdown,
- * Total Trades, Avg Win, Avg Loss, Best/Worst Trade.
- *
- * Positive values are highlighted in emerald, negative in red, matching the
- * dark-theme palette used throughout the portfolio dashboard.
- */
 
 interface PerformanceMetricsProps {
   metrics: PerformanceMetrics | null;
@@ -40,11 +30,13 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
   }
 
   const pnlPositive = metrics.total_pnl >= 0;
-  const ddNegative = metrics.max_drawdown > 0; // drawdown is a positive number meaning a decline
+  const realisedDrawdown = metrics.realised_pnl_drawdown_usd ?? metrics.max_drawdown;
+  const realisedDrawdownPct = metrics.realised_pnl_drawdown_pct ?? metrics.max_drawdown_percent;
+  const tradeQuality = metrics.trade_quality_score ?? metrics.sharpe_ratio;
+  const ddNegative = realisedDrawdown > 0;
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-      {/* Win Rate — with progress bar */}
       <StatCard
         label="Win Rate"
         value={`${metrics.win_rate.toFixed(1)}%`}
@@ -64,7 +56,6 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
         }
       />
 
-      {/* Profit Factor */}
       <StatCard
         label="Profit Factor"
         value={
@@ -78,34 +69,27 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
         hint="Gross profit / loss"
       />
 
-      {/* Sharpe Ratio */}
       <StatCard
-        label="Sharpe Ratio"
-        value={
-          metrics.sharpe_ratio === null
-            ? "—"
-            : metrics.sharpe_ratio.toFixed(2)
-        }
+        label="Trade Quality Score"
+        value={tradeQuality === null ? "—" : tradeQuality.toFixed(2)}
         icon={<Activity className="h-4 w-4" />}
-        positive={(metrics.sharpe_ratio ?? 0) > 0}
-        negative={(metrics.sharpe_ratio ?? 0) < 0}
-        hint="Risk-adjusted"
+        positive={(tradeQuality ?? 0) > 0}
+        negative={(tradeQuality ?? 0) < 0}
+        hint="Per-trade PnL dispersion"
       />
 
-      {/* Max Drawdown */}
       <StatCard
-        label="Max Drawdown"
-        value={`-$${metrics.max_drawdown.toFixed(2)}`}
+        label="Realised-PnL Drawdown"
+        value={`-$${realisedDrawdown.toFixed(2)}`}
         icon={<AlertTriangle className="h-4 w-4" />}
-        negative={ddNegative && metrics.max_drawdown > 0}
+        negative={ddNegative}
         hint={
-          metrics.max_drawdown_percent !== null
-            ? `${metrics.max_drawdown_percent.toFixed(1)}% of peak`
-            : undefined
+          realisedDrawdownPct !== null
+            ? `${realisedDrawdownPct.toFixed(1)}% of peak — Cumulative closed PnL`
+            : "Cumulative closed PnL"
         }
       />
 
-      {/* Total Trades */}
       <StatCard
         label="Total Trades"
         value={String(metrics.total_trades)}
@@ -113,7 +97,6 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
         hint={`${metrics.winning_trades}W / ${metrics.losing_trades}L`}
       />
 
-      {/* Avg Win */}
       <StatCard
         label="Avg Win"
         value={`+$${metrics.average_win.toFixed(2)}`}
@@ -121,7 +104,6 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
         positive={metrics.average_win > 0}
       />
 
-      {/* Avg Loss */}
       <StatCard
         label="Avg Loss"
         value={
@@ -133,7 +115,6 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
         negative={metrics.average_loss < 0}
       />
 
-      {/* Best Trade */}
       <StatCard
         label="Best Trade"
         value={`+$${metrics.best_trade.toFixed(2)}`}
@@ -141,7 +122,6 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
         positive={metrics.best_trade > 0}
       />
 
-      {/* Worst Trade */}
       <StatCard
         label="Worst Trade"
         value={
@@ -153,14 +133,18 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
         negative={metrics.worst_trade < 0}
       />
 
-      {/* Total PnL — spans 2 cols on small screens */}
       <StatCard
-        label="Total PnL"
+        label="Realised PnL"
         value={`${pnlPositive ? "+" : ""}$${metrics.total_pnl.toFixed(2)}`}
         icon={<Scale className="h-4 w-4" />}
         positive={pnlPositive}
         negative={!pnlPositive}
-        hint={`${metrics.total_pnl_percent >= 0 ? "+" : ""}${metrics.total_pnl_percent.toFixed(2)}%`}
+        hint={
+          <>
+            <span>{metrics.total_pnl_basis || "MEXC-reported closed-position PnL"}</span>
+            <span>Account return unavailable — {readableReason(metrics.account_return_pct_reason || metrics.total_pnl_percent_reason)}</span>
+          </>
+        }
         className="col-span-2 sm:col-span-1 lg:col-span-1"
       />
     </div>
@@ -170,11 +154,11 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
 interface StatCardProps {
   label: string;
   value: string;
-  icon?: React.ReactNode;
+  icon?: ReactNode;
   positive?: boolean;
   negative?: boolean;
-  hint?: string;
-  footer?: React.ReactNode;
+  hint?: ReactNode;
+  footer?: ReactNode;
   className?: string;
 }
 
@@ -209,11 +193,16 @@ function StatCard({
         {value}
       </div>
       {hint && (
-        <div className="mt-0.5 text-xs text-slate-500">{hint}</div>
+        <div className="mt-0.5 flex flex-col gap-0.5 text-xs text-muted-foreground">{hint}</div>
       )}
       {footer}
     </div>
   );
+}
+
+function readableReason(reason?: string | null): string {
+  if (!reason) return "reason unavailable";
+  return reason.replaceAll("_", " ");
 }
 
 export default PerformanceMetrics;
