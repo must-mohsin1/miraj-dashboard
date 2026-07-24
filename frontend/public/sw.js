@@ -13,7 +13,7 @@
  *    immediately and updates the cache in the background.
  */
 
-const CACHE_NAME = "miraj-dashboard-v2";
+const CACHE_NAME = "miraj-dashboard-v3";
 const APP_SHELL = [
   "/",
   "/manifest.json",
