@@ -125,10 +125,20 @@ export function ExchangeSelector({ value }: ExchangeSelectorProps) {
   const [exchanges, setExchanges] = useState<string[]>([...FALLBACK_EXCHANGES]);
   const [statuses, setStatuses] = useState<Record<string, ConnStatus>>({});
 
-  // Fetch the list of supported exchanges from the backend on mount.
+  // Fetch the list of supported exchanges once a client auth token is available.
+  // The backend requires JWT auth for this route; waiting for the token prevents
+  // an otherwise-successful authenticated /portfolio load from emitting a 401
+  // resource error while the selector falls back to the static list.
   useEffect(() => {
+    if (!token) return;
+
     let cancelled = false;
-    fetch("/api/v1/portfolio/exchanges")
+    const ctrl = new AbortController();
+
+    fetch("/api/v1/portfolio/exchanges", {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: ctrl.signal,
+    })
       .then((res) => (res.ok ? res.json() : null))
       .then((data: ExchangesResponse | null) => {
         if (!cancelled && data?.exchanges?.length) {
@@ -148,8 +158,9 @@ export function ExchangeSelector({ value }: ExchangeSelectorProps) {
       });
     return () => {
       cancelled = true;
+      ctrl.abort();
     };
-  }, []);
+  }, [token]);
 
   // Check connection status for each exchange once we have a token.
   // Re-runs whenever the token or the exchange list changes.

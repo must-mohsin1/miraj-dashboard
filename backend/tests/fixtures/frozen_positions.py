@@ -9,6 +9,7 @@ MEXC's reported ``closeProfitLoss`` field and ``pnl_percent`` mirrors
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 _BASE_CLOSE = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
@@ -38,3 +39,22 @@ FROZEN_POSITIONS: list[dict[str, Any]] = [
 FROZEN_REPORTED_TOTAL_PNL = 49.23
 FROZEN_WIN_COUNT = 48
 FROZEN_LOSS_COUNT = 1
+
+
+def expected_closed_position_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute fixture expectations at runtime without hard-coded derived constants."""
+    pnls = [Decimal(str(row["closeProfitLoss"])) for row in rows]
+    winning = [pnl for pnl in pnls if pnl > 0]
+    losing = [pnl for pnl in pnls if pnl < 0]
+    breakeven = [pnl for pnl in pnls if pnl == 0]
+    total = sum(pnls, Decimal("0"))
+    return {
+        "total_trades": len(pnls),
+        "winning_trades": len(winning),
+        "losing_trades": len(losing),
+        "breakeven_trades": len(breakeven),
+        "total_pnl": total,
+        "average_win": sum(winning, Decimal("0")) / Decimal(len(winning)) if winning else None,
+        "average_loss": sum(losing, Decimal("0")) / Decimal(len(losing)) if losing else None,
+        "expectancy_per_trade": total / Decimal(len(pnls)) if pnls else None,
+    }

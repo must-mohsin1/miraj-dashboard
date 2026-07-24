@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 import logging
+import os
 
 from fastapi import Depends, FastAPI
 
@@ -45,6 +46,11 @@ from backend.routes import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an environment flag is explicitly enabled."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @asynccontextmanager
@@ -128,19 +134,24 @@ async def lifespan(app: FastAPI):
         )
 
     # ── Start APScheduler ────────────────────────────────────────────
-    from backend.scheduler import setup_scheduler, start_scheduler
+    scheduler_enabled = not _env_flag_enabled("MIRAJ_DISABLE_APSCHEDULER")
+    if scheduler_enabled:
+        from backend.scheduler import setup_scheduler
 
-    setup_scheduler(app)
-    # Start the scheduler as a background task so FastAPI startup isn't
-    # blocked and the scheduler runs for the lifetime of the app.
-    asyncio.create_task(_start_scheduler_task())
+        setup_scheduler(app)
+        # Start the scheduler as a background task so FastAPI startup isn't
+        # blocked and the scheduler runs for the lifetime of the app.
+        asyncio.create_task(_start_scheduler_task())
+    else:
+        logger.warning("APScheduler disabled by MIRAJ_DISABLE_APSCHEDULER")
 
     yield
 
     # ── Stop APScheduler ─────────────────────────────────────────────
-    from backend.scheduler import stop_scheduler
+    if scheduler_enabled:
+        from backend.scheduler import stop_scheduler
 
-    stop_scheduler()
+        stop_scheduler()
 
 
 async def _start_scheduler_task() -> None:

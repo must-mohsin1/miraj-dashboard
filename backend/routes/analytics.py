@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -298,7 +298,285 @@ def _require_supported_exchange(exchange: str) -> str:
     return exchange_slug
 
 
+def _phase1_closed_position_filters(
+    *,
+    from_: Optional[datetime],
+    to_: Optional[datetime],
+    symbols: Optional[str],
+    side: Optional[str],
+    leverage_min: Optional[float],
+    leverage_max: Optional[float],
+    duration_min_minutes: Optional[float],
+    duration_max_minutes: Optional[float],
+    close_reason: Optional[str],
+    pnl_min: Optional[float],
+    pnl_max: Optional[float],
+) -> Dict[str, Any]:
+    """Collect the shared Phase 1 filter contract from route query params."""
+    filters: Dict[str, Any] = {}
+    for key, value in {
+        "from": from_,
+        "to": to_,
+        "symbols": symbols,
+        "side": side,
+        "leverage_min": leverage_min,
+        "leverage_max": leverage_max,
+        "duration_min_minutes": duration_min_minutes,
+        "duration_max_minutes": duration_max_minutes,
+        "close_reason": close_reason,
+        "pnl_min": pnl_min,
+        "pnl_max": pnl_max,
+    }.items():
+        if value is None:
+            continue
+        if isinstance(value, str) and value.strip() == "":
+            continue
+        filters[key] = value
+    return filters
+
+
+async def _closed_position_payload(
+    *,
+    exchange: str,
+    current_user: User,
+    session: AsyncSession,
+    timezone_name: str,
+    period: str,
+    limit: int,
+    offset: int,
+    sort: str,
+    filters: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build the shared cache-only Phase 1 closed-position analytics payload."""
+    exchange_slug = _require_supported_exchange(exchange)
+    try:
+        return await analytics_service.compute_closed_position_analytics(
+            session,
+            cast(int, current_user.id),
+            exchange_slug,
+            filters=filters,
+            pagination={"limit": limit, "offset": offset},
+            sort=sort,
+            timezone_name=timezone_name,
+            period=period,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/{exchange}/closed-position-analytics",
+    summary="Phase 1 closed-position analytics overview, periods, breakdowns, calendar, and explorer",
+)
+async def get_closed_position_analytics(
+    exchange: str,
+    timezone_name: str = Query("UTC", alias="timezone"),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to_: Optional[datetime] = Query(None, alias="to"),
+    symbols: Optional[str] = Query(None),
+    side: Optional[str] = Query(None, pattern="^(long|short|buy|sell)$"),
+    leverage_min: Optional[float] = Query(None),
+    leverage_max: Optional[float] = Query(None),
+    duration_min_minutes: Optional[float] = Query(None),
+    duration_max_minutes: Optional[float] = Query(None),
+    close_reason: Optional[str] = Query(None),
+    pnl_min: Optional[float] = Query(None),
+    pnl_max: Optional[float] = Query(None),
+    period: str = Query("week", pattern="^(day|week|month)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    sort: str = Query("-close_time", pattern="^-?(close_time|pnl|symbol|side|leverage|duration_minutes)$"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Dict[str, Any]:
+    """Return cache-only closed-position analytics using one shared filter contract."""
+    filters = _phase1_closed_position_filters(
+        from_=from_,
+        to_=to_,
+        symbols=symbols,
+        side=side,
+        leverage_min=leverage_min,
+        leverage_max=leverage_max,
+        duration_min_minutes=duration_min_minutes,
+        duration_max_minutes=duration_max_minutes,
+        close_reason=close_reason,
+        pnl_min=pnl_min,
+        pnl_max=pnl_max,
+    )
+    return await _closed_position_payload(
+        exchange=exchange,
+        current_user=current_user,
+        session=session,
+        timezone_name=timezone_name,
+        period=period,
+        limit=limit,
+        offset=offset,
+        sort=sort,
+        filters=filters,
+    )
+
+
+@router.get(
+    "/{exchange}/closed-position-periods",
+    summary="Phase 1 closed-position period totals",
+)
+async def get_closed_position_periods(
+    exchange: str,
+    timezone_name: str = Query("UTC", alias="timezone"),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to_: Optional[datetime] = Query(None, alias="to"),
+    symbols: Optional[str] = Query(None),
+    side: Optional[str] = Query(None, pattern="^(long|short|buy|sell)$"),
+    leverage_min: Optional[float] = Query(None),
+    leverage_max: Optional[float] = Query(None),
+    duration_min_minutes: Optional[float] = Query(None),
+    duration_max_minutes: Optional[float] = Query(None),
+    close_reason: Optional[str] = Query(None),
+    pnl_min: Optional[float] = Query(None),
+    pnl_max: Optional[float] = Query(None),
+    period: str = Query("week", pattern="^(day|week|month)$"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Dict[str, Any]:
+    """Return chart-focused closed-position period buckets."""
+    payload = await _closed_position_payload(
+        exchange=exchange,
+        current_user=current_user,
+        session=session,
+        timezone_name=timezone_name,
+        period=period,
+        limit=50,
+        offset=0,
+        sort="-close_time",
+        filters=_phase1_closed_position_filters(
+            from_=from_,
+            to_=to_,
+            symbols=symbols,
+            side=side,
+            leverage_min=leverage_min,
+            leverage_max=leverage_max,
+            duration_min_minutes=duration_min_minutes,
+            duration_max_minutes=duration_max_minutes,
+            close_reason=close_reason,
+            pnl_min=pnl_min,
+            pnl_max=pnl_max,
+        ),
+    )
+    return payload["periods"]
+
+
+@router.get(
+    "/{exchange}/closed-position-breakdowns",
+    summary="Phase 1 closed-position breakdown rows",
+)
+async def get_closed_position_breakdowns(
+    exchange: str,
+    timezone_name: str = Query("UTC", alias="timezone"),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to_: Optional[datetime] = Query(None, alias="to"),
+    symbols: Optional[str] = Query(None),
+    side: Optional[str] = Query(None, pattern="^(long|short|buy|sell)$"),
+    leverage_min: Optional[float] = Query(None),
+    leverage_max: Optional[float] = Query(None),
+    duration_min_minutes: Optional[float] = Query(None),
+    duration_max_minutes: Optional[float] = Query(None),
+    close_reason: Optional[str] = Query(None),
+    pnl_min: Optional[float] = Query(None),
+    pnl_max: Optional[float] = Query(None),
+    period: str = Query("week", pattern="^(day|week|month)$"),
+    group_by: str = Query("symbol", pattern="^(symbol|side|duration|leverage|pair_direction)$"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Dict[str, Any]:
+    """Return one focused closed-position breakdown while preserving shared metadata."""
+    payload = await _closed_position_payload(
+        exchange=exchange,
+        current_user=current_user,
+        session=session,
+        timezone_name=timezone_name,
+        period=period,
+        limit=50,
+        offset=0,
+        sort="-close_time",
+        filters=_phase1_closed_position_filters(
+            from_=from_,
+            to_=to_,
+            symbols=symbols,
+            side=side,
+            leverage_min=leverage_min,
+            leverage_max=leverage_max,
+            duration_min_minutes=duration_min_minutes,
+            duration_max_minutes=duration_max_minutes,
+            close_reason=close_reason,
+            pnl_min=pnl_min,
+            pnl_max=pnl_max,
+        ),
+    )
+    return {
+        "exchange": payload["exchange"],
+        "filters_applied": payload["filters_applied"],
+        "basis": payload["basis"],
+        "history": payload["history"],
+        "excluded_reasons": payload["excluded_reasons"],
+        "group_by": group_by,
+        "items": payload["breakdowns"][group_by],
+        "concentration": payload["concentration"],
+    }
+
+
+@router.get(
+    "/{exchange}/trade-explorer",
+    summary="Phase 1 server-paginated closed-position Trade Explorer",
+)
+async def get_trade_explorer(
+    exchange: str,
+    timezone_name: str = Query("UTC", alias="timezone"),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to_: Optional[datetime] = Query(None, alias="to"),
+    symbols: Optional[str] = Query(None),
+    side: Optional[str] = Query(None, pattern="^(long|short|buy|sell)$"),
+    leverage_min: Optional[float] = Query(None),
+    leverage_max: Optional[float] = Query(None),
+    duration_min_minutes: Optional[float] = Query(None),
+    duration_max_minutes: Optional[float] = Query(None),
+    close_reason: Optional[str] = Query(None),
+    pnl_min: Optional[float] = Query(None),
+    pnl_max: Optional[float] = Query(None),
+    period: str = Query("week", pattern="^(day|week|month)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    sort: str = Query("-close_time", pattern="^-?(close_time|pnl|symbol|side|leverage|duration_minutes)$"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Dict[str, Any]:
+    """Return server-paginated closed positions using the shared Phase 1 filters."""
+    payload = await _closed_position_payload(
+        exchange=exchange,
+        current_user=current_user,
+        session=session,
+        timezone_name=timezone_name,
+        period=period,
+        limit=limit,
+        offset=offset,
+        sort=sort,
+        filters=_phase1_closed_position_filters(
+            from_=from_,
+            to_=to_,
+            symbols=symbols,
+            side=side,
+            leverage_min=leverage_min,
+            leverage_max=leverage_max,
+            duration_min_minutes=duration_min_minutes,
+            duration_max_minutes=duration_max_minutes,
+            close_reason=close_reason,
+            pnl_min=pnl_min,
+            pnl_max=pnl_max,
+        ),
+    )
+    return payload["explorer"]
 
 
 @router.get(
