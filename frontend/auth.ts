@@ -1,6 +1,8 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 
+import { resolveAuthRedirectUrl } from "@/lib/auth-redirect";
+
 const apiUrl =
   process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
@@ -105,6 +107,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   callbacks: {
+    async redirect({ url, baseUrl }) {
+      return resolveAuthRedirectUrl({ url, baseUrl });
+    },
     async jwt({ token, user }) {
       if (user) {
         token.accessToken = user.accessToken;

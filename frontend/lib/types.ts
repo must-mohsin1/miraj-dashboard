@@ -339,6 +339,183 @@ export interface AllocationResponse {
   unavailable_reason?: string | null;
 }
 
+// ── Closed-position analytics (Portfolio Intelligence Phase 1) ─────────────
+
+export interface ClosedPositionBasis {
+  pnl_source: string;
+  pnl_basis: string;
+  currency_unit: "USDT" | string;
+  fee_status: string;
+  size_unit?: string | null;
+}
+
+export interface ClosedPositionHistory {
+  history_scope: "stored_closed_positions" | string;
+  history_completeness: "unknown" | string;
+  reason: string;
+  row_count: number;
+  first_close_time?: string | null;
+  last_close_time?: string | null;
+}
+
+export interface ClosedPositionUnavailableMetric {
+  value: null;
+  reason: string;
+}
+
+export interface ClosedPositionOverview {
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  breakeven_trades: number;
+  total_pnl: number | null;
+  gross_profit?: number | null;
+  gross_loss_abs?: number | null;
+  win_rate_pct?: number | null;
+  win_rate_pct_reason?: string | null;
+  loss_rate_pct?: number | null;
+  loss_rate_pct_reason?: string | null;
+  breakeven_rate_pct?: number | null;
+  breakeven_rate_pct_reason?: string | null;
+  average_win?: number | null;
+  average_win_reason?: string | null;
+  average_loss?: number | null;
+  average_loss_reason?: string | null;
+  average_trade_pnl?: number | null;
+  average_trade_pnl_reason?: string | null;
+  expectancy_per_trade?: number | null;
+  expectancy_per_trade_reason?: string | null;
+  profit_factor?: number | null;
+  profit_factor_reason?: string | null;
+  payoff_ratio?: number | null;
+  payoff_ratio_reason?: string | null;
+  best_trade?: number | null;
+  best_trade_reason?: string | null;
+  worst_trade?: number | null;
+  worst_trade_reason?: string | null;
+  active_days?: number | null;
+  calendar_days?: number | null;
+  average_pnl_per_active_day?: number | null;
+  average_pnl_per_active_day_label?: string | null;
+  average_pnl_per_active_day_reason?: string | null;
+  average_pnl_per_calendar_day?: number | null;
+  average_pnl_per_calendar_day_label?: string | null;
+  average_pnl_per_calendar_day_reason?: string | null;
+  max_win_streak?: number;
+  max_loss_streak?: number;
+  current_streak?: { type: string; length: number } | null;
+  current_streak_reason?: string | null;
+}
+
+export interface ClosedPositionPeriodItem {
+  label: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  trade_count: number;
+  total_pnl: number | null;
+  basis?: string | null;
+  currency_unit?: string | null;
+}
+
+export interface ClosedPositionPeriodsResponse {
+  exchange: string;
+  filters_applied: Record<string, unknown>;
+  basis: ClosedPositionBasis;
+  history: ClosedPositionHistory;
+  excluded_reasons: Record<string, number>;
+  period: "day" | "week" | "month" | string;
+  items: ClosedPositionPeriodItem[];
+  totals: { trade_count: number; total_pnl: number | null };
+}
+
+export interface ClosedPositionCalendarDay {
+  date: string;
+  trade_count: number;
+  total_pnl: number | null;
+  basis?: string | null;
+  currency_unit?: string | null;
+}
+
+export interface ClosedPositionBreakdownRow {
+  key: string;
+  trade_count: number;
+  total_pnl: number | null;
+  gross_profit: number | null;
+  gross_loss_abs: number | null;
+  win_rate_pct: number | null;
+  average_pnl: number | null;
+  best_trade: number | null;
+  worst_trade: number | null;
+  basis?: string | null;
+  currency_unit?: string | null;
+}
+
+export interface ClosedPositionConcentration {
+  gross_profit_top_1_contribution_pct?: number | null;
+  gross_profit_top_1_contribution_pct_reason?: string | null;
+  gross_profit_hhi?: number | null;
+  gross_profit_hhi_reason?: string | null;
+  gross_loss_top_1_contribution_pct?: number | null;
+  gross_loss_top_1_contribution_pct_reason?: string | null;
+  gross_loss_hhi?: number | null;
+  gross_loss_hhi_reason?: string | null;
+}
+
+export interface ClosedPositionTradeExplorerItem {
+  id: number | string;
+  symbol: string;
+  side: string | null;
+  size: number | null;
+  size_unit?: string | null;
+  contract_size?: number | null;
+  entry_price?: number | null;
+  exit_price?: number | null;
+  pnl: number | null;
+  pnl_basis?: string | null;
+  currency_unit?: string | null;
+  fee_status?: string | null;
+  pnl_percent?: number | null;
+  leverage?: number | null;
+  open_time?: string | null;
+  close_time?: string | null;
+  duration_minutes?: number | null;
+  close_reason?: string | null;
+  unavailable_reasons?: string[] | Record<string, string | number | boolean | null> | null;
+}
+
+export interface ClosedPositionTradeExplorerResponse {
+  exchange?: string | null;
+  filters_applied?: Record<string, unknown> | null;
+  sort: string;
+  limit: number;
+  offset: number;
+  total: number;
+  has_more: boolean;
+  basis?: ClosedPositionBasis | null;
+  history?: ClosedPositionHistory | null;
+  excluded_reasons?: Record<string, number> | null;
+  items: ClosedPositionTradeExplorerItem[];
+}
+
+export interface ClosedPositionAnalyticsResponse {
+  exchange: string;
+  filters_applied: Record<string, unknown>;
+  basis: ClosedPositionBasis;
+  history: ClosedPositionHistory;
+  excluded_reasons: Record<string, number>;
+  overview: ClosedPositionOverview;
+  periods: ClosedPositionPeriodsResponse;
+  calendar_days: ClosedPositionCalendarDay[];
+  concentration: ClosedPositionConcentration;
+  breakdowns: Partial<Record<"symbol" | "side" | "duration" | "leverage" | "pair_direction", ClosedPositionBreakdownRow[]>>;
+  explorer: ClosedPositionTradeExplorerResponse;
+  unavailable: {
+    fee_net_pnl?: ClosedPositionUnavailableMetric | null;
+    account_return_pct?: ClosedPositionUnavailableMetric | null;
+    account_equity?: ClosedPositionUnavailableMetric | null;
+  };
+}
+
 // ── Trade attribution (scan linking) ────────────────────────────────────────
 
 /** A single closed position linked to the scan that preceded its entry.

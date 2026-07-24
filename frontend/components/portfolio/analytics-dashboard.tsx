@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import {
@@ -25,7 +25,19 @@ import { TradeAttributionTable } from "@/components/portfolio/trade-attribution-
 import { ScanAccuracyChart } from "@/components/portfolio/scan-accuracy-chart";
 import { HealthScorePanel } from "@/components/portfolio/health-score-panel";
 import { BenchmarkComparison } from "@/components/portfolio/benchmark-comparison";
+import { ClosedPositionBreakdowns } from "@/components/portfolio/closed-position-breakdowns";
+import { ClosedPositionCalendar } from "@/components/portfolio/closed-position-calendar";
+import {
+  ClosedPositionFilters,
+  DEFAULT_CLOSED_POSITION_FILTERS,
+  type ClosedPositionFiltersValue,
+} from "@/components/portfolio/closed-position-filters";
+import { ClosedPositionBasisNote } from "@/components/portfolio/closed-position-basis-note";
+import { ClosedPositionOverview } from "@/components/portfolio/closed-position-overview";
+import { ClosedPositionPeriodChart } from "@/components/portfolio/closed-position-period-chart";
+import { TradeExplorer } from "@/components/portfolio/trade-explorer";
 import type {
+  ClosedPositionAnalyticsResponse,
   PerformanceMetrics as PerformanceMetricsType,
   EquityCurveResponse,
   DailyPnlResponse,
@@ -59,6 +71,7 @@ type LoadingState = {
   equity: boolean;
   daily: boolean;
   allocation: boolean;
+  closed: boolean;
 };
 
 type ErrorState = {
@@ -66,6 +79,7 @@ type ErrorState = {
   equity: string | null;
   daily: string | null;
   allocation: string | null;
+  closed: string | null;
 };
 
 export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps) {
@@ -73,22 +87,31 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
   const [equity, setEquity] = useState<EquityCurveResponse | null>(null);
   const [daily, setDaily] = useState<DailyPnlResponse | null>(null);
   const [allocation, setAllocation] = useState<AllocationResponse | null>(null);
+  const [closedAnalytics, setClosedAnalytics] = useState<ClosedPositionAnalyticsResponse | null>(null);
+  const [closedFilters, setClosedFilters] = useState<ClosedPositionFiltersValue>(DEFAULT_CLOSED_POSITION_FILTERS);
 
   const [loading, setLoading] = useState<LoadingState>({
     performance: true,
     equity: true,
     daily: true,
     allocation: true,
+    closed: true,
   });
   const [errors, setErrors] = useState<ErrorState>({
     performance: null,
     equity: null,
     daily: null,
     allocation: null,
+    closed: null,
   });
 
   const headers: HeadersInit = {};
   if (token) headers.Authorization = `Bearer ${token}`;
+
+  const closedPositionQuery = useMemo(
+    () => buildClosedPositionQuery(closedFilters),
+    [closedFilters],
+  );
 
   // Fetch all analytics data on mount / exchange change.
   useEffect(() => {
@@ -100,12 +123,14 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
         equity: true,
         daily: true,
         allocation: true,
+        closed: true,
       });
       setErrors({
         performance: null,
         equity: null,
         daily: null,
         allocation: null,
+        closed: null,
       });
 
       const base = `/api/v1/analytics/${exchange}`;
@@ -185,6 +210,25 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
             setLoading((s) => ({ ...s, allocation: false }));
           }
         });
+
+      // Phase 1 closed-position analytics: one shared server-side filter query
+      fetch(`${base}/closed-position-analytics?${closedPositionQuery}`, { headers })
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.statusText)))
+        .then((data: ClosedPositionAnalyticsResponse) => {
+          if (!cancelled) {
+            setClosedAnalytics(data);
+            setLoading((s) => ({ ...s, closed: false }));
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setErrors((e) => ({
+              ...e,
+              closed: String(err) || "Failed to load",
+            }));
+            setLoading((s) => ({ ...s, closed: false }));
+          }
+        });
     }
 
     fetchAll();
@@ -192,15 +236,13 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [exchange, token]);
-
-  const anyLoading =
-    loading.performance || loading.equity || loading.daily || loading.allocation;
+  }, [exchange, token, closedPositionQuery]);
 
   return (
     <Tabs defaultValue="performance" className="w-full">
       <TabsList>
         <TabsTrigger value="performance">Performance</TabsTrigger>
+        <TabsTrigger value="closed-positions">Closed Positions</TabsTrigger>
         <TabsTrigger value="calendar">P&amp;L Calendar</TabsTrigger>
         <TabsTrigger value="allocation">Allocation</TabsTrigger>
         <TabsTrigger value="attribution">Trade Attribution</TabsTrigger>
@@ -230,6 +272,64 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
               unavailableReason={equity?.unavailable_reason ?? null}
             />
           )}
+        </div>
+      </TabsContent>
+
+      {/* ── Phase 1: Closed-position intelligence ── */}
+      <TabsContent value="closed-positions">
+        <div className="grid gap-6">
+          <ClosedPositionBasisNote
+            basis={closedAnalytics?.basis ?? null}
+            history={closedAnalytics?.history ?? null}
+          />
+          <ClosedPositionFilters
+            value={closedFilters}
+            onChange={setClosedFilters}
+            disabled={loading.closed}
+          />
+          <ClosedPositionOverview
+            overview={closedAnalytics?.overview ?? null}
+            basis={closedAnalytics?.basis ?? null}
+            history={closedAnalytics?.history ?? null}
+            unavailable={closedAnalytics?.unavailable ?? null}
+            loading={loading.closed}
+            error={errors.closed}
+          />
+          <ClosedPositionPeriodChart
+            items={closedAnalytics?.periods.items ?? []}
+            totals={closedAnalytics?.periods.totals ?? { trade_count: 0, total_pnl: null }}
+            period={closedAnalytics?.periods.period ?? closedFilters.period}
+            filtersApplied={closedAnalytics?.filters_applied ?? null}
+            basis={closedAnalytics?.basis ?? null}
+            history={closedAnalytics?.history ?? null}
+            loading={loading.closed}
+            error={errors.closed}
+          />
+          <ClosedPositionCalendar
+            days={closedAnalytics?.calendar_days ?? []}
+            totals={closedAnalytics?.periods.totals ?? { trade_count: 0, total_pnl: null }}
+            filtersApplied={closedAnalytics?.filters_applied ?? null}
+            basis={closedAnalytics?.basis ?? null}
+            history={closedAnalytics?.history ?? null}
+            loading={loading.closed}
+            error={errors.closed}
+          />
+          <ClosedPositionBreakdowns
+            breakdowns={closedAnalytics?.breakdowns ?? {}}
+            concentration={closedAnalytics?.concentration ?? null}
+            excludedReasons={closedAnalytics?.excluded_reasons ?? null}
+            basis={closedAnalytics?.basis ?? null}
+            history={closedAnalytics?.history ?? null}
+            loading={loading.closed}
+            error={errors.closed}
+          />
+          <TradeExplorer
+            data={closedAnalytics?.explorer ?? null}
+            loading={loading.closed}
+            error={errors.closed}
+            onPageChange={(offset) => setClosedFilters((filters) => ({ ...filters, offset }))}
+            onPageSizeChange={(limit) => setClosedFilters((filters) => ({ ...filters, limit, offset: 0 }))}
+          />
         </div>
       </TabsContent>
 
@@ -324,6 +424,36 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
       </TabsContent>
     </Tabs>
   );
+}
+
+function buildClosedPositionQuery(filters: ClosedPositionFiltersValue): string {
+  const params = new URLSearchParams();
+  params.set("timezone", filters.timezone || "UTC");
+  params.set("period", filters.period);
+  params.set("limit", String(filters.limit));
+  params.set("offset", String(filters.offset));
+  params.set("sort", filters.sort);
+
+  for (const key of [
+    "from",
+    "to",
+    "symbols",
+    "side",
+    "leverage_min",
+    "leverage_max",
+    "duration_min_minutes",
+    "duration_max_minutes",
+    "close_reason",
+    "pnl_min",
+    "pnl_max",
+  ] as const) {
+    const value = filters[key];
+    if (typeof value === "string" && value.trim()) {
+      params.set(key, value.trim());
+    }
+  }
+
+  return params.toString();
 }
 
 /** Per-asset allocation table (detailed breakdown beside the pie). */

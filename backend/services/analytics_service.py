@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 import math
 import statistics
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from collections import defaultdict
+from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Dict, Iterable, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -405,6 +407,535 @@ async def get_allocation(
 
     items.sort(key=lambda item: item["usd_value"], reverse=True)
     return {**base_response, "items": items, "complete": True, "unavailable_reason": None}
+
+
+# ── Phase 1 closed-position analytics calculator ────────────────────────────
+
+PNL_SOURCE = "PositionHistory.pnl"
+PNL_BASIS = "MEXC-reported closed-position PnL"
+CURRENCY_UNIT = "USDT"
+FEE_STATUS = "fee_net_pnl_unavailable_phase2_ledger_required"
+HISTORY_REASON = "full_history_sync_not_implemented_phase2"
+
+
+async def compute_closed_position_analytics(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+    filters: Optional[Dict[str, Any]] = None,
+    pagination: Optional[Dict[str, int]] = None,
+    sort: str = "-close_time",
+    timezone_name: str = "UTC",
+    period: str = "week",
+) -> Dict[str, Any]:
+    """Compute Phase 1 closed-position analytics from cached PositionHistory rows.
+
+    The caller supplies the already-authenticated ``user_id`` and exchange slug.
+    This function performs no exchange/network calls and applies one shared filter
+    pass before deriving overview, periods, breakdowns, calendar and explorer data.
+    """
+    tz = _load_timezone(timezone_name)
+    filters = dict(filters or {})
+    pagination = dict(pagination or {})
+    limit = int(pagination.get("limit", 50))
+    offset = int(pagination.get("offset", 0))
+    if limit > 200:
+        raise ValueError("limit must be <= 200")
+    if limit < 0 or offset < 0:
+        raise ValueError("limit and offset must be non-negative")
+    if period not in {"day", "week", "month"}:
+        raise ValueError(f"Unsupported period: {period}")
+
+    result = await session.execute(
+        select(PositionHistory)
+        .where(PositionHistory.user_id == user_id, PositionHistory.exchange == exchange)
+        .order_by(PositionHistory.close_time.asc().nullslast(), PositionHistory.id.asc())
+    )
+    stored_positions: List[PositionHistory] = list(result.scalars().all())
+    filtered_positions, excluded_reasons = _filter_closed_positions(stored_positions, filters)
+    filters_applied = _filters_applied(filters, timezone_name, period)
+
+    overview = _closed_position_overview(filtered_positions, filters, tz)
+    periods = _closed_position_periods(filtered_positions, filters_applied, tz, period)
+    calendar_days = _closed_position_calendar_days(filtered_positions, tz)
+    breakdowns = {
+        "symbol": _closed_position_breakdown(filtered_positions, "symbol"),
+        "side": _closed_position_breakdown(filtered_positions, "side"),
+        "duration": _closed_position_breakdown(filtered_positions, "duration"),
+        "leverage": _closed_position_breakdown(filtered_positions, "leverage"),
+        "pair_direction": _closed_position_breakdown(filtered_positions, "pair_direction"),
+    }
+    explorer = _closed_position_explorer(filtered_positions, filters_applied, sort, limit, offset)
+
+    history = _closed_position_history(filtered_positions)
+    basis = _closed_position_basis()
+    return {
+        "exchange": exchange,
+        "filters_applied": filters_applied,
+        "basis": basis,
+        "history": history,
+        "excluded_reasons": excluded_reasons,
+        "overview": overview,
+        "periods": {
+            "exchange": exchange,
+            "filters_applied": filters_applied,
+            "basis": basis,
+            "history": history,
+            "excluded_reasons": excluded_reasons,
+            "period": period,
+            "items": periods,
+            "totals": {
+                "trade_count": sum(item["trade_count"] for item in periods),
+                "total_pnl": _money(sum((_dec(item["total_pnl"]) for item in periods), Decimal("0"))),
+            },
+        },
+        "calendar_days": calendar_days,
+        "concentration": _closed_position_concentration(filtered_positions),
+        "breakdowns": breakdowns,
+        "explorer": {
+            "exchange": exchange,
+            "filters_applied": filters_applied,
+            "sort": sort,
+            "limit": limit,
+            "offset": offset,
+            "total": len(filtered_positions),
+            "has_more": offset + limit < len(filtered_positions),
+            "basis": basis,
+            "history": history,
+            "excluded_reasons": excluded_reasons,
+            "items": explorer,
+        },
+        "unavailable": {
+            "fee_net_pnl": {"value": None, "reason": FEE_STATUS},
+            "account_return_pct": {"value": None, "reason": "capital_history_missing"},
+            "account_equity": {"value": None, "reason": "account_equity_unavailable_phase3"},
+        },
+    }
+
+
+def _filter_closed_positions(
+    positions: Iterable[PositionHistory], filters: Dict[str, Any]
+) -> tuple[List[PositionHistory], Dict[str, int]]:
+    symbols = {str(symbol).upper() for symbol in _csv(filters.get("symbols"))}
+    side = _normalise_side(filters.get("side")) if filters.get("side") is not None else None
+    close_reasons = {str(reason).lower() for reason in _csv(filters.get("close_reason"))}
+    from_ts = _as_utc(filters["from"]) if filters.get("from") is not None else None
+    to_ts = _as_utc(filters["to"]) if filters.get("to") is not None else None
+    leverage_min = _optional_dec(filters.get("leverage_min"))
+    leverage_max = _optional_dec(filters.get("leverage_max"))
+    duration_min = _optional_dec(filters.get("duration_min_minutes"))
+    duration_max = _optional_dec(filters.get("duration_max_minutes"))
+    pnl_min = _optional_dec(filters.get("pnl_min"))
+    pnl_max = _optional_dec(filters.get("pnl_max"))
+    excluded: Dict[str, int] = {}
+    output: List[PositionHistory] = []
+
+    for position in positions:
+        close_utc = _as_utc(position.close_time) if position.close_time is not None else None
+        if close_utc is not None and from_ts is not None and close_utc < from_ts:
+            continue
+        if close_utc is not None and to_ts is not None and close_utc >= to_ts:
+            continue
+        if symbols and str(position.symbol).upper() not in symbols:
+            continue
+        if side and _normalise_side(position.side) != side:
+            continue
+        if close_reasons and str(position.close_reason or "").lower() not in close_reasons:
+            continue
+        pnl = _position_pnl(position)
+        if pnl_min is not None and pnl < pnl_min:
+            continue
+        if pnl_max is not None and pnl > pnl_max:
+            continue
+        leverage = _position_leverage(position)
+        duration = _duration_minutes(position)
+        if leverage_min is not None or leverage_max is not None:
+            if leverage is None:
+                excluded["missing_leverage"] = excluded.get("missing_leverage", 0) + 1
+                if (duration_min is not None or duration_max is not None) and duration is None:
+                    excluded["missing_duration"] = excluded.get("missing_duration", 0) + 1
+                continue
+            if leverage_min is not None and leverage < leverage_min:
+                continue
+            if leverage_max is not None and leverage > leverage_max:
+                continue
+        if duration_min is not None or duration_max is not None:
+            if duration is None:
+                excluded["missing_duration"] = excluded.get("missing_duration", 0) + 1
+                continue
+            if duration_min is not None and Decimal(str(duration)) < duration_min:
+                continue
+            if duration_max is not None and Decimal(str(duration)) > duration_max:
+                continue
+        output.append(position)
+    return output, excluded
+
+
+def _closed_position_overview(positions: List[PositionHistory], filters: Dict[str, Any], tz: ZoneInfo) -> Dict[str, Any]:
+    pnls = [_position_pnl(position) for position in positions]
+    wins = [pnl for pnl in pnls if pnl > 0]
+    losses = [pnl for pnl in pnls if pnl < 0]
+    breakevens = [pnl for pnl in pnls if pnl == 0]
+    total_trades = len(pnls)
+    total_pnl = sum(pnls, Decimal("0"))
+    gross_profit = sum(wins, Decimal("0"))
+    gross_loss_abs = abs(sum(losses, Decimal("0")))
+    active_days = len({ _as_utc(p.close_time).astimezone(tz).date() for p in positions if p.close_time is not None })
+    calendar_days = _calendar_day_count(positions, filters, tz)
+
+    overview: Dict[str, Any] = {
+        "total_trades": total_trades,
+        "winning_trades": len(wins),
+        "losing_trades": len(losses),
+        "breakeven_trades": len(breakevens),
+        "total_pnl": _money(total_pnl),
+        "gross_profit": _money(gross_profit),
+        "gross_loss_abs": _money(gross_loss_abs),
+        "average_win": _money(sum(wins, Decimal("0")) / Decimal(len(wins))) if wins else None,
+        "average_win_reason": None if wins else "no_winning_trades",
+        "average_loss": _money(sum(losses, Decimal("0")) / Decimal(len(losses))) if losses else None,
+        "average_loss_reason": None if losses else "no_losing_trades",
+        "average_trade_pnl": _money(total_pnl / Decimal(total_trades)) if total_trades else None,
+        "average_trade_pnl_reason": None if total_trades else "insufficient_data",
+        "expectancy_per_trade": _money(total_pnl / Decimal(total_trades)) if total_trades else None,
+        "expectancy_per_trade_reason": None if total_trades else "insufficient_data",
+        "best_trade": _money(max(pnls)) if pnls else None,
+        "best_trade_reason": None if pnls else "insufficient_data",
+        "worst_trade": _money(min(pnls)) if pnls else None,
+        "worst_trade_reason": None if pnls else "insufficient_data",
+        "active_days": active_days,
+        "calendar_days": calendar_days,
+        "average_pnl_per_active_day": _money(total_pnl / Decimal(active_days)) if active_days else None,
+        "average_pnl_per_active_day_label": "per active trading day",
+        "average_pnl_per_active_day_reason": None if active_days else "no_active_days",
+        "average_pnl_per_calendar_day": _money(total_pnl / Decimal(calendar_days)) if calendar_days else None,
+        "average_pnl_per_calendar_day_label": "per calendar day",
+        "average_pnl_per_calendar_day_reason": None if calendar_days else "no_calendar_range",
+    }
+    for name, count in [("win_rate_pct", len(wins)), ("loss_rate_pct", len(losses)), ("breakeven_rate_pct", len(breakevens))]:
+        overview[name] = _ratio_pct(Decimal(count), Decimal(total_trades)) if total_trades else None
+        overview[f"{name}_reason"] = None if total_trades else "insufficient_data"
+    overview["profit_factor"] = _ratio(gross_profit, gross_loss_abs) if gross_loss_abs != 0 else None
+    overview["profit_factor_reason"] = None if gross_loss_abs != 0 else "no_losing_trades"
+    if wins and losses:
+        overview["payoff_ratio"] = _ratio(sum(wins, Decimal("0")) / Decimal(len(wins)), abs(sum(losses, Decimal("0")) / Decimal(len(losses))))
+        overview["payoff_ratio_reason"] = None
+    else:
+        overview["payoff_ratio"] = None
+        overview["payoff_ratio_reason"] = "no_winning_trades" if not wins else "no_losing_trades"
+    overview.update(_streaks(positions))
+    return overview
+
+
+def _closed_position_periods(
+    positions: List[PositionHistory], filters_applied: Dict[str, Any], tz: ZoneInfo, period: str
+) -> List[Dict[str, Any]]:
+    buckets: Dict[str, Dict[str, Any]] = {}
+    for position in positions:
+        if position.close_time is None:
+            continue
+        local = _as_utc(position.close_time).astimezone(tz)
+        label, start_local, end_local = _period_label_and_bounds(local, period)
+        bucket = buckets.setdefault(label, {"label": label, "period_start": start_local.astimezone(timezone.utc).isoformat(), "period_end": end_local.astimezone(timezone.utc).isoformat(), "trade_count": 0, "total_pnl_dec": Decimal("0"), "basis": PNL_BASIS, "currency_unit": CURRENCY_UNIT})
+        bucket["trade_count"] += 1
+        bucket["total_pnl_dec"] += _position_pnl(position)
+    items = []
+    for bucket in sorted(buckets.values(), key=lambda item: item["period_start"]):
+        total = bucket.pop("total_pnl_dec")
+        bucket["total_pnl"] = _money(total)
+        items.append(bucket)
+    return items
+
+
+def _closed_position_calendar_days(positions: List[PositionHistory], tz: ZoneInfo) -> List[Dict[str, Any]]:
+    buckets: Dict[str, Dict[str, Any]] = {}
+    for position in positions:
+        if position.close_time is None:
+            continue
+        label = _as_utc(position.close_time).astimezone(tz).strftime("%Y-%m-%d")
+        bucket = buckets.setdefault(label, {"date": label, "trade_count": 0, "total_pnl_dec": Decimal("0"), "currency_unit": CURRENCY_UNIT, "basis": PNL_BASIS})
+        bucket["trade_count"] += 1
+        bucket["total_pnl_dec"] += _position_pnl(position)
+    items = []
+    for bucket in sorted(buckets.values(), key=lambda item: item["date"]):
+        total = bucket.pop("total_pnl_dec")
+        bucket["total_pnl"] = _money(total)
+        items.append(bucket)
+    return items
+
+
+def _closed_position_breakdown(positions: List[PositionHistory], group_by: str) -> List[Dict[str, Any]]:
+    groups: Dict[str, List[PositionHistory]] = defaultdict(list)
+    for position in positions:
+        groups[_breakdown_key(position, group_by)].append(position)
+    return [_breakdown_row(key, rows) for key, rows in sorted(groups.items(), key=lambda item: item[0])]
+
+
+def _breakdown_row(key: str, positions: List[PositionHistory]) -> Dict[str, Any]:
+    pnls = [_position_pnl(position) for position in positions]
+    wins = [pnl for pnl in pnls if pnl > 0]
+    losses = [pnl for pnl in pnls if pnl < 0]
+    total = sum(pnls, Decimal("0"))
+    return {
+        "key": key,
+        "trade_count": len(positions),
+        "total_pnl": _money(total),
+        "gross_profit": _money(sum(wins, Decimal("0"))),
+        "gross_loss_abs": _money(abs(sum(losses, Decimal("0")))),
+        "win_rate_pct": _ratio_pct(Decimal(len(wins)), Decimal(len(positions))) if positions else None,
+        "average_pnl": _money(total / Decimal(len(positions))) if positions else None,
+        "best_trade": _money(max(pnls)) if pnls else None,
+        "worst_trade": _money(min(pnls)) if pnls else None,
+        "basis": PNL_BASIS,
+        "currency_unit": CURRENCY_UNIT,
+    }
+
+
+def _closed_position_concentration(positions: List[PositionHistory], top_n: int = 1) -> Dict[str, Any]:
+    by_symbol = _closed_position_breakdown(positions, "symbol")
+    profits = sorted([_dec(row["gross_profit"]) for row in by_symbol if _dec(row["gross_profit"]) > 0], reverse=True)
+    losses = sorted([_dec(row["gross_loss_abs"]) for row in by_symbol if _dec(row["gross_loss_abs"]) > 0], reverse=True)
+    total_profit = sum(profits, Decimal("0"))
+    total_loss = sum(losses, Decimal("0"))
+    return {
+        "gross_profit_top_1_contribution_pct": _top_contribution(profits, total_profit, top_n),
+        "gross_profit_top_1_contribution_pct_reason": None if total_profit else "zero_gross_profit",
+        "gross_profit_hhi": _hhi(profits, total_profit),
+        "gross_profit_hhi_reason": None if total_profit else "zero_gross_profit",
+        "gross_loss_top_1_contribution_pct": _top_contribution(losses, total_loss, top_n),
+        "gross_loss_top_1_contribution_pct_reason": None if total_loss else "zero_gross_loss",
+        "gross_loss_hhi": _hhi(losses, total_loss),
+        "gross_loss_hhi_reason": None if total_loss else "zero_gross_loss",
+    }
+
+
+def _closed_position_explorer(
+    positions: List[PositionHistory], filters_applied: Dict[str, Any], sort: str, limit: int, offset: int
+) -> List[Dict[str, Any]]:
+    ordered = _sort_positions(positions, sort)
+    return [_explorer_item(position) for position in ordered[offset : offset + limit]]
+
+
+def _explorer_item(position: PositionHistory) -> Dict[str, Any]:
+    duration_minutes = _duration_minutes(position)
+    leverage = _position_leverage(position)
+    unavailable_reasons: Dict[str, Any] = {"fee_net_pnl": FEE_STATUS}
+    if duration_minutes is None:
+        unavailable_reasons["missing_duration"] = True
+    if leverage is None:
+        unavailable_reasons["missing_leverage"] = True
+
+    return {
+        "id": position.id,
+        "symbol": position.symbol,
+        "side": _normalise_side(position.side),
+        "size": position.size,
+        "size_unit": "contracts",
+        "contract_size": position.contract_size,
+        "entry_price": position.entry_price,
+        "exit_price": position.exit_price,
+        "pnl": _money(_position_pnl(position)),
+        "pnl_basis": PNL_BASIS,
+        "currency_unit": CURRENCY_UNIT,
+        "fee_status": FEE_STATUS,
+        "pnl_percent": position.pnl_percent,
+        "leverage": float(leverage) if leverage is not None else None,
+        "open_time": _iso_ts(position.open_time) if position.open_time else None,
+        "close_time": _iso_ts(position.close_time) if position.close_time else None,
+        "duration_minutes": duration_minutes,
+        "close_reason": position.close_reason,
+        "unavailable_reasons": unavailable_reasons,
+    }
+
+
+def _closed_position_history(positions: List[PositionHistory]) -> Dict[str, Any]:
+    close_times = [_as_utc(position.close_time) for position in positions if position.close_time is not None]
+    return {
+        "history_scope": "stored_closed_positions",
+        "history_completeness": "unknown",
+        "reason": HISTORY_REASON,
+        "row_count": len(positions),
+        "first_close_time": min(close_times).isoformat() if close_times else None,
+        "last_close_time": max(close_times).isoformat() if close_times else None,
+    }
+
+
+def _closed_position_basis() -> Dict[str, str]:
+    return {"pnl_source": PNL_SOURCE, "pnl_basis": PNL_BASIS, "currency_unit": CURRENCY_UNIT, "fee_status": FEE_STATUS, "size_unit": "contracts"}
+
+
+def _filters_applied(filters: Dict[str, Any], timezone_name: str, period: str) -> Dict[str, Any]:
+    rendered = {"timezone": timezone_name, "period": period}
+    for key, value in sorted(filters.items()):
+        if isinstance(value, datetime):
+            rendered[key] = _iso_ts(value)
+        elif isinstance(value, list):
+            rendered[key] = [str(v).upper() if key == "symbols" else v for v in value]
+        else:
+            rendered[key] = str(value).upper() if key == "symbols" else value
+    if "symbols" in rendered and isinstance(rendered["symbols"], str):
+        rendered["symbols"] = [symbol.upper() for symbol in _csv(rendered["symbols"])]
+    return rendered
+
+
+def _period_label_and_bounds(local: datetime, period: str) -> tuple[str, datetime, datetime]:
+    if period == "day":
+        start = datetime.combine(local.date(), time.min, tzinfo=local.tzinfo)
+        return local.strftime("%Y-%m-%d"), start, start + timedelta(days=1)
+    if period == "week":
+        start_date = local.date() - timedelta(days=local.weekday())
+        start = datetime.combine(start_date, time.min, tzinfo=local.tzinfo)
+        iso = local.isocalendar()
+        return f"{iso.year}-W{iso.week:02d}", start, start + timedelta(days=7)
+    start = datetime(local.year, local.month, 1, tzinfo=local.tzinfo)
+    end = datetime(local.year + (1 if local.month == 12 else 0), 1 if local.month == 12 else local.month + 1, 1, tzinfo=local.tzinfo)
+    return local.strftime("%Y-%m"), start, end
+
+
+def _calendar_day_count(positions: List[PositionHistory], filters: Dict[str, Any], tz: ZoneInfo) -> int:
+    close_dates = sorted({_as_utc(p.close_time).astimezone(tz).date() for p in positions if p.close_time is not None})
+    if not close_dates:
+        return 0
+    from_ts = _as_utc(filters["from"]).astimezone(tz) if filters.get("from") is not None else None
+    to_ts = _as_utc(filters["to"]).astimezone(tz) if filters.get("to") is not None else None
+    start = from_ts.date() if from_ts else close_dates[0]
+    if to_ts:
+        end = (to_ts - timedelta(microseconds=1)).date()
+    else:
+        end = close_dates[-1]
+    if end < start:
+        return 0
+    return (end - start).days + 1
+
+
+def _streaks(positions: List[PositionHistory]) -> Dict[str, Any]:
+    ordered = sorted(positions, key=lambda p: (_as_utc(p.close_time) if p.close_time else datetime.max.replace(tzinfo=timezone.utc), p.id or 0))
+    if not ordered:
+        return {"max_win_streak": 0, "max_loss_streak": 0, "current_streak": None, "current_streak_reason": "insufficient_data"}
+    max_win = max_loss = current_len = 0
+    current_type: Optional[str] = None
+    for position in ordered:
+        pnl = _position_pnl(position)
+        kind = "win" if pnl > 0 else "loss" if pnl < 0 else "breakeven"
+        current_len = current_len + 1 if kind == current_type else 1
+        current_type = kind
+        if kind == "win":
+            max_win = max(max_win, current_len)
+        elif kind == "loss":
+            max_loss = max(max_loss, current_len)
+    return {"max_win_streak": max_win, "max_loss_streak": max_loss, "current_streak": {"type": current_type, "length": current_len}, "current_streak_reason": None}
+
+
+def _sort_positions(positions: List[PositionHistory], sort: str) -> List[PositionHistory]:
+    descending = sort.startswith("-")
+    field = sort[1:] if descending else sort
+    if field not in {"close_time", "pnl", "symbol", "side", "leverage", "duration_minutes"}:
+        raise ValueError(f"Unsupported sort: {sort}")
+    def key(position: PositionHistory):
+        if field == "close_time":
+            primary = _as_utc(position.close_time) if position.close_time else datetime.max.replace(tzinfo=timezone.utc)
+        elif field == "pnl":
+            primary = float(_position_pnl(position))
+        elif field == "duration_minutes":
+            primary = _duration_minutes(position)
+        else:
+            primary = getattr(position, field)
+        return (primary is None, primary)
+    by_id = sorted(positions, key=lambda position: position.id or 0)
+    return sorted(by_id, key=key, reverse=descending)
+
+
+def _breakdown_key(position: PositionHistory, group_by: str) -> str:
+    if group_by == "symbol":
+        return str(position.symbol).upper()
+    if group_by == "side":
+        return _normalise_side(position.side)
+    if group_by == "pair_direction":
+        return f"{str(position.symbol).upper()}:{_normalise_side(position.side)}"
+    if group_by == "duration":
+        minutes = _duration_minutes(position)
+        if minutes is None:
+            return "unknown_duration"
+        if minutes < 1440:
+            return "<1d"
+        if minutes <= 10080:
+            return "1-7d"
+        return ">7d"
+    if group_by == "leverage":
+        leverage = _position_leverage(position)
+        if leverage is None:
+            return "unknown_leverage"
+        if leverage <= 5:
+            return "<=5x"
+        if leverage <= 10:
+            return ">5x-10x"
+        return ">10x"
+    raise ValueError(f"Unsupported group_by: {group_by}")
+
+
+def _duration_minutes(position: PositionHistory) -> Optional[int]:
+    if position.open_time is None or position.close_time is None:
+        return None
+    return int((_as_utc(position.close_time) - _as_utc(position.open_time)).total_seconds() // 60)
+
+
+def _position_pnl(position: PositionHistory) -> Decimal:
+    return Decimal(str(position.pnl or 0))
+
+
+def _position_leverage(position: PositionHistory) -> Optional[Decimal]:
+    if position.leverage is None or position.leverage <= 0:
+        return None
+    return Decimal(str(position.leverage))
+
+
+def _money(value: Decimal) -> float:
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _ratio(value: Decimal, denominator: Decimal) -> float:
+    return float((value / denominator).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+
+
+def _ratio_pct(value: Decimal, denominator: Decimal) -> float:
+    return _money((value / denominator) * Decimal("100"))
+
+
+def _top_contribution(values: List[Decimal], total: Decimal, top_n: int) -> Optional[float]:
+    if total == 0:
+        return None
+    return _ratio_pct(sum(values[:top_n], Decimal("0")), total)
+
+
+def _hhi(values: List[Decimal], total: Decimal) -> Optional[float]:
+    if total == 0:
+        return None
+    return float(sum((value / total) ** 2 for value in values).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+
+
+def _dec(value: Any) -> Decimal:
+    return Decimal(str(value or 0))
+
+
+def _optional_dec(value: Any) -> Optional[Decimal]:
+    return Decimal(str(value)) if value is not None else None
+
+
+def _csv(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def _normalise_side(value: Any) -> str:
+    side = str(value or "").lower().strip()
+    if side == "buy":
+        return "long"
+    if side == "sell":
+        return "short"
+    return side
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
