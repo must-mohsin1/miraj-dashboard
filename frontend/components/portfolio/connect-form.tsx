@@ -81,6 +81,15 @@ export function ConnectForm({ token, exchange }: ConnectFormProps) {
             Enter your {exchangeName} API credentials. Keys are encrypted at
             rest and never exposed to the client after submission.
           </p>
+          {exchange === "mexc" && (
+            <div className="border-l border-slate-700 pl-3 text-sm text-slate-300">
+              <p>Use read-only MEXC permissions only.</p>
+              <p className="mt-1 text-slate-400">
+                Miraj uses mocked/redacted fixtures for Phase 2A local
+                verification.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col gap-4">

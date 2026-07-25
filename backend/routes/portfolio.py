@@ -37,6 +37,8 @@ from backend.database import get_session
 from backend.models import (
     Analysis,
     ExchangeKey,
+    ExchangeSyncState,
+    FuturesAccountSnapshot,
     OrderHistory,
     PortfolioBalance,
     PortfolioPosition,
@@ -61,6 +63,10 @@ from backend.services.exchange_service import (
     validate_exchange_keys,
 )
 from backend.services.encryption import decrypt_api_key, encrypt_api_key
+from backend.services.phase2a_sync import (
+    latest_futures_account_snapshot,
+    persist_phase2a_sync_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +140,7 @@ class TradeItem(BaseModel):
 
 
 class PositionHistoryItem(BaseModel):
+    exchange_position_id: Optional[str] = None
     symbol: str
     side: str
     size: float
@@ -149,6 +156,7 @@ class PositionHistoryItem(BaseModel):
 
 
 class OrderHistoryItem(BaseModel):
+    exchange_order_id: Optional[str] = None
     symbol: str
     type: str
     side: str
@@ -173,6 +181,46 @@ class SnapshotItem(BaseModel):
     timestamp: datetime
 
 
+class FuturesAccountItem(BaseModel):
+    settlement_asset: str
+    equity: Optional[float] = None
+    available_balance: Optional[float] = None
+    frozen_balance: Optional[float] = None
+    cash_balance: Optional[float] = None
+    position_margin: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    bonus: Optional[float] = None
+    available_cash: Optional[float] = None
+    debt_amount: Optional[float] = None
+    source_ts: datetime
+    synced_at: datetime
+
+
+class SyncCoverageItem(BaseModel):
+    stream: str
+    status: str
+    complete: bool
+    reason: Optional[str] = None
+    oldest_source_ts: Optional[datetime] = None
+    newest_source_ts: Optional[datetime] = None
+    rows_fetched_total: int = 0
+    source_total: Optional[int] = None
+    cursor: Optional[Dict[str, Any]] = None
+    last_success_at: Optional[datetime] = None
+    last_attempt_at: Optional[datetime] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    unrecoverable_gaps: List[Dict[str, Any]] = []
+    supported_by_exchange: Optional[bool] = None
+
+
+class SyncStatusResponse(BaseModel):
+    exchange: str
+    sync: List[SyncCoverageItem]
+    futures_account: Optional[FuturesAccountItem] = None
+    partial: bool = True
+
+
 class PortfolioResponse(BaseModel):
     """Shape of refresh/get responses."""
 
@@ -183,6 +231,9 @@ class PortfolioResponse(BaseModel):
     position_history: List[PositionHistoryItem] = []
     order_history: List[OrderHistoryItem] = []
     snapshot: Optional[SnapshotItem] = None
+    sync: List[SyncCoverageItem] = []
+    futures_account: Optional[FuturesAccountItem] = None
+    partial: bool = False
     last_refreshed: Optional[str] = None
     stale: bool = True
 
@@ -225,6 +276,9 @@ class HistoryResponse(BaseModel):
     exchange: str
     position_history: List[PositionHistoryItem]
     order_history: List[OrderHistoryItem]
+    sync: List[SyncCoverageItem] = []
+    futures_account: Optional[FuturesAccountItem] = None
+    partial: bool = False
 
 
 # ── Trade attribution (scan linking) ─────────────────────────────────────────
@@ -396,6 +450,7 @@ def _serialise_trade(row: PortfolioTrade) -> Dict[str, Any]:
 
 def _serialise_position_history(row: PositionHistory) -> Dict[str, Any]:
     return {
+        "exchange_position_id": getattr(row, "exchange_position_id", None),
         "symbol": row.symbol,
         "side": row.side,
         "size": row.size,
@@ -413,6 +468,7 @@ def _serialise_position_history(row: PositionHistory) -> Dict[str, Any]:
 
 def _serialise_order_history(row: OrderHistory) -> Dict[str, Any]:
     return {
+        "exchange_order_id": getattr(row, "exchange_order_id", None),
         "symbol": row.symbol,
         "type": row.type,
         "side": row.side,
@@ -438,6 +494,185 @@ def _serialise_snapshot(row: PortfolioSnapshot) -> Dict[str, Any]:
         "open_positions": row.open_positions,
         "timestamp": row.timestamp,
     }
+
+
+def _serialise_futures_account(row: FuturesAccountSnapshot) -> Dict[str, Any]:
+    return {
+        "settlement_asset": row.settlement_asset,
+        "equity": row.equity,
+        "available_balance": row.available_balance,
+        "frozen_balance": row.frozen_balance,
+        "cash_balance": row.cash_balance,
+        "position_margin": row.position_margin,
+        "unrealized_pnl": row.unrealized_pnl,
+        "bonus": row.bonus,
+        "available_cash": row.available_cash,
+        "debt_amount": row.debt_amount,
+        "source_ts": row.source_ts,
+        "synced_at": row.synced_at,
+    }
+
+
+_PHASE2A_STREAMS = (
+    "positions_history",
+    "orders_history",
+    "futures_account_assets",
+    "funding",
+    "futures_transfers",
+    "deposits",
+    "withdrawals",
+)
+
+
+def _phase2a_default_coverage(stream: str) -> Dict[str, Any]:
+    if stream in {"funding", "futures_transfers"}:
+        return {
+            "stream": stream,
+            "status": "not_enabled_phase_2b",
+            "complete": False,
+            "reason": "not_enabled_phase_2b",
+            "rows_fetched_total": 0,
+            "source_total": 0,
+            "cursor": None,
+            "last_success_at": None,
+            "last_attempt_at": None,
+            "error_code": None,
+            "error_message": None,
+            "unrecoverable_gaps": [],
+            "supported_by_exchange": True,
+        }
+    if stream in {"deposits", "withdrawals"}:
+        return {
+            "stream": stream,
+            "status": "unavailable",
+            "complete": False,
+            "reason": "requires_spot_wallet_endpoint_and_retention_probe_phase_2b",
+            "rows_fetched_total": 0,
+            "source_total": 0,
+            "cursor": None,
+            "last_success_at": None,
+            "last_attempt_at": None,
+            "error_code": None,
+            "error_message": None,
+            "unrecoverable_gaps": [],
+            "supported_by_exchange": False,
+        }
+    return {
+        "stream": stream,
+        "status": "stale",
+        "complete": False,
+        "reason": "no_sync_state",
+        "rows_fetched_total": 0,
+        "source_total": 0,
+        "cursor": None,
+        "last_success_at": None,
+        "last_attempt_at": None,
+        "error_code": None,
+        "error_message": None,
+        "unrecoverable_gaps": [],
+        "supported_by_exchange": True,
+    }
+
+
+def _coverage_from_sync_state(row: ExchangeSyncState) -> Dict[str, Any]:
+    return {
+        "stream": row.stream,
+        "status": row.status,
+        "complete": bool(row.complete),
+        "reason": row.partial_reason,
+        "oldest_source_ts": row.oldest_source_ts,
+        "newest_source_ts": row.newest_source_ts,
+        "rows_fetched_total": row.rows_fetched_total,
+        "source_total": row.source_total,
+        "cursor": row.cursor_json,
+        "last_success_at": row.last_success_at,
+        "last_attempt_at": row.last_attempt_at,
+        "error_code": row.error_code,
+        "error_message": row.error_message_redacted,
+        "unrecoverable_gaps": row.unrecoverable_gaps_json or [],
+        "supported_by_exchange": True,
+    }
+
+
+def _legacy_position_gaps(position_history: List[PositionHistory]) -> List[Dict[str, Any]]:
+    gaps: List[Dict[str, Any]] = []
+    for row in position_history:
+        if getattr(row, "exchange_position_id", None) is not None:
+            continue
+        gaps.append({
+            "stream": "positions_history",
+            "reason": "pre_phase_2a_missing_exchange_position_id",
+            "position_history_id": row.id,
+            "symbol": row.symbol,
+            "close_time": row.close_time.isoformat() if row.close_time else None,
+        })
+    return gaps
+
+
+def _merge_legacy_position_gaps(
+    coverage: Dict[str, Any],
+    position_history: List[PositionHistory],
+) -> Dict[str, Any]:
+    gaps = _legacy_position_gaps(position_history)
+    if not gaps:
+        return coverage
+    merged = dict(coverage)
+    merged["unrecoverable_gaps"] = list(merged.get("unrecoverable_gaps") or []) + gaps
+    merged["complete"] = False
+    if merged.get("status") == "fresh":
+        merged["status"] = "partial"
+    if not merged.get("reason"):
+        merged["reason"] = "pre_phase_2a_missing_exchange_position_id"
+    return merged
+
+
+def _sync_list_from_mapping(
+    sync: Optional[Dict[str, Dict[str, Any]]],
+    *,
+    position_history: Optional[List[PositionHistory]] = None,
+    include_all_phase2a_streams: bool = True,
+) -> List[SyncCoverageItem]:
+    by_stream: Dict[str, Dict[str, Any]] = {}
+    for stream, coverage in (sync or {}).items():
+        row = dict(coverage)
+        row.setdefault("stream", stream)
+        row.setdefault("supported_by_exchange", True)
+        by_stream[stream] = row
+    streams = _PHASE2A_STREAMS if include_all_phase2a_streams else tuple(by_stream)
+    for stream in streams:
+        by_stream.setdefault(stream, _phase2a_default_coverage(stream))
+    if position_history is not None and "positions_history" in by_stream:
+        by_stream["positions_history"] = _merge_legacy_position_gaps(
+            by_stream["positions_history"], position_history
+        )
+    return [SyncCoverageItem(**by_stream[stream]) for stream in streams if stream in by_stream]
+
+
+async def _load_sync_coverage(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+    *,
+    position_history: Optional[List[PositionHistory]] = None,
+) -> List[SyncCoverageItem]:
+    result = await session.execute(
+        select(ExchangeSyncState).where(
+            ExchangeSyncState.user_id == user_id,
+            ExchangeSyncState.exchange == exchange,
+        )
+    )
+    return _sync_list_from_mapping(
+        {row.stream: _coverage_from_sync_state(row) for row in result.scalars().all()},
+        position_history=position_history,
+    )
+
+
+def _response_partial(sync: List[SyncCoverageItem]) -> bool:
+    return any(
+        row.stream in {"positions_history", "orders_history", "futures_account_assets"}
+        and not row.complete
+        for row in sync
+    )
 
 
 def _get_iso_ts(snapshot: Optional[PortfolioSnapshot]) -> Optional[str]:
@@ -739,6 +974,10 @@ async def refresh_portfolio(
 
     # 4. Build response (includes the freshly-fetched snapshot)
     snapshot = await _get_latest_snapshot(session, current_user.id, exchange_slug)
+    futures_account = await latest_futures_account_snapshot(
+        session, current_user.id, exchange_slug
+    )
+    sync = _sync_list_from_mapping(data.get("sync"))
     return PortfolioResponse(
         exchange=exchange_slug,
         balances=[BalanceItem(**b) for b in data["balances"]],
@@ -747,6 +986,13 @@ async def refresh_portfolio(
         position_history=[PositionHistoryItem(**p) for p in data.get("position_history", [])],
         order_history=[OrderHistoryItem(**o) for o in data.get("order_history", [])],
         snapshot=SnapshotItem(**_serialise_snapshot(snapshot)) if snapshot else None,
+        sync=sync,
+        futures_account=(
+            FuturesAccountItem(**_serialise_futures_account(futures_account))
+            if futures_account
+            else None
+        ),
+        partial=bool(data.get("partial", _response_partial(sync))),
         last_refreshed=_get_iso_ts(snapshot),
         stale=False,
     )
@@ -778,6 +1024,15 @@ async def get_portfolio(
     position_history = await _load_position_history(session, current_user.id, exchange_slug)
     order_history = await _load_order_history(session, current_user.id, exchange_slug)
     snapshot = await _get_latest_snapshot(session, current_user.id, exchange_slug)
+    futures_account = await latest_futures_account_snapshot(
+        session, current_user.id, exchange_slug
+    )
+    sync = await _load_sync_coverage(
+        session,
+        current_user.id,
+        exchange_slug,
+        position_history=position_history,
+    )
 
     return PortfolioResponse(
         exchange=exchange_slug,
@@ -791,8 +1046,52 @@ async def get_portfolio(
             OrderHistoryItem(**_serialise_order_history(o)) for o in order_history
         ],
         snapshot=SnapshotItem(**_serialise_snapshot(snapshot)) if snapshot else None,
+        sync=sync,
+        futures_account=(
+            FuturesAccountItem(**_serialise_futures_account(futures_account))
+            if futures_account
+            else None
+        ),
+        partial=_response_partial(sync),
         last_refreshed=_get_iso_ts(snapshot),
         stale=True,
+    )
+
+
+@router.get(
+    "/{exchange}/sync-status",
+    response_model=SyncStatusResponse,
+    responses={
+        404: {"model": PortfolioErrorResponse, "description": "Unsupported exchange"},
+        501: {"model": PortfolioErrorResponse, "description": "ccxt not installed"},
+    },
+)
+async def get_sync_status(
+    exchange: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SyncStatusResponse:
+    """Return cached Phase 2A stream coverage for this user/exchange only."""
+    exchange_slug = _require_supported_exchange(exchange)
+    position_history = await _load_position_history(session, current_user.id, exchange_slug)
+    sync = await _load_sync_coverage(
+        session,
+        current_user.id,
+        exchange_slug,
+        position_history=position_history,
+    )
+    futures_account = await latest_futures_account_snapshot(
+        session, current_user.id, exchange_slug
+    )
+    return SyncStatusResponse(
+        exchange=exchange_slug,
+        sync=sync,
+        futures_account=(
+            FuturesAccountItem(**_serialise_futures_account(futures_account))
+            if futures_account
+            else None
+        ),
+        partial=_response_partial(sync),
     )
 
 
@@ -1163,6 +1462,10 @@ async def get_portfolio_history(
     except ExchangeError as exc:
         raise _map_exchange_error(exc, action="fetch history") from exc
 
+    futures_account = await latest_futures_account_snapshot(
+        session, current_user.id, exchange_slug
+    )
+    sync = _sync_list_from_mapping(data.get("sync"), include_all_phase2a_streams=False)
     return HistoryResponse(
         exchange=exchange_slug,
         position_history=[
@@ -1171,6 +1474,13 @@ async def get_portfolio_history(
         order_history=[
             OrderHistoryItem(**o) for o in data.get("order_history", [])
         ],
+        sync=sync,
+        futures_account=(
+            FuturesAccountItem(**_serialise_futures_account(futures_account))
+            if futures_account
+            else None
+        ),
+        partial=bool(data.get("partial", _response_partial(sync))),
     )
 
 
@@ -1248,6 +1558,10 @@ async def get_exchange_history(
     await _persist_history_data(session, current_user.id, exchange_slug, data, now)
     await session.commit()
 
+    futures_account = await latest_futures_account_snapshot(
+        session, current_user.id, exchange_slug
+    )
+    sync = _sync_list_from_mapping(data.get("sync"), include_all_phase2a_streams=False)
     return HistoryResponse(
         exchange=exchange_slug,
         position_history=[
@@ -1256,6 +1570,13 @@ async def get_exchange_history(
         order_history=[
             OrderHistoryItem(**o) for o in data.get("order_history", [])
         ],
+        sync=sync,
+        futures_account=(
+            FuturesAccountItem(**_serialise_futures_account(futures_account))
+            if futures_account
+            else None
+        ),
+        partial=bool(data.get("partial", _response_partial(sync))),
     )
 
 
@@ -1275,84 +1596,7 @@ async def _persist_history_data(
     but only handles the two history tables — no balances / positions /
     trades / snapshot.
     """
-    # ── Upsert position history (skip duplicates) ───────────────────
-    pos_hist = data.get("position_history", [])
-    existing_pos_keys: set[tuple] = set()
-    if pos_hist:
-        rows = await session.execute(
-            select(
-                PositionHistory.symbol,
-                PositionHistory.close_time,
-            ).where(
-                PositionHistory.user_id == user_id,
-                PositionHistory.exchange == exchange,
-            )
-        )
-        existing_pos_keys = {(r[0], r[1]) for r in rows.all()}
-
-    for ph in pos_hist:
-        key = (ph["symbol"], ph.get("close_time"))
-        if key in existing_pos_keys:
-            continue
-        session.add(PositionHistory(
-            user_id=user_id,
-            exchange=exchange,
-            symbol=ph["symbol"],
-            side=ph["side"],
-            size=ph["size"],
-            entry_price=ph["entry_price"],
-            exit_price=ph.get("exit_price", 0.0),
-            pnl=ph["pnl"],
-            pnl_percent=ph.get("pnl_percent", 0.0),
-            leverage=ph.get("leverage", 1.0),
-            open_time=ph.get("open_time"),
-            close_time=ph.get("close_time"),
-            close_reason=ph.get("close_reason"),
-            contract_size=ph.get("contract_size", 1.0),
-            updated_at=now,
-        ))
-
-    # ── Upsert order history (skip duplicates) ──────────────────────
-    ord_hist = data.get("order_history", [])
-    existing_ord_keys: set[tuple] = set()
-    if ord_hist:
-        rows = await session.execute(
-            select(
-                OrderHistory.symbol,
-                OrderHistory.timestamp,
-                OrderHistory.side,
-                OrderHistory.price,
-            ).where(
-                OrderHistory.user_id == user_id,
-                OrderHistory.exchange == exchange,
-            )
-        )
-        existing_ord_keys = {(r[0], r[1], r[2], r[3]) for r in rows.all()}
-
-    for oh in ord_hist:
-        key = (oh["symbol"], oh["timestamp"], oh["side"], oh["price"])
-        if key in existing_ord_keys:
-            continue
-        session.add(OrderHistory(
-            user_id=user_id,
-            exchange=exchange,
-            symbol=oh["symbol"],
-            type=oh["type"],
-            side=oh["side"],
-            side_action=oh.get("side_action"),
-            price=oh["price"],
-            amount=oh["amount"],
-            filled=oh.get("filled", 0.0),
-            filled_price=oh.get("filled_price"),
-            cost=oh.get("cost", 0.0),
-            status=oh["status"],
-            timestamp=oh["timestamp"],
-            fee=oh.get("fee"),
-            fee_currency=oh.get("fee_currency"),
-            leverage=oh.get("leverage"),
-            reduce_only=oh.get("reduce_only"),
-            updated_at=now,
-        ))
+    await persist_phase2a_sync_payload(session, user_id, exchange, data, now)
 
 
 async def _persist_portfolio_data(
@@ -1448,85 +1692,7 @@ async def _persist_portfolio_data(
             exchange_trade_id=trade["exchange_trade_id"],
         ))
 
-    # ── Upsert position history (skip duplicates) ───────────────────
-    pos_hist = data.get("position_history", [])
-    # Build a set of existing cache keys for fast dedup.
-    existing_pos_keys: set[tuple] = set()
-    if pos_hist:
-        rows = await session.execute(
-            select(
-                PositionHistory.symbol,
-                PositionHistory.close_time,
-            ).where(
-                PositionHistory.user_id == user_id,
-                PositionHistory.exchange == exchange,
-            )
-        )
-        existing_pos_keys = {(r[0], r[1]) for r in rows.all()}
-
-    for ph in pos_hist:
-        key = (ph["symbol"], ph.get("close_time"))
-        if key in existing_pos_keys:
-            continue
-        session.add(PositionHistory(
-            user_id=user_id,
-            exchange=exchange,
-            symbol=ph["symbol"],
-            side=ph["side"],
-            size=ph["size"],
-            entry_price=ph["entry_price"],
-            exit_price=ph.get("exit_price", 0.0),
-            pnl=ph["pnl"],
-            pnl_percent=ph.get("pnl_percent", 0.0),
-            leverage=ph.get("leverage", 1.0),
-            open_time=ph.get("open_time"),
-            close_time=ph.get("close_time"),
-            close_reason=ph.get("close_reason"),
-            contract_size=ph.get("contract_size", 1.0),
-            updated_at=now,
-        ))
-
-    # ── Upsert order history (skip duplicates) ──────────────────────
-    ord_hist = data.get("order_history", [])
-    existing_ord_keys: set[tuple] = set()
-    if ord_hist:
-        rows = await session.execute(
-            select(
-                OrderHistory.symbol,
-                OrderHistory.timestamp,
-                OrderHistory.side,
-                OrderHistory.price,
-            ).where(
-                OrderHistory.user_id == user_id,
-                OrderHistory.exchange == exchange,
-            )
-        )
-        existing_ord_keys = {(r[0], r[1], r[2], r[3]) for r in rows.all()}
-
-    for oh in ord_hist:
-        key = (oh["symbol"], oh["timestamp"], oh["side"], oh["price"])
-        if key in existing_ord_keys:
-            continue
-        session.add(OrderHistory(
-            user_id=user_id,
-            exchange=exchange,
-            symbol=oh["symbol"],
-            type=oh["type"],
-            side=oh["side"],
-            side_action=oh.get("side_action"),
-            price=oh["price"],
-            amount=oh["amount"],
-            filled=oh.get("filled", 0.0),
-            filled_price=oh.get("filled_price"),
-            cost=oh.get("cost", 0.0),
-            status=oh["status"],
-            timestamp=oh["timestamp"],
-            fee=oh.get("fee"),
-            fee_currency=oh.get("fee_currency"),
-            leverage=oh.get("leverage"),
-            reduce_only=oh.get("reduce_only"),
-            updated_at=now,
-        ))
+    await persist_phase2a_sync_payload(session, user_id, exchange, data, now)
 
     # ── Snapshot row ────────────────────────────────────────────────
     total_pnl = sum(p["pnl"] for p in data["positions"])

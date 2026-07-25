@@ -23,6 +23,8 @@ import { PositionAlertsPanel } from "@/components/portfolio/position-alerts-pane
 import { PositionDesk } from "@/components/portfolio/position-desk";
 import { RiskMetricsPanel } from "@/components/portfolio/risk-metrics-panel";
 import { DcaPanel } from "@/components/portfolio/dca-panel";
+import { SyncStatusPanel, statusLabel } from "@/components/portfolio/sync-status-panel";
+import { formatUtcDateTime } from "@/lib/date-format";
 import type { PortfolioResponse, PositionAlertItem, PositionAlertsResponse } from "@/lib/types";
 import type { PriceMap } from "@/hooks/use-price-stream";
 
@@ -159,8 +161,13 @@ export function PortfolioDashboard({
   const positionHistory = portfolio?.position_history ?? [];
   const orderHistory = portfolio?.order_history ?? [];
   const snapshot = portfolio?.snapshot ?? null;
+  const sync = portfolio?.sync ?? [];
+  const futuresAccount = portfolio?.futures_account ?? null;
+  const partial = portfolio?.partial ?? false;
   const isStale = portfolio?.stale ?? true;
   const lastRefreshed = portfolio?.last_refreshed ?? null;
+  const positionsHistoryCoverage = sync.find((item) => item.stream === "positions_history");
+  const orderHistoryCoverage = sync.find((item) => item.stream === "orders_history");
 
   // Compute the SSE symbol list whenever balances/positions change.
   const streamSymbols = useMemo(
@@ -497,6 +504,12 @@ export function PortfolioDashboard({
       {/* Dynamic DCA — per-position actionable recommendations */}
       <DcaPanel token={token} exchange={exchange} />
 
+      <SyncStatusPanel
+        sync={sync}
+        futuresAccount={futuresAccount}
+        partial={partial}
+      />
+
       {/* Tabs */}
       <Tabs defaultValue="balances" className="w-full">
         <TabsList>
@@ -507,13 +520,13 @@ export function PortfolioDashboard({
             Positions ({positions.length})
           </TabsTrigger>
           <TabsTrigger value="position-history">
-            Position History ({positionHistory.length})
+            Position History ({positionHistory.length}){positionsHistoryCoverage ? ` · ${statusLabel(positionsHistoryCoverage.status)}` : ""}
           </TabsTrigger>
           <TabsTrigger value="trades">
             Trades ({trades.length})
           </TabsTrigger>
           <TabsTrigger value="order-history">
-            Order History ({orderHistory.length})
+            Order History ({orderHistory.length}){orderHistoryCoverage ? ` · ${statusLabel(orderHistoryCoverage.status)}` : ""}
           </TabsTrigger>
           <TabsTrigger value="analytics">
             Analytics
@@ -548,12 +561,7 @@ export function PortfolioDashboard({
 
 /** Format an ISO timestamp as a compact human-readable string. */
 function formatRelative(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
+  return formatUtcDateTime(iso);
 }
 
 export default PortfolioDashboard;

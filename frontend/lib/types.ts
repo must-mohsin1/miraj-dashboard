@@ -175,6 +175,8 @@ export interface TradeItem {
 
 /** A single closed/historical position row. */
 export interface PositionHistoryItem {
+  /** Stable source position id from the exchange; absent for pre-Phase-2A rows. */
+  exchange_position_id?: string | null;
   symbol: string;
   side: string;
   size: number;
@@ -191,6 +193,8 @@ export interface PositionHistoryItem {
 
 /** A single historical (closed/cancelled) order row. */
 export interface OrderHistoryItem {
+  /** Stable source order id from the exchange; absent for pre-Phase-2A rows. */
+  exchange_order_id?: string | null;
   symbol: string;
   type: string;
   side: string;
@@ -216,6 +220,60 @@ export interface SnapshotItem {
   timestamp: string;
 }
 
+export type SyncCoverageStatus =
+  | "fresh"
+  | "stale"
+  | "partial"
+  | "error"
+  | "unavailable"
+  | "not_enabled_phase_2b"
+  | string;
+
+export type SyncCoverageStream =
+  | "positions_history"
+  | "orders_history"
+  | "futures_account_assets"
+  | "funding"
+  | "futures_transfers"
+  | "deposits"
+  | "withdrawals"
+  | string;
+
+/** Stream-specific Phase 2A synchronization coverage. */
+export interface SyncCoverageItem {
+  stream: SyncCoverageStream;
+  status: SyncCoverageStatus;
+  complete: boolean;
+  reason: string | null;
+  oldest_source_ts?: string | null;
+  newest_source_ts?: string | null;
+  rows_fetched_total: number;
+  source_total?: number | null;
+  cursor?: Record<string, unknown> | null;
+  last_success_at?: string | null;
+  last_attempt_at?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  unrecoverable_gaps?: Array<Record<string, unknown>>;
+  supported_by_exchange?: boolean | null;
+}
+
+/** Authenticated futures account snapshot. Separate from spot balances. */
+export interface FuturesAccountItem {
+  settlement_asset: string;
+  equity: number | null;
+  available_balance: number | null;
+  frozen_balance: number | null;
+  cash_balance: number | null;
+  position_margin: number | null;
+  unrealized_pnl: number | null;
+  bonus: number | null;
+  available_cash: number | null;
+  debt_amount: number | null;
+  source_ts: string;
+  synced_at: string;
+}
+
 /** Response for `GET/POST /api/v1/portfolio/mexc`. */
 export interface PortfolioResponse {
   exchange: string;
@@ -225,6 +283,12 @@ export interface PortfolioResponse {
   position_history: PositionHistoryItem[];
   order_history: OrderHistoryItem[];
   snapshot: SnapshotItem | null;
+  /** Additive Phase 2A sync coverage. Older responses may omit it. */
+  sync?: SyncCoverageItem[];
+  /** Additive Phase 2A authenticated futures wallet truth. */
+  futures_account?: FuturesAccountItem | null;
+  /** True when cached data is served with partial/error coverage. */
+  partial?: boolean;
   last_refreshed: string | null;
   stale: boolean;
 }
@@ -234,6 +298,9 @@ export interface HistoryResponse {
   exchange: string;
   position_history: PositionHistoryItem[];
   order_history: OrderHistoryItem[];
+  sync?: SyncCoverageItem[];
+  futures_account?: FuturesAccountItem | null;
+  partial?: boolean;
 }
 
 // ── Analytics (Phase 2) ────────────────────────────────────────────────────

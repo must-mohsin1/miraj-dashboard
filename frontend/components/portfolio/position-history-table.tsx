@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatUtcDateTime } from "@/lib/date-format";
 import type { PositionHistoryItem } from "@/lib/types";
 
 /**
@@ -164,12 +165,7 @@ export function PositionHistoryTable({ positions }: PositionHistoryTableProps) {
 
 /** Format an ISO timestamp as a compact date+time string. */
 function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
+  return formatUtcDateTime(iso);
 }
 
 /** Format a number with up to 8 decimal places, trimming trailing zeros. */
