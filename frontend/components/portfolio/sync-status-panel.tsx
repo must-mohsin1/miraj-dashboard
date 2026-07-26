@@ -72,7 +72,7 @@ export function SyncStatusPanel({ sync, futuresAccount, partial = false }: SyncS
           MEXC sync coverage
         </h2>
         <p className="mt-2 max-w-3xl text-sm text-[#8E8778]">
-          Shows what Miraj has synchronized from read-only MEXC fixtures and what is still outside Phase 2A.
+          Shows what Miraj has synchronized from read-only MEXC account data and what is still outside Phase 2A.
         </p>
       </div>
 
@@ -155,7 +155,7 @@ function FuturesAccountSnapshot({
   return (
     <div className="p-4">
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8E8778]">Futures account snapshot</p>
-      <h3 className="mt-2 text-base font-semibold text-[#EDE7DB]">Authenticated futures account values from the latest read-only MEXC fixture.</h3>
+      <h3 className="mt-2 text-base font-semibold text-[#EDE7DB]">Authenticated futures account values from the latest synchronized read-only MEXC account response.</h3>
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
         <div>
           <dt className="text-xs text-[#8E8778]">Settlement asset</dt>
@@ -225,7 +225,7 @@ function rowCount(item: SyncCoverageItem): string {
 function coverageDetail(item: SyncCoverageItem): string {
   if (item.status === "fresh") return "Synced successfully.";
   if (item.status === "stale") return item.last_success_at ? `Showing cached data from ${formatDate(item.last_success_at)}.` : "No recent successful sync is recorded.";
-  if (item.status === "partial") return item.reason ? `${humanize(item.reason)}. Rows synced: ${rowCount(item)}.` : "The exchange boundary or fixture stopped before complete coverage was proven.";
+  if (item.status === "partial") return item.reason ? `${humanize(item.reason)}. Rows synced: ${rowCount(item)}.` : "The exchange boundary or response stopped before complete coverage was proven.";
   if (item.status === "error") return item.last_success_at ? `Showing the last cached data from ${formatDate(item.last_success_at)}. Error details are redacted.${item.error_code ? ` Code: ${item.error_code}.` : ""}` : `No cached data is available for this stream. Error details are redacted.${item.error_code ? ` Code: ${item.error_code}.` : ""}`;
   if (item.status === "unavailable") return unavailableDetail(item);
   if (item.status === "not_enabled_phase_2b") return phase2BDetail(item);

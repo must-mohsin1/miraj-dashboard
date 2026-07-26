@@ -699,16 +699,9 @@ def _fetch_positions_history(
             pnl_percent = 0.0
 
         # Close reason: state "3" = closed. MEXC does not expose an explicit
-        # liquidation code on the history endpoint; infer from an extremely
-        # negative profit ratio when available.
+        # liquidation code on the history endpoint; do not infer liquidation
+        # from ROI/profitRatio alone.
         close_reason = "closed"
-        profit_ratio = raw.get("profitRatio")
-        if profit_ratio is not None:
-            try:
-                if float(profit_ratio) <= -0.9:
-                    close_reason = "liquidated"
-            except (ValueError, TypeError):
-                pass
 
         result.append({
             "user_id": user_id,
@@ -1023,7 +1016,7 @@ def _normalise_mexc_position_rows(exchange: Any, rows: List[Dict[str, Any]], use
             "leverage": _safe_float(raw.get("leverage")) or 1.0,
             "open_time": open_time,
             "close_time": close_time,
-            "close_reason": "liquidated" if profit_ratio is not None and profit_ratio <= -0.9 else "closed",
+            "close_reason": "closed",
             "contract_size": contract_size,
             "source_state": str(raw.get("state")) if raw.get("state") is not None else None,
             "source_updated_at": close_time,

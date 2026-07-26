@@ -24,7 +24,7 @@ from backend import database
 from backend.auth import hash_password
 from backend.database import Base, set_db_path
 from backend.models import ExchangeSyncState, FuturesAccountSnapshot, OrderHistory, PortfolioBalance, PositionHistory, User
-from backend.services.exchange_service import fetch_history, fetch_portfolio
+from backend.services.exchange_service import _fetch_positions_history, fetch_history, fetch_portfolio
 from backend.tests.fixtures.phase2a_mexc import (
     FUTURES_ACCOUNT_ASSETS,
     MEXC_510_REDACTED_ERROR,
@@ -34,6 +34,7 @@ from backend.tests.fixtures.phase2a_mexc import (
     PARTIAL_CLOSE_DUPLICATES,
     POSITION_HISTORY_237,
     history_order,
+    history_position,
     paged_rows,
 )
 
@@ -161,6 +162,29 @@ async def test_fetch_history_exhausts_mexc_pages_beyond_200_and_returns_source_i
     assert data["sync"]["positions_history"]["cursor"] == {"page_num": 3, "page_size": 100, "exhausted": True}
     assert data["sync"]["positions_history"]["rows_fetched_total"] == 237
     assert data["sync"]["orders_history"]["source_total"] == 225
+
+
+async def test_phase2a_position_normaliser_does_not_infer_liquidation_from_negative_roi():
+    row = history_position("negative-roi-without-close-reason", pnl="-95.0")
+    row["profitRatio"] = "-0.95"
+    exchange = MockMexcExchange(position_pages=[[row]], order_pages=[])
+
+    data = await fetch_history(exchange, user_id=7)
+
+    assert data["position_history"][0]["pnl_percent"] == -95.0
+    assert data["position_history"][0]["reported_roi_pct"] == -95.0
+    assert data["position_history"][0]["close_reason"] == "closed"
+
+
+def test_legacy_positions_history_does_not_infer_liquidation_from_negative_roi():
+    row = history_position("legacy-negative-roi-without-close-reason", pnl="-95.0")
+    row["profitRatio"] = "-0.95"
+    exchange = MockMexcExchange(position_pages=[[row]], order_pages=[])
+
+    positions = _fetch_positions_history(exchange, user_id=7, exchange_name="mexc")
+
+    assert positions[0]["pnl_percent"] == -95.0
+    assert positions[0]["close_reason"] == "closed"
 
 
 async def test_phase2a_upsert_is_source_id_idempotent_and_stream_state_isolated(session):

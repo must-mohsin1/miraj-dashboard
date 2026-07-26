@@ -82,9 +82,9 @@ export function ConnectForm({ token, exchange }: ConnectFormProps) {
             rest and never exposed to the client after submission.
           </p>
           {exchange === "mexc" && (
-            <div className="border-l border-slate-700 pl-3 text-sm text-slate-300">
+            <div className="border-l border-[#2A2620] pl-3 text-sm text-[#EDE7DB]">
               <p>Use read-only MEXC permissions only.</p>
-              <p className="mt-1 text-slate-400">
+              <p className="mt-1 text-[#8E8778]">
                 Miraj uses mocked/redacted fixtures for Phase 2A local
                 verification.
               </p>

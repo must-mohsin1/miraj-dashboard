@@ -79,7 +79,8 @@ describe("SyncStatusPanel", () => {
     render(<SyncStatusPanel sync={ALL_STATES} futuresAccount={FUTURES_ACCOUNT} />);
 
     expect(screen.getByText("Futures account snapshot")).toBeInTheDocument();
-    expect(screen.getByText("Authenticated futures account values from the latest read-only MEXC fixture.")).toBeInTheDocument();
+    expect(screen.getByText("Authenticated futures account values from the latest synchronized read-only MEXC account response.")).toBeInTheDocument();
+    expect(screen.queryByText(/read-only MEXC fixture/i)).not.toBeInTheDocument();
     expect(screen.getByText("Settlement asset")).toBeInTheDocument();
     expect(screen.getByText("USDT")).toBeInTheDocument();
     expect(screen.getByText("Equity")).toBeInTheDocument();
