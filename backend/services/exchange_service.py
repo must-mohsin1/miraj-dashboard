@@ -32,8 +32,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -258,19 +259,8 @@ async def get_exchange(
 async def fetch_portfolio(
     exchange_instance: Any,
     user_id: int,
-) -> Dict[str, List[Dict[str, Any]]]:
-    """Fetch spot balances, futures positions, and recent trades.
-
-    Runs all three blocking ccxt calls in a thread pool with a 30 s overall
-    deadline.
-
-    Returns ``{"balances": [...], "positions": [...], "trades": [...]}`` where
-    each list element is a dict shaped to match the corresponding ORM model
-    columns for direct insert.
-
-    Raises :class:`ExchangeAuthError`, :class:`ExchangeRateLimitError`,
-    :class:`ExchangeTimeoutError`, or :class:`ExchangeError` on failure.
-    """
+) -> Dict[str, Any]:
+    """Fetch spot balances, futures positions, recent trades, and Phase 2A sync streams."""
     exchange_name = exchange_instance.id  # e.g. "mexc"
 
     try:
@@ -283,6 +273,7 @@ async def fetch_portfolio(
             trades,
             position_history,
             order_history,
+            futures_account,
         ) = await asyncio.gather(
             asyncio.to_thread(
                 _fetch_positions, exchange_instance, user_id, exchange_name
@@ -291,10 +282,13 @@ async def fetch_portfolio(
                 _fetch_trades, exchange_instance, user_id, exchange_name, balances
             ),
             asyncio.to_thread(
-                _fetch_positions_history, exchange_instance, user_id, exchange_name
+                _fetch_positions_history_with_coverage, exchange_instance, user_id, exchange_name
             ),
             asyncio.to_thread(
-                _fetch_order_history, exchange_instance, user_id, exchange_name
+                _fetch_order_history_with_coverage, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_futures_account_assets_with_coverage, exchange_instance, user_id, exchange_name
             ),
         )
     except asyncio.TimeoutError:
@@ -306,40 +300,37 @@ async def fetch_portfolio(
     except Exception as exc:
         raise _translate_ccxt_error(exc) from exc
 
+    sync = {
+        "positions_history": position_history[1],
+        "orders_history": order_history[1],
+        "futures_account_assets": futures_account[1],
+    }
     return {
         "balances": balances,
         "positions": positions,
         "trades": trades,
-        "position_history": position_history,
-        "order_history": order_history,
+        "position_history": position_history[0],
+        "order_history": order_history[0],
+        "futures_account": futures_account[0],
+        "sync": sync,
+        "partial": any(not coverage.get("complete", False) for coverage in sync.values()),
     }
 
 
 async def fetch_history(
     exchange_instance: Any,
     user_id: int,
-) -> Dict[str, List[Dict[str, Any]]]:
-    """Fetch position history and order history (closed orders) from the exchange.
-
-    Unlike :func:`fetch_portfolio`, this does **not** re-fetch balances/positions/
-    trades — it only fetches the two historical lists. Designed for the
-    ``GET /api/v1/portfolio/{exchange}/history`` endpoint which always returns
-    fresh (uncached) data.
-
-    Returns ``{"position_history": [...], "order_history": [...]}``.
-
-    Raises :class:`ExchangeAuthError`, :class:`ExchangeRateLimitError`,
-    :class:`ExchangeTimeoutError`, or :class:`ExchangeError` on failure.
-    """
+) -> Dict[str, Any]:
+    """Fetch position history and order history (closed orders) from the exchange."""
     exchange_name = exchange_instance.id  # e.g. "mexc"
 
     try:
         position_history, order_history = await asyncio.gather(
             asyncio.to_thread(
-                _fetch_positions_history, exchange_instance, user_id, exchange_name
+                _fetch_positions_history_with_coverage, exchange_instance, user_id, exchange_name
             ),
             asyncio.to_thread(
-                _fetch_order_history, exchange_instance, user_id, exchange_name
+                _fetch_order_history_with_coverage, exchange_instance, user_id, exchange_name
             ),
         )
     except asyncio.TimeoutError:
@@ -351,9 +342,15 @@ async def fetch_history(
     except Exception as exc:
         raise _translate_ccxt_error(exc) from exc
 
+    sync = {
+        "positions_history": position_history[1],
+        "orders_history": order_history[1],
+    }
     return {
-        "position_history": position_history,
-        "order_history": order_history,
+        "position_history": position_history[0],
+        "order_history": order_history[0],
+        "sync": sync,
+        "partial": any(not coverage.get("complete", False) for coverage in sync.values()),
     }
 
 
@@ -702,16 +699,9 @@ def _fetch_positions_history(
             pnl_percent = 0.0
 
         # Close reason: state "3" = closed. MEXC does not expose an explicit
-        # liquidation code on the history endpoint; infer from an extremely
-        # negative profit ratio when available.
+        # liquidation code on the history endpoint; do not infer liquidation
+        # from ROI/profitRatio alone.
         close_reason = "closed"
-        profit_ratio = raw.get("profitRatio")
-        if profit_ratio is not None:
-            try:
-                if float(profit_ratio) <= -0.9:
-                    close_reason = "liquidated"
-            except (ValueError, TypeError):
-                pass
 
         result.append({
             "user_id": user_id,
@@ -735,7 +725,7 @@ def _fetch_positions_history(
         key=lambda p: (p["close_time"] or p["open_time"] or datetime.utcnow()),
         reverse=True,
     )
-    return result[:200]  # Cap at 200 entries
+    return result
 
 
 def _fetch_order_history(
@@ -791,7 +781,7 @@ def _fetch_order_history(
     except Exception as exc:
         raise _translate_ccxt_error(exc) from exc
 
-    # ── 3. Sort by createTime descending and cap ──────────────────────────
+    # ── 3. Sort by createTime descending ─────────────────────────────────
     def _ts(o: Dict[str, Any]) -> int:
         try:
             return int(o.get("createTime", 0) or 0)
@@ -799,7 +789,6 @@ def _fetch_order_history(
             return 0
 
     orders_raw.sort(key=_ts, reverse=True)
-    orders_raw = orders_raw[:200]
 
     # ── 4. MEXC side encoding ──────────────────────────────────────────────
     #   "1" = open long  = buy   → side="buy",  side_action="Open Long"
@@ -872,6 +861,247 @@ def _fetch_order_history(
         })
 
     return result
+
+
+# ── Phase 2A MEXC sync helpers ───────────────────────────────────────────────
+
+
+def _fetch_positions_history_with_coverage(
+    exchange: Any,
+    user_id: int,
+    exchange_name: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not (exchange_name == "mexc" and hasattr(exchange, "contract_private_get_position_list_history_positions")):
+        return [], _coverage("positions_history", rows=[], status="unavailable", complete=False, reason="stream_not_supported")
+    rows, paging = _paginate_mexc_history(exchange.contract_private_get_position_list_history_positions, "positions_history")
+    normalised = _normalise_mexc_position_rows(exchange, rows, user_id, exchange_name)
+    return normalised, _coverage("positions_history", rows=normalised, **paging)
+
+
+def _fetch_order_history_with_coverage(
+    exchange: Any,
+    user_id: int,
+    exchange_name: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not (exchange_name == "mexc" and hasattr(exchange, "contract_private_get_order_list_history_orders")):
+        return [], _coverage("orders_history", rows=[], status="unavailable", complete=False, reason="stream_not_supported")
+    rows, paging = _paginate_mexc_history(exchange.contract_private_get_order_list_history_orders, "orders_history")
+    normalised = _normalise_mexc_order_rows(rows, user_id, exchange_name)
+    return normalised, _coverage("orders_history", rows=normalised, **paging)
+
+
+def _fetch_futures_account_assets_with_coverage(
+    exchange: Any,
+    user_id: int,
+    exchange_name: str,
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    if not (exchange_name == "mexc" and hasattr(exchange, "contract_private_get_account_assets")):
+        return None, _coverage("futures_account_assets", rows=[], status="unavailable", complete=False, reason="futures_account_snapshot_missing")
+    resp = exchange.contract_private_get_account_assets({}) or {}
+    err = _mexc_error(resp)
+    if err:
+        return None, _coverage("futures_account_assets", rows=[], status="error", complete=False, error_code=err[0], error_message=_redact_error(err[1]))
+    data = resp.get("data") or []
+    if isinstance(data, dict):
+        data = [data]
+    if not data:
+        return None, _coverage("futures_account_assets", rows=[], status="unavailable", complete=False, reason="futures_account_snapshot_missing")
+    raw = data[0]
+    source_ts = _mexc_datetime(raw.get("updateTime") or raw.get("timestamp")) or datetime.utcnow()
+    snapshot = {
+        "user_id": user_id,
+        "exchange": exchange_name,
+        "settlement_asset": raw.get("currency") or raw.get("asset") or "USDT",
+        "equity": _safe_float(raw.get("equity")),
+        "available_balance": _safe_float(raw.get("availableBalance")),
+        "frozen_balance": _safe_float(raw.get("frozenBalance")),
+        "cash_balance": _safe_float(raw.get("cashBalance")),
+        "position_margin": _safe_float(raw.get("positionMargin")),
+        "unrealized_pnl": _safe_float(raw.get("unrealized")),
+        "bonus": _safe_float(raw.get("bonus")),
+        "available_cash": _safe_float(raw.get("availableCash")),
+        "debt_amount": _safe_float(raw.get("debtAmount")),
+        "source_ts": source_ts,
+    }
+    return snapshot, _coverage("futures_account_assets", rows=[snapshot], status="fresh", complete=True, source_total=1, page_num=1, page_size=1, exhausted=True)
+
+
+def _paginate_mexc_history(method: Any, stream: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    rows_all: List[Dict[str, Any]] = []
+    source_total: Optional[int] = None
+    page = 1
+    page_size = 100
+    exhausted = False
+    while True:
+        resp: Dict[str, Any] = {}
+        err: Optional[Tuple[str, str]] = None
+        for attempt in range(4):
+            try:
+                resp = method({"pageSize": page_size, "pageNum": page}) or {}
+                err = _mexc_error(resp)
+                if err is None:
+                    break
+            except Exception as exc:  # pragma: no cover - defensive ccxt path
+                err = (str(getattr(exc, "code", "exchange_error")), str(exc))
+            if attempt < 3 and err and err[0] in {"429", "510", "rate_limit_error"}:
+                time.sleep(min(2 ** attempt, 4.0))
+                continue
+            status = "partial" if rows_all else "error"
+            return rows_all, {
+                "status": status,
+                "complete": False,
+                "reason": "mexc_rate_limit" if err and err[0] in {"429", "510", "rate_limit_error"} else "mexc_error",
+                "error_code": err[0] if err else "exchange_error",
+                "error_message": _redact_error(err[1] if err else "exchange error"),
+                "source_total": source_total,
+                "page_num": page,
+                "page_size": page_size,
+                "exhausted": False,
+                "unrecoverable_gaps": [{"stream": stream, "reason": "exchange_boundary_or_rate_limit", "page_num": page}],
+            }
+        page_data = resp.get("data")
+        if isinstance(page_data, list):
+            rows = page_data
+            total_pages = page
+            source_total = len(rows_all) + len(rows)
+        elif isinstance(page_data, dict):
+            rows = page_data.get("list") or page_data.get("result") or []
+            total_pages = int(page_data.get("totalPage") or page_data.get("pages") or page)
+            source_total = int(page_data.get("total") or page_data.get("totalCount") or source_total or 0) or None
+        else:
+            rows = []
+            total_pages = page
+        rows_all.extend(rows)
+        if not rows or page >= total_pages:
+            exhausted = page >= total_pages
+            break
+        page += 1
+    complete = bool(exhausted and (source_total is None or len(rows_all) >= source_total))
+    return rows_all, {
+        "status": "fresh" if complete else "partial",
+        "complete": complete,
+        "reason": None if complete else "exchange_boundary_before_source_total",
+        "source_total": source_total if source_total is not None else len(rows_all),
+        "page_num": page,
+        "page_size": page_size,
+        "exhausted": exhausted,
+        "unrecoverable_gaps": [] if complete else [{"stream": stream, "reason": "exchange_boundary_before_source_total"}],
+    }
+
+
+def _normalise_mexc_position_rows(exchange: Any, rows: List[Dict[str, Any]], user_id: int, exchange_name: str) -> List[Dict[str, Any]]:
+    markets = getattr(exchange, "markets", {}) or {}
+    result: List[Dict[str, Any]] = []
+    for raw in rows:
+        symbol = str(raw.get("symbol", "")).replace("_", "")
+        market = markets.get(symbol) or markets.get(symbol[:-4] + "/" + symbol[-4:]) if symbol else None
+        contract_size = _safe_float((market or {}).get("contractSize")) or 1.0
+        open_time = _mexc_datetime(raw.get("createTime"))
+        close_time = _mexc_datetime(raw.get("updateTime"))
+        profit_ratio = _safe_float(raw.get("profitRatio"))
+        pnl = _safe_float(raw.get("closeProfitLoss")) or 0.0
+        result.append({
+            "user_id": user_id,
+            "exchange": exchange_name,
+            "exchange_position_id": str(raw.get("positionId")) if raw.get("positionId") is not None else None,
+            "symbol": symbol,
+            "side": "long" if str(raw.get("positionType", "1")) == "1" else "short",
+            "size": _safe_float(raw.get("closeVol")) or 0.0,
+            "entry_price": _safe_float(raw.get("holdAvgPrice")) or 0.0,
+            "exit_price": _safe_float(raw.get("closeAvgPrice")) or 0.0,
+            "pnl": pnl,
+            "pnl_percent": (profit_ratio or 0.0) * 100,
+            "reported_pnl": pnl,
+            "reported_roi_pct": (profit_ratio or 0.0) * 100,
+            "leverage": _safe_float(raw.get("leverage")) or 1.0,
+            "open_time": open_time,
+            "close_time": close_time,
+            "close_reason": "closed",
+            "contract_size": contract_size,
+            "source_state": str(raw.get("state")) if raw.get("state") is not None else None,
+            "source_updated_at": close_time,
+        })
+    result.sort(key=lambda p: (p["close_time"] or p["open_time"] or datetime.utcnow()), reverse=True)
+    return result
+
+
+def _normalise_mexc_order_rows(rows: List[Dict[str, Any]], user_id: int, exchange_name: str) -> List[Dict[str, Any]]:
+    side_map = {"1": ("buy", "Open Long"), "2": ("sell", "Close Long"), "3": ("sell", "Open Short"), "4": ("buy", "Close Short")}
+    type_map = {"1": "limit", "2": "market", "5": "post_only"}
+    state_map = {"3": "filled", "4": "cancelled", "5": "partially_filled"}
+    result: List[Dict[str, Any]] = []
+    for raw in rows:
+        side, side_action = side_map.get(str(raw.get("side", "")), ("", str(raw.get("side", ""))))
+        timestamp = _mexc_datetime(raw.get("createTime")) or datetime.utcnow()
+        filled = _safe_float(raw.get("dealVol")) or 0.0
+        filled_price = _safe_float(raw.get("dealAvgPrice")) or 0.0
+        result.append({
+            "user_id": user_id,
+            "exchange": exchange_name,
+            "exchange_order_id": str(raw.get("orderId")) if raw.get("orderId") is not None else None,
+            "symbol": str(raw.get("symbol", "")).replace("_", ""),
+            "type": type_map.get(str(raw.get("orderType", "")), str(raw.get("orderType", "")) or "limit"),
+            "side": side,
+            "side_action": side_action,
+            "price": _safe_float(raw.get("price")) or 0.0,
+            "amount": _safe_float(raw.get("vol")) or 0.0,
+            "filled": filled,
+            "filled_price": filled_price,
+            "cost": filled * filled_price,
+            "status": state_map.get(str(raw.get("state", "")), str(raw.get("state", ""))),
+            "timestamp": timestamp,
+            "fee": _safe_float(raw.get("fee")) or 0.0,
+            "fee_currency": raw.get("feeCurrency") or "USDT",
+            "leverage": _safe_float(raw.get("leverage")) or 1.0,
+            "reduce_only": 1 if str(raw.get("openType", "")) == "2" else 0,
+            "source_updated_at": _mexc_datetime(raw.get("updateTime")) or timestamp,
+        })
+    result.sort(key=lambda o: o["timestamp"], reverse=True)
+    return result
+
+
+def _coverage(stream: str, rows: List[Dict[str, Any]], status: str = "fresh", complete: bool = True, reason: Optional[str] = None, source_total: Optional[int] = None, page_num: int = 1, page_size: int = 100, exhausted: bool = True, error_code: Optional[str] = None, error_message: Optional[str] = None, unrecoverable_gaps: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    times = [row.get("close_time") or row.get("timestamp") or row.get("source_ts") for row in rows]
+    times = [ts for ts in times if ts is not None]
+    return {
+        "stream": stream,
+        "status": status,
+        "complete": complete,
+        "reason": reason,
+        "oldest_source_ts": min(times) if times else None,
+        "newest_source_ts": max(times) if times else None,
+        "rows_fetched_total": len(rows),
+        "source_total": source_total if source_total is not None else len(rows),
+        "cursor": {"page_num": page_num, "page_size": page_size, "exhausted": exhausted},
+        "last_success_at": datetime.utcnow() if complete else None,
+        "last_attempt_at": datetime.utcnow(),
+        "error_code": error_code,
+        "error_message": error_message,
+        "unrecoverable_gaps": unrecoverable_gaps or [],
+    }
+
+
+def _mexc_error(resp: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    code = resp.get("code") or resp.get("status")
+    if resp.get("success") is False or str(code) in {"429", "510"}:
+        return str(code or "exchange_error"), str(resp.get("message") or resp.get("msg") or "MEXC request failed")
+    return None
+
+
+def _redact_error(message: str) -> str:
+    redacted = str(message).replace("synthetic-key", "[redacted]")
+    for token in ("apiKey", "secret", "Authorization"):
+        redacted = redacted.replace(token, "[redacted]")
+    return redacted
+
+
+def _mexc_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    try:
+        return datetime.utcfromtimestamp(int(value) / 1000.0)
+    except (TypeError, ValueError):
+        return None
 
 
 # ── Low-level helpers ────────────────────────────────────────────────────────

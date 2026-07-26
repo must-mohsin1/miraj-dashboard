@@ -29,6 +29,8 @@ class User(Base):
     portfolio_positions = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")
     portfolio_trades = relationship("PortfolioTrade", back_populates="user", cascade="all, delete-orphan")
     portfolio_snapshots = relationship("PortfolioSnapshot", back_populates="user", cascade="all, delete-orphan")
+    futures_account_snapshots = relationship("FuturesAccountSnapshot", back_populates="user", cascade="all, delete-orphan")
+    exchange_sync_states = relationship("ExchangeSyncState", back_populates="user", cascade="all, delete-orphan")
     dca_shadow_user_kill_switches = relationship("DcaShadowUserKillSwitch", back_populates="user", cascade="all, delete-orphan")
     dca_shadow_symbol_kill_switches = relationship("DcaShadowSymbolKillSwitch", back_populates="user", cascade="all, delete-orphan")
     dca_shadow_decision_history = relationship("DcaShadowDecisionHistory", back_populates="user", cascade="all, delete-orphan")
@@ -259,6 +261,64 @@ class PortfolioSnapshot(Base):
     user = relationship("User", back_populates="portfolio_snapshots")
 
 
+class FuturesAccountSnapshot(Base):
+    """Authenticated futures account truth per user/exchange/settlement asset."""
+
+    __tablename__ = "futures_account_snapshots"
+    __table_args__ = (
+        Index("ix_futures_account_snapshots_user_exchange", "user_id", "exchange", "settlement_asset", "source_ts"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exchange = Column(String(32), nullable=False)
+    settlement_asset = Column(String(32), nullable=False)
+    equity = Column(Float, nullable=True)
+    available_balance = Column(Float, nullable=True)
+    frozen_balance = Column(Float, nullable=True)
+    cash_balance = Column(Float, nullable=True)
+    position_margin = Column(Float, nullable=True)
+    unrealized_pnl = Column(Float, nullable=True)
+    bonus = Column(Float, nullable=True)
+    available_cash = Column(Float, nullable=True)
+    debt_amount = Column(Float, nullable=True)
+    source_ts = Column(DateTime, nullable=False)
+    synced_at = Column(DateTime, nullable=False)
+
+    user = relationship("User", back_populates="futures_account_snapshots")
+
+
+class ExchangeSyncState(Base):
+    """Per-user/per-exchange/per-stream synchronization status."""
+
+    __tablename__ = "exchange_sync_state"
+    __table_args__ = (
+        UniqueConstraint("user_id", "exchange", "stream", name="uq_exchange_sync_state_user_exchange_stream"),
+        Index("ix_exchange_sync_state_user_exchange", "user_id", "exchange"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exchange = Column(String(32), nullable=False)
+    stream = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False)
+    cursor_json = Column(JSON, nullable=True)
+    oldest_source_ts = Column(DateTime, nullable=True)
+    newest_source_ts = Column(DateTime, nullable=True)
+    rows_fetched_total = Column(Integer, nullable=False, default=0)
+    source_total = Column(Integer, nullable=True)
+    complete = Column(Boolean, nullable=False, default=False)
+    partial_reason = Column(String(128), nullable=True)
+    unrecoverable_gaps_json = Column(JSON, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
+    last_attempt_at = Column(DateTime, nullable=True)
+    error_code = Column(String(64), nullable=True)
+    error_message_redacted = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="exchange_sync_states")
+
+
 class DcaShadowGlobalKillSwitch(Base):
     """Global shadow-mode ADD kill switch for all users."""
 
@@ -352,10 +412,13 @@ class PositionHistory(Base):
     """
 
     __tablename__ = "position_history"
+    exchange_position_id = Column(String(128), nullable=True)
     __table_args__ = (
-        UniqueConstraint(
-            "user_id", "exchange", "symbol", "close_time",
-            name="uq_position_history_user_exchange_symbol_close",
+        Index(
+            "uq_position_history_user_exchange_source_id",
+            "user_id", "exchange", "exchange_position_id",
+            unique=True,
+            sqlite_where=exchange_position_id.is_not(None),
         ),
     )
 
@@ -374,6 +437,11 @@ class PositionHistory(Base):
     close_time = Column(DateTime, nullable=True)
     close_reason = Column(String(20), nullable=True)  # liquidated/closed/manual
     contract_size = Column(Float, nullable=True, default=1.0)
+    reported_pnl = Column(Float, nullable=True)
+    reported_roi_pct = Column(Float, nullable=True)
+    source_state = Column(String(32), nullable=True)
+    source_updated_at = Column(DateTime, nullable=True)
+    synced_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="position_history")
@@ -387,10 +455,13 @@ class OrderHistory(Base):
     """
 
     __tablename__ = "order_history"
+    exchange_order_id = Column(String(128), nullable=True)
     __table_args__ = (
-        UniqueConstraint(
-            "user_id", "exchange", "symbol", "timestamp", "side", "price",
-            name="uq_order_history_user_exchange_symbol_ts_side_price",
+        Index(
+            "uq_order_history_user_exchange_source_id",
+            "user_id", "exchange", "exchange_order_id",
+            unique=True,
+            sqlite_where=exchange_order_id.is_not(None),
         ),
     )
 
@@ -412,6 +483,8 @@ class OrderHistory(Base):
     fee_currency = Column(String(20), nullable=True, default="USDT")
     leverage = Column(Float, nullable=True, default=1.0)
     reduce_only = Column(Integer, nullable=True, default=0)
+    source_updated_at = Column(DateTime, nullable=True)
+    synced_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="order_history")
