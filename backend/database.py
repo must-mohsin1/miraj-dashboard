@@ -2,12 +2,15 @@
 
 import os
 from typing import Optional
+
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 _DB_PATH: Optional[str] = None
 _engine = None
 _session_factory = None
+_SQLITE_BUSY_TIMEOUT_MS = 30000
 
 
 class Base(DeclarativeBase):
@@ -33,8 +36,40 @@ def set_db_path(path: str) -> None:
 
 def _make_engine(db_path: str):
     """Create a new SQLAlchemy async engine for the given SQLite file."""
-    url = f"sqlite+aiosqlite:///{db_path}"
-    return create_async_engine(url, echo=False)
+    url = _sqlite_async_url(db_path)
+    engine = create_async_engine(url, echo=False, connect_args={"timeout": 30})
+    _configure_sqlite_pragmas(engine, force_wal=not _is_in_memory_sqlite(db_path))
+    return engine
+
+
+def _sqlite_async_url(db_path: str) -> str:
+    """Return a sqlite+aiosqlite URL for path-style or sqlite URL configuration."""
+    if db_path.startswith("sqlite+aiosqlite://"):
+        return db_path
+    if db_path.startswith("sqlite://"):
+        return "sqlite+aiosqlite://" + db_path.removeprefix("sqlite://")
+    return f"sqlite+aiosqlite:///{db_path}"
+
+
+def _is_in_memory_sqlite(db_path: str) -> bool:
+    """Return True when the configured SQLite database is in-memory."""
+    return db_path == ":memory:" or ":memory:" in db_path or "mode=memory" in db_path
+
+
+def _configure_sqlite_pragmas(engine, *, force_wal: bool) -> None:
+    """Install per-connection SQLite PRAGMAs for contention and integrity."""
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            if force_wal:
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cursor.close()
 
 
 def get_engine():
