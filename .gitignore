@@ -8,6 +8,7 @@ build/
 
 # Environments
 .env
+.runtime/
 .venv/
 .venv_test/
 .pytest_cache/
@@ -15,6 +16,8 @@ venv/
 
 # Database
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
