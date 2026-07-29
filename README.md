@@ -42,8 +42,16 @@ cp .env.example .env
 ### 2. Run with Docker Compose
 
 ```bash
+mkdir -p .runtime/sqlite
+export SQLITE_DATA_DIR=./.runtime/sqlite
 docker compose up --build
 ```
+
+Docker Compose mounts `SQLITE_DATA_DIR` into the backend containers at `/app/db`
+and sets their container `DATABASE_URL` to `/app/db/crypto_analysis.db`, so
+`crypto_analysis.db`, `crypto_analysis.db-wal`, and `crypto_analysis.db-shm`
+share one ignored host directory. The non-Docker `DATABASE_URL` in `.env`
+remains a local Python connection string.
 
 - **Backend API** → http://localhost:8000
 - **Dashboard** → http://localhost:8501
@@ -159,6 +167,7 @@ docker compose up --build
 | Variable              | Required | Default | Description                               |
 |-----------------------|----------|---------|-------------------------------------------|
 | `DATABASE_URL`        | No       | `sqlite+aiosqlite:///./miraj.db` | Database connection string |
+| `SQLITE_DATA_DIR`     | Docker Compose | `./.runtime/sqlite` | Host directory bind source mounted to `/app/db`; Compose sets backend containers to `DATABASE_URL=/app/db/crypto_analysis.db` |
 | `JWT_SECRET_KEY`      | **Yes**  | —       | JWT signing secret (generate!)            |
 | `JWT_EXPIRE_MINUTES`  | No       | 60      | Token expiry in minutes                   |
 | `TELEGRAM_BOT_TOKEN`  | No       | —       | Telegram bot token (alerts + digest)      |
