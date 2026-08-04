@@ -192,6 +192,18 @@ class JournalTagStat(BaseModel):
     winning_trades: int = Field(description="Entries with PnL > 0")
     losing_trades: int = Field(description="Entries with PnL < 0")
     win_rate: float = Field(description="Win rate (0–100) of decisive trades")
+    avg_pnl: float = Field(0.0, description="Mean PnL per tagged entry")
+
+
+class StrategyInsightCard(BaseModel):
+    """Evidence-based strategy insight (Phase 4) — descriptive only."""
+
+    id: str
+    severity: str  # positive | negative | warning | neutral
+    title: str
+    body: str
+    evidence_tag: str | None = None
+    evidence_count: int = 0
 
 
 class JournalSummaryResponse(BaseModel):
@@ -199,9 +211,19 @@ class JournalSummaryResponse(BaseModel):
 
     exchange: str
     total_entries: int = Field(description="Total journal entries (all tags)")
+    linked_to_position: int = Field(
+        0, description="Entries with position_id set (linked to closed position)"
+    )
+    unlinked_to_position: int = Field(
+        0, description="Entries without a closed-position link"
+    )
     tags: Dict[str, JournalTagStat] = Field(
         default_factory=dict,
         description="Per-tag stats keyed by tag name (lowercased). Untagged entries → 'untagged'.",
+    )
+    insights: List[StrategyInsightCard] = Field(
+        default_factory=list,
+        description="Phase 4 strategy insight cards with evidence tags.",
     )
 
 
@@ -1179,10 +1201,15 @@ async def get_journal_summary_route(
     return JournalSummaryResponse(
         exchange=exchange_slug,
         total_entries=summary.get("total_entries", 0),
+        linked_to_position=int(summary.get("linked_to_position") or 0),
+        unlinked_to_position=int(summary.get("unlinked_to_position") or 0),
         tags={
             tag: JournalTagStat(**stats)
             for tag, stats in summary.get("tags", {}).items()
         },
+        insights=[
+            StrategyInsightCard(**item) for item in (summary.get("insights") or [])
+        ],
     )
 
 

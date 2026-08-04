@@ -1291,13 +1291,28 @@ export interface JournalTagStat {
   losing_trades: number;
   /** Win rate (0–100) of decisive trades. */
   win_rate: number;
+  /** Mean PnL per tagged entry. */
+  avg_pnl?: number;
+}
+
+/** Evidence-based strategy insight card (Phase 4). */
+export interface StrategyInsightCard {
+  id: string;
+  severity: "positive" | "negative" | "warning" | "neutral" | string;
+  title: string;
+  body: string;
+  evidence_tag?: string | null;
+  evidence_count?: number;
 }
 
 /** Response for `GET /api/v1/analytics/{exchange}/journal-summary`. */
 export interface JournalSummaryResponse {
   exchange: string;
   total_entries: number;
+  linked_to_position?: number;
+  unlinked_to_position?: number;
   tags: Record<string, JournalTagStat>;
+  insights?: StrategyInsightCard[];
 }
 
 /** Response for `POST /api/v1/journal/{id}/screenshot`. */

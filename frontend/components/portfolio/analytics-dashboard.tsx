@@ -25,6 +25,7 @@ import { TradeAttributionTable } from "@/components/portfolio/trade-attribution-
 import { ScanAccuracyChart } from "@/components/portfolio/scan-accuracy-chart";
 import { HealthScorePanel } from "@/components/portfolio/health-score-panel";
 import { BenchmarkComparison } from "@/components/portfolio/benchmark-comparison";
+import { StrategyInsightPanel } from "@/components/portfolio/strategy-insight-panel";
 import { ClosedPositionBreakdowns } from "@/components/portfolio/closed-position-breakdowns";
 import { ClosedPositionCalendar } from "@/components/portfolio/closed-position-calendar";
 import {
@@ -246,6 +247,7 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
         <TabsTrigger value="calendar">P&amp;L Calendar</TabsTrigger>
         <TabsTrigger value="allocation">Allocation</TabsTrigger>
         <TabsTrigger value="attribution">Trade Attribution</TabsTrigger>
+        <TabsTrigger value="strategy">Strategy</TabsTrigger>
         <TabsTrigger value="health">Health Score</TabsTrigger>
         <TabsTrigger value="benchmark">Benchmark</TabsTrigger>
       </TabsList>
@@ -415,12 +417,17 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
         </div>
       </TabsContent>
 
-      {/* ── Tab 5: Health Score ── */}
+      {/* ── Tab 5: Strategy / journal loop (Phase 4) ── */}
+      <TabsContent value="strategy">
+        <StrategyInsightPanel token={token} exchange={exchange} />
+      </TabsContent>
+
+      {/* ── Tab 6: Health Score ── */}
       <TabsContent value="health">
         <HealthScorePanel token={token} exchange={exchange} />
       </TabsContent>
 
-      {/* ── Tab 6: Benchmark ── */}
+      {/* ── Tab 7: Benchmark ── */}
       <TabsContent value="benchmark">
         <BenchmarkComparison token={token} exchange={exchange} />
       </TabsContent>
