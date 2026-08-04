@@ -293,6 +293,40 @@ export interface PortfolioResponse {
   stale: boolean;
 }
 
+// ── Capital flow ledger (Phase 2B) ─────────────────────────────────────────
+
+/** Ledger entry type from capital-flow ingestion. */
+export type CapitalFlowEntryType =
+  | "funding"
+  | "futures_transfer"
+  | "deposit"
+  | "withdrawal"
+  | string;
+
+/** A single capital-flow ledger row from `GET .../capital-flow`. */
+export interface CapitalFlowEntry {
+  id: number;
+  entry_type: CapitalFlowEntryType;
+  exchange_entry_id?: string | null;
+  asset: string;
+  amount?: number | null;
+  signed_amount?: number | null;
+  status?: string | null;
+  occurred_at?: string | null;
+  source_updated_at?: string | null;
+  synced_at: string;
+}
+
+/** Response for `GET /api/v1/portfolio/{exchange}/capital-flow`. */
+export interface CapitalFlowResponse {
+  exchange: string;
+  entries: CapitalFlowEntry[];
+  sync: SyncCoverageItem[];
+  partial: boolean;
+  limit: number;
+  offset: number;
+}
+
 /** Response envelope for `GET /api/v1/history`. */
 export interface HistoryResponse {
   exchange: string;

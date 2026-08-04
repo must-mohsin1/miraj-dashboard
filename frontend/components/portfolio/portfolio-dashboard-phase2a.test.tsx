@@ -40,6 +40,9 @@ jest.mock("@/components/portfolio/risk-metrics-panel", () => ({
 jest.mock("@/components/portfolio/dca-panel", () => ({
   DcaPanel: () => <div>DCA panel</div>,
 }));
+jest.mock("@/components/portfolio/capital-flow-table", () => ({
+  CapitalFlowTable: () => <div>Capital flow table</div>,
+}));
 
 function coverage(overrides: Partial<SyncCoverageItem>): SyncCoverageItem {
   return {
