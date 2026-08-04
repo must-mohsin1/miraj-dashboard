@@ -31,6 +31,7 @@ class User(Base):
     portfolio_snapshots = relationship("PortfolioSnapshot", back_populates="user", cascade="all, delete-orphan")
     futures_account_snapshots = relationship("FuturesAccountSnapshot", back_populates="user", cascade="all, delete-orphan")
     exchange_sync_states = relationship("ExchangeSyncState", back_populates="user", cascade="all, delete-orphan")
+    capital_flow_ledger = relationship("CapitalFlowLedger", back_populates="user", cascade="all, delete-orphan")
     dca_shadow_user_kill_switches = relationship("DcaShadowUserKillSwitch", back_populates="user", cascade="all, delete-orphan")
     dca_shadow_symbol_kill_switches = relationship("DcaShadowSymbolKillSwitch", back_populates="user", cascade="all, delete-orphan")
     dca_shadow_decision_history = relationship("DcaShadowDecisionHistory", back_populates="user", cascade="all, delete-orphan")
@@ -317,6 +318,31 @@ class ExchangeSyncState(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="exchange_sync_states")
+
+
+class CapitalFlowLedger(Base):
+    """Idempotent capital-flow ledger (funding, transfers, deposits, withdrawals)."""
+
+    __tablename__ = "capital_flow_ledger"
+    __table_args__ = (
+        Index("ix_capital_flow_user_exchange_occurred", "user_id", "exchange", "occurred_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exchange = Column(String(32), nullable=False)
+    entry_type = Column(String(32), nullable=False)
+    exchange_entry_id = Column(String(128), nullable=True)
+    asset = Column(String(32), nullable=False)
+    amount = Column(Float, nullable=True)
+    signed_amount = Column(Float, nullable=True)
+    status = Column(String(32), nullable=True)
+    occurred_at = Column(DateTime, nullable=True)
+    source_updated_at = Column(DateTime, nullable=True)
+    synced_at = Column(DateTime, nullable=False)
+    raw_json = Column(Text, nullable=True)
+
+    user = relationship("User", back_populates="capital_flow_ledger")
 
 
 class DcaShadowGlobalKillSwitch(Base):
