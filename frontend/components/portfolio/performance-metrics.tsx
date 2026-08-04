@@ -140,10 +140,50 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
         positive={pnlPositive}
         negative={!pnlPositive}
         hint={
-          <>
-            <span>{metrics.total_pnl_basis || "MEXC-reported closed-position PnL"}</span>
-            <span>Account return unavailable — {readableReason(metrics.account_return_pct_reason || metrics.total_pnl_percent_reason)}</span>
-          </>
+          <span>{metrics.total_pnl_basis || "MEXC-reported closed-position PnL"}</span>
+        }
+        className="col-span-2 sm:col-span-1 lg:col-span-1"
+      />
+
+      <StatCard
+        label="Account return"
+        value={
+          metrics.account_return_pct === null || metrics.account_return_pct === undefined
+            ? "—"
+            : `${metrics.account_return_pct >= 0 ? "+" : ""}${metrics.account_return_pct.toFixed(2)}%`
+        }
+        icon={<TrendingUp className="h-4 w-4" />}
+        positive={(metrics.account_return_pct ?? 0) > 0}
+        negative={(metrics.account_return_pct ?? 0) < 0}
+        hint={
+          metrics.account_return_pct !== null && metrics.account_return_pct !== undefined
+            ? (
+                <>
+                  <span>
+                    Cash-flow-adjusted
+                    {typeof metrics.net_account_profit_usd === "number"
+                      ? ` · net profit $${metrics.net_account_profit_usd.toFixed(2)}`
+                      : ""}
+                  </span>
+                  {typeof metrics.opening_equity === "number" &&
+                    typeof metrics.ending_equity === "number" && (
+                      <span>
+                        Open ${metrics.opening_equity.toFixed(2)} → end $
+                        {metrics.ending_equity.toFixed(2)}
+                      </span>
+                    )}
+                </>
+              )
+            : (
+                <span>
+                  Unavailable —{" "}
+                  {readableReason(
+                    metrics.account_return_pct_reason ||
+                      metrics.total_pnl_percent_reason ||
+                      metrics.unavailable_reason,
+                  )}
+                </span>
+              )
         }
         className="col-span-2 sm:col-span-1 lg:col-span-1"
       />

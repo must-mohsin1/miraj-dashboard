@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import PortfolioBalance, PortfolioSnapshot, PositionHistory, TradeJournalEntry
+from backend.services.phase3_account_return import compute_account_return
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,9 @@ async def compute_performance_metrics(
 ) -> Dict[str, Any]:
     """Compute trading performance metrics from closed positions.
 
-    Phase 0 only supports closed-position realised PnL reconstruction. Account
-    return, conventional account-equity drawdown, and conventional Sharpe remain
-    unavailable until capital/equity history is complete.
+    Closed-position realised PnL is always reconstructed from PositionHistory.
+    Phase 3 adds cash-flow-adjusted account return when futures equity snapshots
+    and complete external capital-flow coverage exist.
     """
     result = await session.execute(
         select(PositionHistory)
@@ -50,9 +51,11 @@ async def compute_performance_metrics(
     positions: List[PositionHistory] = list(result.scalars().all())
 
     total_trades = len(positions)
+    account = await compute_account_return(session, user_id, exchange)
 
     if total_trades == 0:
-        return _empty_metrics()
+        metrics = _empty_metrics()
+        return _merge_account_return(metrics, account)
 
     pnls = [float(p.pnl or 0.0) for p in positions]
 
@@ -90,7 +93,7 @@ async def compute_performance_metrics(
     rounded_drawdown_usd = round(realised_pnl_drawdown_usd, 2)
     rounded_drawdown_pct = round(realised_pnl_drawdown_pct, 2) if realised_pnl_drawdown_pct is not None else None
 
-    return {
+    metrics = {
         "win_rate": round(win_rate, 2),
         "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
         "trade_quality_score": rounded_trade_quality,
@@ -115,19 +118,17 @@ async def compute_performance_metrics(
         "worst_trade": round(worst_trade, 2),
         "total_pnl": round(total_pnl, 2),
         "total_pnl_basis": "MEXC-reported closed-position PnL",
+        # Never sum per-position ROI into an account return %.
         "total_pnl_percent": None,
-        "total_pnl_percent_reason": "capital_history_missing",
-        "account_return_pct": None,
-        "account_return_pct_reason": "capital_history_missing",
+        "total_pnl_percent_reason": "not_a_valid_account_return",
         "source": "PositionHistory.pnl",
         "basis": "closed_position_reconstruction",
-        "complete": False,
-        "unavailable_reason": "capital_history_missing",
     }
+    return _merge_account_return(metrics, account)
 
 
 def _empty_metrics() -> Dict[str, Any]:
-    """Return metrics with unsupported account-return fields marked unavailable."""
+    """Return closed-trade metrics zeros; account-return fields filled by merger."""
     return {
         "win_rate": 0.0,
         "profit_factor": None,
@@ -152,14 +153,32 @@ def _empty_metrics() -> Dict[str, Any]:
         "total_pnl": 0.0,
         "total_pnl_basis": "MEXC-reported closed-position PnL",
         "total_pnl_percent": None,
-        "total_pnl_percent_reason": "capital_history_missing",
-        "account_return_pct": None,
-        "account_return_pct_reason": "capital_history_missing",
+        "total_pnl_percent_reason": "not_a_valid_account_return",
         "source": "PositionHistory.pnl",
         "basis": "closed_position_reconstruction",
-        "complete": False,
-        "unavailable_reason": "capital_history_missing",
     }
+
+
+def _merge_account_return(metrics: Dict[str, Any], account: Dict[str, Any]) -> Dict[str, Any]:
+    """Overlay Phase 3 account-return fields onto closed-position metrics."""
+    reason = account.get("account_return_pct_reason") or account.get("reason")
+    available = account.get("account_return_pct") is not None
+    metrics["account_return_pct"] = account.get("account_return_pct")
+    metrics["account_return_pct_reason"] = None if available else reason
+    metrics["net_account_profit_usd"] = account.get("net_account_profit_usd")
+    metrics["net_account_profit_usd_reason"] = (
+        None if account.get("net_account_profit_usd") is not None else reason
+    )
+    metrics["opening_equity"] = account.get("opening_equity")
+    metrics["ending_equity"] = account.get("ending_equity")
+    metrics["net_external_flows"] = account.get("net_external_flows")
+    metrics["account_return_basis"] = account.get("basis")
+    metrics["complete"] = bool(available)
+    metrics["unavailable_reason"] = None if available else reason
+    # total_pnl_percent remains null; expose reason aligned with account return gate
+    if not available:
+        metrics["total_pnl_percent_reason"] = reason or "capital_history_missing"
+    return metrics
 
 
 def _compute_max_drawdown(pnls: List[float]) -> tuple[float, Optional[float]]:

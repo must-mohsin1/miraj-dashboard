@@ -128,7 +128,23 @@ describe("SyncStatusPanel", () => {
     expect(screen.getByText("$1,200.50")).toBeInTheDocument();
     expect(screen.getByText("Jul 25, 2026, 20:00 UTC")).toBeInTheDocument();
     expect(screen.getByText("Jul 25, 2026, 20:01 UTC")).toBeInTheDocument();
-    expect(screen.queryByText("Account return")).not.toBeInTheDocument();
+    expect(screen.queryByText("Account return unavailable")).toBeInTheDocument();
+  });
+
+  it("renders account return when Phase 3 value is provided", () => {
+    render(
+      <SyncStatusPanel
+        sync={ALL_CAPITAL_FRESH}
+        futuresAccount={FUTURES_ACCOUNT}
+        accountReturnPct={12.5}
+        netAccountProfitUsd={150}
+      />,
+    );
+
+    expect(screen.getByText("Account return")).toBeInTheDocument();
+    expect(screen.getByText("+12.50%")).toBeInTheDocument();
+    expect(screen.getByText(/net profit \+\$150\.00/)).toBeInTheDocument();
+    expect(screen.queryByText("Account return unavailable")).not.toBeInTheDocument();
   });
 
   it("renders partial history and capital-flow/account-return copy without lifetime-complete claims", () => {
@@ -146,7 +162,7 @@ describe("SyncStatusPanel", () => {
     expect(screen.getByText("Account return unavailable")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Account return needs opening equity and complete capital-flow history. Phase 2B does not calculate it.",
+        /Account return needs opening futures equity and complete external capital-flow history/,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Complete history/i)).not.toBeInTheDocument();
@@ -164,7 +180,7 @@ describe("SyncStatusPanel", () => {
     expect(screen.getByText("Account return unavailable")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Account return needs opening equity and complete capital-flow history. Phase 2B does not calculate it.",
+        /Account return needs opening futures equity and complete external capital-flow history/,
       ),
     ).toBeInTheDocument();
   });
