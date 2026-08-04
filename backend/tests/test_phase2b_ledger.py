@@ -100,10 +100,24 @@ def test_idless_rows_get_stable_synthetic_exchange_entry_id():
     assert a["exchange_entry_id"]
     assert a["exchange_entry_id"] == b["exchange_entry_id"]
     assert a["exchange_entry_id"].startswith("synth:")
-    # deterministic for same inputs
+    # deterministic for same inputs (symbol + positionType disambiguate concurrent settlements)
     assert a["exchange_entry_id"] == synthetic_exchange_entry_id(
-        a["entry_type"], a["asset"], a["amount"], a["occurred_at"]
+        a["entry_type"],
+        a["asset"],
+        a["amount"],
+        a["occurred_at"],
+        symbol=str(FUNDING_IDLESS.get("symbol") or ""),
+        extra=str(FUNDING_IDLESS.get("positionType") or ""),
     )
+
+
+def test_idless_funding_synth_id_differs_by_symbol():
+    from backend.services.phase2b_ledger import coerce_funding_row
+    from backend.tests.fixtures.phase2b_ledger import funding_row
+
+    btc = coerce_funding_row(funding_row(None, funding="-0.10", offset=1))
+    eth = coerce_funding_row({**funding_row(None, funding="-0.10", offset=1), "symbol": "ETH_USDT"})
+    assert btc["exchange_entry_id"] != eth["exchange_entry_id"]
 
 
 async def test_persist_is_idempotent_on_double_ingest(session):
@@ -339,3 +353,129 @@ async def test_funding_resultlist_shape_is_not_false_partial():
     assert len(data["futures_transfers"]) == 1
     assert data["sync"]["futures_transfers"]["status"] == "fresh"
     assert data["sync"]["futures_transfers"]["complete"] is True
+
+
+def test_mexc_history_page_params_include_snake_and_camel():
+    """Funding docs use page_num/page_size; positions often use pageNum/pageSize."""
+    from backend.services.exchange_service import _mexc_history_page_params
+
+    params = _mexc_history_page_params(3, 20)
+    assert params["pageNum"] == 3
+    assert params["page_num"] == 3
+    assert params["pageSize"] == 20
+    assert params["page_size"] == 20
+
+
+class SnakeOnlyFundingExchange:
+    """Mirrors prod: only snake_case page_num advances; camelCase is ignored."""
+
+    id = "mexc"
+    markets = {}
+
+    def __init__(self, pages: list[list[dict]]):
+        self.pages = pages
+        self.requests: list[dict] = []
+
+    def contract_private_get_position_funding_records(self, params):
+        self.requests.append(dict(params))
+        # Only honor snake_case — camelCase pageNum alone would stick on page 1.
+        page_num = int(params.get("page_num") or 1)
+        page = self.pages[page_num - 1] if 1 <= page_num <= len(self.pages) else []
+        return {
+            "success": True,
+            "data": {
+                "pageSize": 20,
+                "totalCount": sum(len(p) for p in self.pages),
+                "totalPage": len(self.pages),
+                "currentPage": page_num,
+                "resultList": page,
+            },
+        }
+
+    def contract_private_get_account_transfer_record(self, params):
+        return {
+            "success": True,
+            "data": {"resultList": [], "totalPage": 1, "totalCount": 0, "currentPage": 1},
+        }
+
+    def fetch_deposits(self, code=None, since=None, limit=None, params=None):
+        return []
+
+    def fetch_withdrawals(self, code=None, since=None, limit=None, params=None):
+        return []
+
+
+def _attach_empty_position_order(exchange):
+    exchange.contract_private_get_position_list_history_positions = lambda params: {
+        "success": True, "data": {"list": [], "totalPage": 1, "total": 0}
+    }
+    exchange.contract_private_get_order_list_history_orders = lambda params: {
+        "success": True, "data": {"list": [], "totalPage": 1, "total": 0}
+    }
+    return exchange
+
+
+async def test_funding_pagination_uses_snake_case_and_keeps_all_unique_ids():
+    """Regression: prod claimed 80 fresh funding rows but ledger held 20.
+
+    Root cause: pageNum/pageSize ignored by funding endpoint → 4× same page of 20.
+    Fix: send page_num/page_size (and camelCase), dedupe by id.
+    """
+    from backend.services.exchange_service import fetch_history
+    from backend.tests.fixtures.phase2b_ledger import funding_row
+
+    pages = [
+        [funding_row(f"fund-p1-{i}", funding=f"-0.0{i}", offset=i) for i in range(20)],
+        [funding_row(f"fund-p2-{i}", funding=f"-0.1{i}", offset=20 + i) for i in range(20)],
+        [funding_row(f"fund-p3-{i}", funding=f"-0.2{i}", offset=40 + i) for i in range(20)],
+        [funding_row(f"fund-p4-{i}", funding=f"-0.3{i}", offset=60 + i) for i in range(20)],
+    ]
+    exchange = _attach_empty_position_order(SnakeOnlyFundingExchange(pages))
+
+    data = await fetch_history(exchange, user_id=9)
+
+    assert len(data["funding"]) == 80
+    assert data["sync"]["funding"]["rows_fetched_total"] == 80
+    assert data["sync"]["funding"]["source_total"] == 80
+    assert data["sync"]["funding"]["status"] == "fresh"
+    assert data["sync"]["funding"]["complete"] is True
+    assert data["sync"]["funding"].get("reason") is None
+    ids = {row["exchange_entry_id"] for row in data["funding"]}
+    assert len(ids) == 80
+    # Must have advanced with snake_case page_num (not stuck on page 1).
+    assert [r.get("page_num") for r in exchange.requests] == [1, 2, 3, 4]
+    assert all("pageNum" in r and "page_num" in r for r in exchange.requests)
+
+
+async def test_funding_duplicate_pages_do_not_inflate_complete_count():
+    """If page_num is ignored and every page repeats, do not claim complete@totalCount."""
+    from backend.services.exchange_service import fetch_history
+    from backend.tests.fixtures.phase2b_ledger import funding_row
+
+    page1 = [funding_row(f"dup-{i}", funding=f"-0.0{i}", offset=i) for i in range(20)]
+
+    class StuckOnPage1(SnakeOnlyFundingExchange):
+        def contract_private_get_position_funding_records(self, params):
+            # Ignore all page params — always return the first page, totalPage=4.
+            self.requests.append(dict(params))
+            return {
+                "success": True,
+                "data": {
+                    "pageSize": 20,
+                    "totalCount": 80,
+                    "totalPage": 4,
+                    "currentPage": 1,
+                    "resultList": page1,
+                },
+            }
+
+    exchange = _attach_empty_position_order(StuckOnPage1([[]]))
+
+    data = await fetch_history(exchange, user_id=9)
+
+    assert len(data["funding"]) == 20  # unique only
+    assert data["sync"]["funding"]["rows_fetched_total"] == 20
+    assert data["sync"]["funding"]["source_total"] == 80
+    assert data["sync"]["funding"]["complete"] is False
+    assert data["sync"]["funding"]["status"] == "partial"
+    assert data["sync"]["funding"]["reason"] == "pagination_not_advancing"

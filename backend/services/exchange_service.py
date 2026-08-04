@@ -1122,18 +1122,48 @@ def _fetch_withdrawals_with_coverage(
     )
 
 
+def _mexc_history_page_params(page: int, page_size: int) -> Dict[str, int]:
+    """Build pagination params accepted by MEXC contract history endpoints.
+
+    Funding / transfer docs (and ccxt's ``fetch_funding_history``) use snake_case
+    ``page_num`` / ``page_size``. Position / order history commonly accepts
+    camelCase ``pageNum`` / ``pageSize``. Sending both is safe: unknown keys are
+    ignored, and the correct pair advances the page.
+
+    Prod regression: camelCase-only requests left funding stuck on page 1 while
+    ``totalPage`` still advanced → 4× the same ~20 rows (80 fetched, 20 unique).
+    """
+    return {
+        "pageSize": page_size,
+        "pageNum": page,
+        "page_size": page_size,
+        "page_num": page,
+    }
+
+
+def _mexc_row_identity(row: Dict[str, Any]) -> Optional[str]:
+    """Stable identity for paginated history rows (prefer exchange id)."""
+    for key in ("id", "fundingRecordId", "orderId", "positionId", "tranId", "transferId", "txid"):
+        value = row.get(key)
+        if value is not None and str(value) != "":
+            return f"{key}:{value}"
+    return None
+
+
 def _paginate_mexc_history(method: Any, stream: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     rows_all: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
     source_total: Optional[int] = None
     page = 1
     page_size = 100
     exhausted = False
+    pagination_stuck = False
     while True:
         resp: Dict[str, Any] = {}
         err: Optional[Tuple[str, str]] = None
         for attempt in range(4):
             try:
-                resp = method({"pageSize": page_size, "pageNum": page}) or {}
+                resp = method(_mexc_history_page_params(page, page_size)) or {}
                 err = _mexc_error(resp)
                 if err is None:
                     break
@@ -1185,10 +1215,45 @@ def _paginate_mexc_history(method: Any, stream: str) -> Tuple[List[Dict[str, Any
                 or source_total
                 or 0
             ) or None
+            # Prefer the exchange's effective page size when present (often 20).
+            try:
+                reported_size = int(page_data.get("pageSize") or page_data.get("page_size") or 0)
+                if reported_size > 0:
+                    page_size = reported_size
+            except (TypeError, ValueError):
+                pass
         else:
             rows = []
             total_pages = page
-        rows_all.extend(rows)
+
+        # Dedupe pages: if the exchange ignores page_num, later pages repeat.
+        new_rows: List[Dict[str, Any]] = []
+        page_has_ids = False
+        page_new_count = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                new_rows.append(row)
+                page_new_count += 1
+                continue
+            row_id = _mexc_row_identity(row)
+            if row_id is None:
+                new_rows.append(row)
+                page_new_count += 1
+                continue
+            page_has_ids = True
+            if row_id in seen_ids:
+                continue
+            seen_ids.add(row_id)
+            new_rows.append(row)
+            page_new_count += 1
+
+        if page > 1 and page_has_ids and page_new_count == 0:
+            # Entire page was already seen — page_num did not advance the window.
+            pagination_stuck = True
+            exhausted = False
+            break
+
+        rows_all.extend(new_rows)
         # Empty page with more totalPages remaining: stop only when we have
         # actually exhausted declared pages, not merely because this page is empty.
         if page >= total_pages:
@@ -1200,19 +1265,33 @@ def _paginate_mexc_history(method: Any, stream: str) -> Tuple[List[Dict[str, Any
             exhausted = False
             break
         page += 1
-    complete = bool(exhausted and (source_total is None or len(rows_all) >= source_total))
+
+    unique_count = len(rows_all)
+    complete = bool(
+        exhausted
+        and not pagination_stuck
+        and (source_total is None or unique_count >= source_total)
+    )
     # Empty history that the exchange reports as total=0 / exhausted is complete.
-    if complete is False and not rows_all and source_total in (None, 0) and exhausted:
+    if complete is False and not rows_all and source_total in (None, 0) and exhausted and not pagination_stuck:
         complete = True
+    if pagination_stuck:
+        reason = "pagination_not_advancing"
+    elif complete:
+        reason = None
+    else:
+        reason = "exchange_boundary_before_source_total"
     return rows_all, {
         "status": "fresh" if complete else "partial",
         "complete": complete,
-        "reason": None if complete else "exchange_boundary_before_source_total",
-        "source_total": source_total if source_total is not None else len(rows_all),
+        "reason": reason,
+        "source_total": source_total if source_total is not None else unique_count,
         "page_num": page,
         "page_size": page_size,
         "exhausted": exhausted,
-        "unrecoverable_gaps": [] if complete else [{"stream": stream, "reason": "exchange_boundary_before_source_total"}],
+        "unrecoverable_gaps": []
+        if complete
+        else [{"stream": stream, "reason": reason or "exchange_boundary_before_source_total"}],
     }
 
 

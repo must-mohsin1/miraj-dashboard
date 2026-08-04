@@ -56,19 +56,35 @@ def synthetic_exchange_entry_id(
     asset: str,
     amount: Optional[float],
     occurred_at: Optional[datetime],
+    *,
+    symbol: str = "",
+    extra: str = "",
 ) -> str:
+    """Deterministic id for source rows that lack a stable exchange id.
+
+    Funding rows often share asset+timestamp across symbols; include ``symbol``
+    (and optional ``extra`` such as positionType) so concurrent settlements do
+    not collapse into one ledger row.
+    """
     ts = occurred_at.isoformat() if occurred_at else ""
     amt = "" if amount is None else f"{amount:.12g}"
-    digest = hashlib.sha256(f"{entry_type}|{asset}|{amt}|{ts}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(
+        f"{entry_type}|{asset}|{amt}|{ts}|{symbol}|{extra}".encode("utf-8")
+    ).hexdigest()
     return f"synth:{digest[:48]}"
 
 
-def _ensure_source_id(row: Dict[str, Any]) -> Dict[str, Any]:
+def _ensure_source_id(row: Dict[str, Any], *, symbol: str = "", extra: str = "") -> Dict[str, Any]:
     if row.get("exchange_entry_id"):
         row["exchange_entry_id"] = str(row["exchange_entry_id"])[:128]
         return row
     row["exchange_entry_id"] = synthetic_exchange_entry_id(
-        row["entry_type"], row["asset"], row.get("amount"), row.get("occurred_at")
+        row["entry_type"],
+        row["asset"],
+        row.get("amount"),
+        row.get("occurred_at"),
+        symbol=symbol or str(row.get("symbol") or ""),
+        extra=extra or str(row.get("position_type") or row.get("positionType") or ""),
     )
     return row
 
@@ -83,6 +99,8 @@ def coerce_funding_row(raw: Dict[str, Any]) -> Dict[str, Any]:
     amount = _safe_float(raw.get("funding") if raw.get("funding") is not None else raw.get("amount"))
     occurred = _mexc_datetime(raw.get("settleTime") or raw.get("createTime") or raw.get("timestamp"))
     source_id = raw.get("id") or raw.get("fundingRecordId")
+    symbol = str(raw.get("symbol") or "")
+    position_type = str(raw.get("positionType") if raw.get("positionType") is not None else raw.get("position_type") or "")
     # funding already signed in MEXC samples; keep exchange sign
     signed = amount
     row = {
@@ -95,8 +113,10 @@ def coerce_funding_row(raw: Dict[str, Any]) -> Dict[str, Any]:
         "occurred_at": occurred,
         "source_updated_at": _mexc_datetime(raw.get("updateTime")) or occurred,
         "raw_json": _raw_json(raw),
+        "symbol": symbol or None,
+        "position_type": position_type or None,
     }
-    return _ensure_source_id(row)
+    return _ensure_source_id(row, symbol=symbol, extra=position_type)
 
 
 def coerce_futures_transfer_row(raw: Dict[str, Any]) -> Dict[str, Any]:
