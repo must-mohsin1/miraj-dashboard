@@ -98,11 +98,12 @@ def _snap(
     user_id: int,
     equity: float,
     source_ts: datetime,
+    settlement_asset: str = "USDT",
 ) -> FuturesAccountSnapshot:
     return FuturesAccountSnapshot(
         user_id=user_id,
         exchange="mexc",
-        settlement_asset="USDT",
+        settlement_asset=settlement_asset,
         equity=equity,
         source_ts=source_ts,
         synced_at=source_ts,
@@ -239,6 +240,63 @@ async def test_missing_sync_state_is_capital_history_missing(session: AsyncSessi
 
     assert result["account_return_pct"] is None
     assert result["account_return_pct_reason"] == "capital_history_missing"
+
+
+def test_select_primary_futures_prefers_usdt_over_dust_steth():
+    from backend.services.futures_settlement import select_primary_futures_raw
+
+    raw = select_primary_futures_raw(
+        [
+            {"currency": "STETH", "equity": "0"},
+            {"currency": "SHIB", "equity": "0"},
+            {"currency": "USDT", "equity": "1234.5"},
+            {"currency": "BTC", "equity": "0.01"},
+        ]
+    )
+    assert raw is not None
+    assert raw["currency"] == "USDT"
+
+
+def test_select_primary_futures_prefers_nonzero_over_zero_usdt():
+    from backend.services.futures_settlement import select_primary_futures_raw
+
+    # If USDT is empty but another asset has equity, prefer non-zero.
+    raw = select_primary_futures_raw(
+        [
+            {"currency": "USDT", "equity": "0"},
+            {"currency": "BTC", "equity": "2.5"},
+        ]
+    )
+    assert raw is not None
+    assert raw["currency"] == "BTC"
+
+
+async def test_account_return_ignores_zero_steth_prefers_usdt_series(session: AsyncSession):
+    user = await _user(session, "phase3sett")
+    t0 = datetime(2026, 7, 1, 0, 0, 0)
+    t1 = datetime(2026, 7, 10, 0, 0, 0)
+    t_end = datetime(2026, 8, 1, 0, 0, 0)
+    session.add_all(
+        [
+            # Dust series first chronologically — must not win.
+            _snap(user.id, 0.0, t0, "STETH"),
+            _snap(user.id, 0.0, t_end, "STETH"),
+            _snap(user.id, 1000.0, t0, "USDT"),
+            _snap(user.id, 1100.0, t_end, "USDT"),
+            _flow(user.id, "futures_transfer", 0.0, t1, "xfer-z"),  # no-op flow
+            _sync(user.id, "deposits"),
+            _sync(user.id, "withdrawals"),
+            _sync(user.id, "futures_transfers"),
+        ]
+    )
+    await session.flush()
+
+    result = await compute_account_return(session, user.id, "mexc")
+
+    assert result["settlement_asset"] == "USDT"
+    assert result["account_return_pct"] == 10.0
+    assert result["opening_equity"] == 1000.0
+    assert result["ending_equity"] == 1100.0
 
 
 async def test_performance_metrics_merges_account_return(session: AsyncSession):

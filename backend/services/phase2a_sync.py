@@ -122,13 +122,33 @@ async def latest_futures_account_snapshot(
     user_id: int,
     exchange: str,
 ) -> Optional[FuturesAccountSnapshot]:
+    """Latest futures snapshot, preferring preferred settlement assets (USDT…).
+
+    Avoids returning a dust STETH zero-wallet when a newer/better USDT row exists
+    at the same freshness window.
+    """
+    from backend.services.futures_settlement import _EQUITY_EPS, _pref_rank
+
     result = await session.execute(
         select(FuturesAccountSnapshot)
         .where(FuturesAccountSnapshot.user_id == user_id, FuturesAccountSnapshot.exchange == exchange)
         .order_by(FuturesAccountSnapshot.source_ts.desc(), FuturesAccountSnapshot.id.desc())
-        .limit(1)
+        .limit(40)
     )
-    return result.scalar_one_or_none()
+    rows = list(result.scalars().all())
+    if not rows:
+        return None
+    newest_ts = rows[0].source_ts
+    # Consider the latest sync batch (same source_ts) first, then fall back.
+    same_ts = [r for r in rows if r.source_ts == newest_ts] or rows[:1]
+
+    def _score(r: FuturesAccountSnapshot) -> tuple:
+        eq = abs(float(r.equity or 0.0))
+        nonzero = 0 if eq > _EQUITY_EPS else 1
+        return (nonzero, _pref_rank((r.settlement_asset or "").upper()), -eq)
+
+    same_ts.sort(key=_score)
+    return same_ts[0]
 
 
 async def _upsert_positions(
