@@ -215,10 +215,14 @@ async def test_refresh_response_adds_sync_futures_account_partial_and_persists_s
     assert body["futures_account"]["equity"] == 1234.56
     streams = {row["stream"]: row for row in body["sync"]}
     assert streams["orders_history"]["status"] == "partial"
-    assert streams["funding"]["status"] == "not_enabled_phase_2b"
+    # Phase 2B: capital streams without payload coverage use generic defaults
+    assert streams["funding"]["status"] == "stale"
+    assert streams["funding"]["reason"] == "no_sync_state"
+    assert streams["futures_transfers"]["status"] == "stale"
     assert streams["futures_transfers"]["supported_by_exchange"] is True
-    assert streams["deposits"]["status"] == "unavailable"
-    assert streams["withdrawals"]["reason"] == "requires_spot_wallet_endpoint_and_retention_probe_phase_2b"
+    assert streams["deposits"]["status"] == "stale"
+    assert streams["withdrawals"]["reason"] == "no_sync_state"
+    assert "not_enabled_phase_2b" not in {row["status"] for row in body["sync"]}
 
     factory = database.get_session_factory()
     async with factory() as session:
@@ -333,8 +337,11 @@ async def test_sync_status_is_scoped_by_user_and_exchange_and_includes_phase2b_s
     other_streams = {row["stream"]: row for row in other_resp.json()["sync"]}
     assert mexc_streams["positions_history"]["status"] == "fresh"
     assert other_streams["positions_history"]["status"] == "stale"
-    assert other_streams["funding"]["status"] == "not_enabled_phase_2b"
-    assert other_streams["deposits"]["supported_by_exchange"] is False
+    assert other_streams["funding"]["status"] == "stale"
+    assert other_streams["funding"]["reason"] == "no_sync_state"
+    assert other_streams["deposits"]["status"] == "stale"
+    assert other_streams["deposits"]["supported_by_exchange"] is True
+    assert "not_enabled_phase_2b" not in {row["status"] for row in other_resp.json()["sync"]}
 
 
 async def test_legacy_pre_phase2a_rows_surface_unrecoverable_gap_without_inferred_position_id(
