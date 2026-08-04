@@ -74,10 +74,25 @@ class PerformanceMetricsResponse(BaseModel):
     worst_trade: float = Field(description="Worst single trade PnL")
     total_pnl: float = Field(description="Dollar sum of MEXC-reported closed-position PnL")
     total_pnl_basis: str = Field(description="Basis/source for total_pnl.")
-    total_pnl_percent: float | None = Field(None, description="Unavailable until capital history exists.")
+    total_pnl_percent: float | None = Field(
+        None,
+        description="Always null — sum of position ROI is not account return.",
+    )
     total_pnl_percent_reason: str | None = None
-    account_return_pct: float | None = None
+    account_return_pct: float | None = Field(
+        None,
+        description="Cash-flow-adjusted account return % when capital history is complete.",
+    )
     account_return_pct_reason: str | None = None
+    net_account_profit_usd: float | None = Field(
+        None,
+        description="ending_equity − opening_equity − net_external_flows (USD).",
+    )
+    net_account_profit_usd_reason: str | None = None
+    opening_equity: float | None = None
+    ending_equity: float | None = None
+    net_external_flows: float | None = None
+    account_return_basis: str | None = None
     source: str | None = None
     basis: str | None = None
     complete: bool = False
@@ -593,9 +608,11 @@ async def get_performance_metrics(
 
     Metrics include win rate, profit factor, MEXC-reported ``total_pnl``,
     ``trade_quality_score`` from per-trade PnL dispersion, and
-    ``realised_pnl_drawdown_*`` from cumulative closed-position PnL. Account
-    return and account-equity drawdown remain unavailable until complete
-    account equity/capital history exists.
+    ``realised_pnl_drawdown_*`` from cumulative closed-position PnL.
+
+    Phase 3 fills ``account_return_pct`` and ``net_account_profit_usd`` when
+    futures equity snapshots and complete external capital-flow coverage exist;
+    otherwise those fields stay null with an honest reason code.
     """
     exchange_slug = _require_supported_exchange(exchange)
     metrics: Dict[str, Any] = await analytics_service.compute_performance_metrics(

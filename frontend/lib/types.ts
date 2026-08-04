@@ -380,6 +380,12 @@ export interface PerformanceMetrics {
   total_pnl_percent_reason: string | null;
   account_return_pct: number | null;
   account_return_pct_reason: string | null;
+  net_account_profit_usd?: number | null;
+  net_account_profit_usd_reason?: string | null;
+  opening_equity?: number | null;
+  ending_equity?: number | null;
+  net_external_flows?: number | null;
+  account_return_basis?: string | null;
   source?: string | null;
   basis?: string | null;
   complete?: boolean;

@@ -160,7 +160,8 @@ describe("portfolio analytics Phase 0 truth labels", () => {
     render(<PerformanceMetrics metrics={METRICS} />);
 
     expect(screen.getByText("MEXC-reported closed-position PnL")).toBeInTheDocument();
-    expect(screen.getByText("Account return unavailable — capital history missing")).toBeInTheDocument();
+    expect(screen.getByText("Account return")).toBeInTheDocument();
+    expect(screen.getByText(/Unavailable — capital history missing/)).toBeInTheDocument();
     expect(screen.queryByText("+25.00%")).not.toBeInTheDocument();
   });
 

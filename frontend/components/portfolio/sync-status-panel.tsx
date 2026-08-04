@@ -45,6 +45,10 @@ export interface SyncStatusPanelProps {
   sync: SyncCoverageItem[];
   futuresAccount: FuturesAccountItem | null;
   partial?: boolean;
+  /** Phase 3 cash-flow-adjusted account return (%), when available. */
+  accountReturnPct?: number | null;
+  accountReturnReason?: string | null;
+  netAccountProfitUsd?: number | null;
 }
 
 export function streamLabel(stream: string): string {
@@ -67,7 +71,14 @@ function hasCapitalFlowCoverageGap(sync: SyncCoverageItem[]): boolean {
   });
 }
 
-export function SyncStatusPanel({ sync, futuresAccount, partial = false }: SyncStatusPanelProps) {
+export function SyncStatusPanel({
+  sync,
+  futuresAccount,
+  partial = false,
+  accountReturnPct = null,
+  accountReturnReason = null,
+  netAccountProfitUsd = null,
+}: SyncStatusPanelProps) {
   const futuresCoverage = sync.find((item) => item.stream === "futures_account_assets");
   const hasCapitalFlowGap = hasCapitalFlowCoverageGap(sync);
 
@@ -81,7 +92,7 @@ export function SyncStatusPanel({ sync, futuresAccount, partial = false }: SyncS
           MEXC sync coverage
         </h2>
         <p className="mt-2 max-w-3xl text-sm text-[#8E8778]">
-          Shows what Miraj has synchronized from read-only MEXC account data and what is still outside Phase 2A.
+          Shows what Miraj has synchronized from read-only MEXC account data and capital-flow coverage.
         </p>
       </div>
 
@@ -135,7 +146,13 @@ export function SyncStatusPanel({ sync, futuresAccount, partial = false }: SyncS
 
         <div className="flex flex-col divide-y divide-[#2A2620]">
           <FuturesAccountSnapshot futuresAccount={futuresAccount} coverage={futuresCoverage} />
-          <Phase2AUnavailableStates partial={partial} hasCapitalFlowGap={hasCapitalFlowGap} />
+          <Phase2AUnavailableStates
+            partial={partial}
+            hasCapitalFlowGap={hasCapitalFlowGap}
+            accountReturnPct={accountReturnPct}
+            accountReturnReason={accountReturnReason}
+            netAccountProfitUsd={netAccountProfitUsd}
+          />
         </div>
       </div>
     </section>
@@ -189,7 +206,20 @@ function FuturesAccountSnapshot({
   );
 }
 
-function Phase2AUnavailableStates({ partial, hasCapitalFlowGap }: { partial: boolean; hasCapitalFlowGap: boolean }) {
+function Phase2AUnavailableStates({
+  partial,
+  hasCapitalFlowGap,
+  accountReturnPct,
+  accountReturnReason,
+  netAccountProfitUsd,
+}: {
+  partial: boolean;
+  hasCapitalFlowGap: boolean;
+  accountReturnPct?: number | null;
+  accountReturnReason?: string | null;
+  netAccountProfitUsd?: number | null;
+}) {
+  const hasReturn = typeof accountReturnPct === "number";
   return (
     <div className="space-y-4 p-4">
       {partial && (
@@ -199,10 +229,26 @@ function Phase2AUnavailableStates({ partial, hasCapitalFlowGap }: { partial: boo
         </div>
       )}
       <div>
-        <h3 className="text-sm font-semibold text-[#EDE7DB]">Account return unavailable</h3>
-        <p className="mt-1 text-sm text-[#8E8778]">
-          Account return needs opening equity and complete capital-flow history. Phase 2B does not calculate it.
-        </p>
+        <h3 className="text-sm font-semibold text-[#EDE7DB]">
+          {hasReturn ? "Account return" : "Account return unavailable"}
+        </h3>
+        {hasReturn ? (
+          <p className="mt-1 font-mono text-sm tabular-nums text-[#EDE7DB]">
+            {accountReturnPct! >= 0 ? "+" : ""}
+            {accountReturnPct!.toFixed(2)}%
+            {typeof netAccountProfitUsd === "number" && (
+              <span className="ml-2 text-xs text-[#8E8778]">
+                (net profit {netAccountProfitUsd >= 0 ? "+" : ""}${netAccountProfitUsd.toFixed(2)})
+              </span>
+            )}
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-[#8E8778]">
+            Account return needs opening futures equity and complete external capital-flow
+            history (deposits, withdrawals, transfers).
+            {accountReturnReason ? ` Reason: ${humanize(accountReturnReason)}.` : ""}
+          </p>
+        )}
       </div>
       <div>
         <h3 className="text-sm font-semibold text-[#EDE7DB]">
