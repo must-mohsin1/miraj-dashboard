@@ -44,23 +44,21 @@ async def compute_account_return(
         return _unavailable(coverage["reason"], coverage_detail=coverage)
 
     snapshots = await _load_equity_snapshots(session, user_id, exchange)
-    if len(snapshots) < 2:
-        if not snapshots or snapshots[0].equity is None:
+    pair = _pick_series_endpoints(snapshots)
+    if pair is None:
+        if not snapshots:
             return _unavailable("opening_equity_missing", coverage_detail=coverage)
         return _unavailable("insufficient_equity_snapshots", coverage_detail=coverage)
 
-    opening = snapshots[0]
-    ending = snapshots[-1]
+    opening, ending = pair
     if opening.equity is None:
         return _unavailable("opening_equity_missing", coverage_detail=coverage)
     if ending.equity is None:
         return _unavailable("ending_equity_missing", coverage_detail=coverage)
-    if opening.source_ts >= ending.source_ts and opening.id == ending.id:
-        return _unavailable("insufficient_equity_snapshots", coverage_detail=coverage)
 
     opening_equity = float(opening.equity)
     ending_equity = float(ending.equity)
-    if opening_equity == 0.0:
+    if abs(opening_equity) <= 1e-8:
         return _unavailable(
             "opening_equity_zero",
             coverage_detail=coverage,
@@ -68,6 +66,7 @@ async def compute_account_return(
             ending_equity=ending_equity,
             opening_source_ts=opening.source_ts,
             ending_source_ts=ending.source_ts,
+            settlement_asset=opening.settlement_asset,
         )
 
     flows = await _load_external_flows(
@@ -94,6 +93,7 @@ async def compute_account_return(
         "net_external_flows": round(net_external, 4),
         "opening_source_ts": opening.source_ts,
         "ending_source_ts": ending.source_ts,
+        "settlement_asset": opening.settlement_asset,
         "external_flow_count": len(flows),
         "basis": "cash_flow_adjusted_futures_equity",
         "source": "FuturesAccountSnapshot.equity+CapitalFlowLedger.signed_amount",
@@ -156,6 +156,9 @@ async def _load_equity_snapshots(
     user_id: int,
     exchange: str,
 ) -> List[FuturesAccountSnapshot]:
+    """Load equity history for the preferred settlement series (USDT over dust)."""
+    from backend.services.futures_settlement import choose_settlement_asset_for_series
+
     result = await session.execute(
         select(FuturesAccountSnapshot)
         .where(
@@ -168,7 +171,31 @@ async def _load_equity_snapshots(
             FuturesAccountSnapshot.id.asc(),
         )
     )
-    return list(result.scalars().all())
+    rows = list(result.scalars().all())
+    if not rows:
+        return []
+    peak: Dict[str, float] = {}
+    for r in rows:
+        asset = (r.settlement_asset or "USDT").upper()
+        eq = abs(float(r.equity or 0.0))
+        peak[asset] = max(peak.get(asset, 0.0), eq)
+    chosen = choose_settlement_asset_for_series(peak.keys(), peak)
+    if chosen is None:
+        return rows
+    return [r for r in rows if (r.settlement_asset or "").upper() == chosen]
+
+
+def _pick_series_endpoints(
+    snapshots: List[FuturesAccountSnapshot],
+) -> Optional[tuple[FuturesAccountSnapshot, FuturesAccountSnapshot]]:
+    from backend.services.futures_settlement import pick_opening_ending_snapshots
+
+    return pick_opening_ending_snapshots(
+        snapshots,
+        equity_of=lambda s: s.equity,
+        ts_of=lambda s: s.source_ts,
+        id_of=lambda s: s.id or 0,
+    )
 
 
 async def _load_external_flows(
@@ -201,6 +228,7 @@ def _unavailable(
     ending_equity: Optional[float] = None,
     opening_source_ts: Optional[datetime] = None,
     ending_source_ts: Optional[datetime] = None,
+    settlement_asset: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         "account_return_pct": None,
@@ -212,6 +240,7 @@ def _unavailable(
         "net_external_flows": None,
         "opening_source_ts": opening_source_ts,
         "ending_source_ts": ending_source_ts,
+        "settlement_asset": settlement_asset,
         "external_flow_count": 0,
         "basis": None,
         "source": "FuturesAccountSnapshot.equity+CapitalFlowLedger.signed_amount",

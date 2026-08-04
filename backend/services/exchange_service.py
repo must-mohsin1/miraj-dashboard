@@ -970,7 +970,10 @@ def _fetch_futures_account_assets_with_coverage(
         data = [data]
     if not data:
         return None, _coverage("futures_account_assets", rows=[], status="unavailable", complete=False, reason="futures_account_snapshot_missing")
-    raw = data[0]
+    # MEXC lists dust wallets first (STETH, …). Prefer USDT/non-zero equity.
+    from backend.services.futures_settlement import select_primary_futures_raw
+
+    raw = select_primary_futures_raw([r for r in data if isinstance(r, dict)]) or data[0]
     source_ts = _mexc_datetime(raw.get("updateTime") or raw.get("timestamp")) or datetime.utcnow()
     snapshot = {
         "user_id": user_id,
