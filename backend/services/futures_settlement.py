@@ -117,5 +117,5 @@ def pick_opening_ending_snapshots(
         if id_of(opening) != id_of(ending) or ts_of(opening) != ts_of(ending):
             return opening, ending
         return None
-    # all zero / null — still return endpoints so caller can emit opening_equity_zero
+    # all zero / null — still return endpoints so caller can emit futures_equity_flat
     return ordered[0], ordered[-1]

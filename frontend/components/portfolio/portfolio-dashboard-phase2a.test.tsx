@@ -123,7 +123,7 @@ describe("PortfolioDashboard Phase 2A coverage states", () => {
     expect(screen.getByText("Account return unavailable")).toBeInTheDocument();
     expect(
       screen.getByText(
-        /Account return needs opening futures equity and complete external capital-flow history/,
+        /Account return uses futures wallet equity only \(spot is never the base\)/,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Complete history/i)).not.toBeInTheDocument();

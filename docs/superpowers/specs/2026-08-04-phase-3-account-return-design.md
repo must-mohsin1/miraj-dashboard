@@ -44,7 +44,8 @@ unavailable status → do **not** compute return; reason:
 Additional fail-closed reasons:
 - `opening_equity_missing` — no usable futures equity snapshot
 - `insufficient_equity_snapshots` — fewer than two distinct snapshot times
-- `opening_equity_zero` — cannot divide by zero
+- `futures_equity_flat` — futures wallet equity is ~0 (cannot divide by zero);
+  spot balances are never used as the return base (futures-only product rule)
 
 ## Surfaces
 
