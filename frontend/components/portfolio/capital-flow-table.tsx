@@ -66,7 +66,10 @@ export function CapitalFlowTable({
   partial?: boolean;
 }) {
   const showBanner =
-    partial || sync.some((s) => GAP_STATUSES.has(s.status));
+    partial ||
+    sync.some(
+      (s) => CAPITAL_FLOW_STREAMS.has(s.stream) && GAP_STATUSES.has(s.status),
+    );
 
   const detail = bannerDetail(sync);
 

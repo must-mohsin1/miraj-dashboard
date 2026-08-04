@@ -160,9 +160,12 @@ export function PortfolioDashboard({
   const [alertsMap, setAlertsMap] = useState<Record<string, PositionAlertItem>>({});
 
   // Capital-flow ledger (Phase 2B) — client-fetched, revalidated after refresh.
+  // Start loading=true so first paint is not a false empty ledger before fetch.
   const [capitalFlow, setCapitalFlow] = useState<CapitalFlowResponse | null>(null);
-  const [capitalFlowLoading, setCapitalFlowLoading] = useState(false);
+  const [capitalFlowLoading, setCapitalFlowLoading] = useState(true);
   const [capitalFlowError, setCapitalFlowError] = useState<string | null>(null);
+  // Invalidate in-flight responses when exchange/token changes (or unmount).
+  const capitalFlowKeyRef = useRef(`${exchange}|${token ?? ""}`);
 
   const exchangeName = titleCase(exchange);
 
@@ -320,7 +323,13 @@ export function PortfolioDashboard({
     };
   }, [exchange, token]);
 
-  async function fetchCapitalFlow() {
+  async function fetchCapitalFlow(options?: { reset?: boolean }) {
+    const requestKey = `${exchange}|${token ?? ""}`;
+    capitalFlowKeyRef.current = requestKey;
+    if (options?.reset) {
+      setCapitalFlow(null);
+      setCapitalFlowError(null);
+    }
     setCapitalFlowLoading(true);
     try {
       const headers: HeadersInit = {};
@@ -328,30 +337,68 @@ export function PortfolioDashboard({
       const res = await fetch(`/api/v1/portfolio/${exchange}/capital-flow`, {
         headers,
       });
+      // Check after await so a switched exchange/token never applies stale data.
+      if (capitalFlowKeyRef.current !== requestKey) return;
       if (!res.ok) {
         throw new Error(`${res.status} ${res.statusText}`);
       }
       const json: CapitalFlowResponse = await res.json();
+      if (capitalFlowKeyRef.current !== requestKey) return;
       setCapitalFlow(json);
       setCapitalFlowError(null);
     } catch (err) {
+      if (capitalFlowKeyRef.current !== requestKey) return;
       setCapitalFlowError(err instanceof Error ? err.message : String(err));
     } finally {
-      setCapitalFlowLoading(false);
+      if (capitalFlowKeyRef.current === requestKey) {
+        setCapitalFlowLoading(false);
+      }
     }
   }
 
   // Capital-flow ledger on mount / exchange or token change.
+  // Clear prior exchange data immediately so we never show a stale ledger.
   useEffect(() => {
+    const requestKey = `${exchange}|${token ?? ""}`;
+    capitalFlowKeyRef.current = requestKey;
+    setCapitalFlow(null);
+    setCapitalFlowError(null);
+    setCapitalFlowLoading(true);
+
     let cancelled = false;
+
     (async () => {
-      if (cancelled) return;
-      await fetchCapitalFlow();
+      try {
+        const headers: HeadersInit = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const res = await fetch(`/api/v1/portfolio/${exchange}/capital-flow`, {
+          headers,
+        });
+        if (cancelled || capitalFlowKeyRef.current !== requestKey) return;
+        if (!res.ok) {
+          throw new Error(`${res.status} ${res.statusText}`);
+        }
+        const json: CapitalFlowResponse = await res.json();
+        if (cancelled || capitalFlowKeyRef.current !== requestKey) return;
+        setCapitalFlow(json);
+        setCapitalFlowError(null);
+      } catch (err) {
+        if (cancelled || capitalFlowKeyRef.current !== requestKey) return;
+        setCapitalFlowError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled && capitalFlowKeyRef.current === requestKey) {
+          setCapitalFlowLoading(false);
+        }
+      }
     })();
+
     return () => {
       cancelled = true;
+      // Bump key so any in-flight response from this effect is ignored.
+      if (capitalFlowKeyRef.current === requestKey) {
+        capitalFlowKeyRef.current = `${requestKey}|cancelled`;
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exchange, token]);
 
   // The price map is only "live" once the stream is open and we have data.
