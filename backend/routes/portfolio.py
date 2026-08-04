@@ -27,7 +27,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +36,7 @@ from backend.auth import get_current_user
 from backend.database import get_session
 from backend.models import (
     Analysis,
+    CapitalFlowLedger,
     ExchangeKey,
     ExchangeSyncState,
     FuturesAccountSnapshot,
@@ -67,6 +68,7 @@ from backend.services.phase2a_sync import (
     latest_futures_account_snapshot,
     persist_phase2a_sync_payload,
 )
+from backend.services.phase2b_ledger import persist_capital_flow_payload
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +238,32 @@ class PortfolioResponse(BaseModel):
     partial: bool = False
     last_refreshed: Optional[str] = None
     stale: bool = True
+
+
+class CapitalFlowEntryItem(BaseModel):
+    """Single capital-flow ledger row for GET .../capital-flow."""
+
+    id: int
+    entry_type: str
+    exchange_entry_id: Optional[str] = None
+    asset: str
+    amount: Optional[float] = None
+    signed_amount: Optional[float] = None
+    status: Optional[str] = None
+    occurred_at: Optional[datetime] = None
+    source_updated_at: Optional[datetime] = None
+    synced_at: datetime
+
+
+class CapitalFlowResponse(BaseModel):
+    """Paginated capital-flow ledger + focused four-stream coverage."""
+
+    exchange: str
+    entries: List[CapitalFlowEntryItem]
+    sync: List[SyncCoverageItem]
+    partial: bool = False
+    limit: int = 200
+    offset: int = 0
 
 
 # ── Position alert schemas (cross-reference with Miraj scan) ────────────────
@@ -523,40 +551,16 @@ _PHASE2A_STREAMS = (
     "withdrawals",
 )
 
+_CAPITAL_FLOW_STREAMS = (
+    "funding",
+    "futures_transfers",
+    "deposits",
+    "withdrawals",
+)
+
 
 def _phase2a_default_coverage(stream: str) -> Dict[str, Any]:
-    if stream in {"funding", "futures_transfers"}:
-        return {
-            "stream": stream,
-            "status": "not_enabled_phase_2b",
-            "complete": False,
-            "reason": "not_enabled_phase_2b",
-            "rows_fetched_total": 0,
-            "source_total": 0,
-            "cursor": None,
-            "last_success_at": None,
-            "last_attempt_at": None,
-            "error_code": None,
-            "error_message": None,
-            "unrecoverable_gaps": [],
-            "supported_by_exchange": True,
-        }
-    if stream in {"deposits", "withdrawals"}:
-        return {
-            "stream": stream,
-            "status": "unavailable",
-            "complete": False,
-            "reason": "requires_spot_wallet_endpoint_and_retention_probe_phase_2b",
-            "rows_fetched_total": 0,
-            "source_total": 0,
-            "cursor": None,
-            "last_success_at": None,
-            "last_attempt_at": None,
-            "error_code": None,
-            "error_message": None,
-            "unrecoverable_gaps": [],
-            "supported_by_exchange": False,
-        }
+    """Generic missing-stream coverage (stale / no_sync_state) for all Phase 2 streams."""
     return {
         "stream": stream,
         "status": "stale",
@@ -668,11 +672,28 @@ async def _load_sync_coverage(
 
 
 def _response_partial(sync: List[SyncCoverageItem]) -> bool:
+    """Portfolio-level partial: core Phase 2A streams only (not capital-flow)."""
     return any(
         row.stream in {"positions_history", "orders_history", "futures_account_assets"}
         and not row.complete
         for row in sync
     )
+
+
+def _capital_flow_response_partial(sync: List[SyncCoverageItem]) -> bool:
+    """True only when a capital stream has been attempted and is meaningfully incomplete.
+
+    Pure ``stale`` + ``no_sync_state`` placeholders (pre-sync defaults) do not
+    drive ``partial=true``. Meaningful gaps: status in partial|unavailable|error,
+    or any non-stale incomplete status.
+    """
+    for row in sync:
+        status = (row.status or "").lower()
+        if status in {"partial", "unavailable", "error"}:
+            return True
+        if status != "stale" and not row.complete:
+            return True
+    return False
 
 
 def _get_iso_ts(snapshot: Optional[PortfolioSnapshot]) -> Optional[str]:
@@ -1092,6 +1113,76 @@ async def get_sync_status(
             else None
         ),
         partial=_response_partial(sync),
+    )
+
+
+@router.get(
+    "/{exchange}/capital-flow",
+    response_model=CapitalFlowResponse,
+    responses={
+        404: {"model": PortfolioErrorResponse, "description": "Unsupported exchange"},
+        501: {"model": PortfolioErrorResponse, "description": "ccxt not installed"},
+    },
+)
+async def get_capital_flow(
+    exchange: str,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> CapitalFlowResponse:
+    """Return user-scoped capital-flow ledger rows with four-stream coverage.
+
+    Cached only — no outbound exchange call. Rows sorted by occurred_at desc.
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+
+    result = await session.execute(
+        select(CapitalFlowLedger)
+        .where(
+            CapitalFlowLedger.user_id == current_user.id,
+            CapitalFlowLedger.exchange == exchange_slug,
+        )
+        .order_by(
+            CapitalFlowLedger.occurred_at.desc().nullslast(),
+            CapitalFlowLedger.id.desc(),
+        )
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = list(result.scalars().all())
+
+    full_sync = await _load_sync_coverage(session, current_user.id, exchange_slug)
+    by_stream = {s.stream: s for s in full_sync}
+    capital_sync: List[SyncCoverageItem] = []
+    for stream in _CAPITAL_FLOW_STREAMS:
+        if stream in by_stream:
+            capital_sync.append(by_stream[stream])
+        else:
+            capital_sync.append(SyncCoverageItem(**_phase2a_default_coverage(stream)))
+
+    partial = _capital_flow_response_partial(capital_sync)
+    return CapitalFlowResponse(
+        exchange=exchange_slug,
+        entries=[
+            CapitalFlowEntryItem(
+                id=r.id,
+                entry_type=r.entry_type,
+                exchange_entry_id=r.exchange_entry_id,
+                asset=r.asset,
+                amount=r.amount,
+                signed_amount=r.signed_amount,
+                status=r.status,
+                occurred_at=r.occurred_at,
+                source_updated_at=r.source_updated_at,
+                synced_at=r.synced_at,
+            )
+            for r in rows
+        ],
+        sync=capital_sync,
+        partial=partial,
+        limit=limit,
+        offset=offset,
     )
 
 
@@ -1597,6 +1688,7 @@ async def _persist_history_data(
     trades / snapshot.
     """
     await persist_phase2a_sync_payload(session, user_id, exchange, data, now)
+    await persist_capital_flow_payload(session, user_id, exchange, data, now)
 
 
 async def _persist_portfolio_data(
@@ -1693,6 +1785,7 @@ async def _persist_portfolio_data(
         ))
 
     await persist_phase2a_sync_payload(session, user_id, exchange, data, now)
+    await persist_capital_flow_payload(session, user_id, exchange, data, now)
 
     # ── Snapshot row ────────────────────────────────────────────────
     total_pnl = sum(p["pnl"] for p in data["positions"])

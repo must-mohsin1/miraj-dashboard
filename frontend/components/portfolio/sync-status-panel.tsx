@@ -55,12 +55,21 @@ export function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? humanize(status);
 }
 
+const CAPITAL_FLOW_STREAMS = ["funding", "futures_transfers", "deposits", "withdrawals"] as const;
+/** Gap when a capital stream is incomplete (includes legacy not_enabled_phase_2b for cached payloads). */
+const CAPITAL_FLOW_GAP_STATUSES = ["partial", "unavailable", "error", "stale", "not_enabled_phase_2b"] as const;
+
+function hasCapitalFlowCoverageGap(sync: SyncCoverageItem[]): boolean {
+  return CAPITAL_FLOW_STREAMS.some((stream) => {
+    const item = sync.find((entry) => entry.stream === stream);
+    if (!item) return true;
+    return (CAPITAL_FLOW_GAP_STATUSES as readonly string[]).includes(item.status);
+  });
+}
+
 export function SyncStatusPanel({ sync, futuresAccount, partial = false }: SyncStatusPanelProps) {
   const futuresCoverage = sync.find((item) => item.stream === "futures_account_assets");
-  const hasCapitalFlowGap = sync.some((item) =>
-    ["funding", "futures_transfers", "deposits", "withdrawals"].includes(item.stream) &&
-    ["not_enabled_phase_2b", "unavailable", "partial", "error"].includes(item.status),
-  );
+  const hasCapitalFlowGap = hasCapitalFlowCoverageGap(sync);
 
   return (
     <section className="border border-[#2A2620] bg-[#161411]" aria-labelledby="mexc-sync-coverage-title">
@@ -191,16 +200,19 @@ function Phase2AUnavailableStates({ partial, hasCapitalFlowGap }: { partial: boo
       )}
       <div>
         <h3 className="text-sm font-semibold text-[#EDE7DB]">Account return unavailable</h3>
-        <p className="mt-1 text-sm text-[#8E8778]">Account return needs opening equity and complete capital-flow history. Phase 2A does not calculate it.</p>
+        <p className="mt-1 text-sm text-[#8E8778]">
+          Account return needs opening equity and complete capital-flow history. Phase 2B does not calculate it.
+        </p>
       </div>
       <div>
-        <h3 className="text-sm font-semibold text-[#EDE7DB]">Capital-flow history unavailable</h3>
+        <h3 className="text-sm font-semibold text-[#EDE7DB]">
+          {hasCapitalFlowGap ? "Capital-flow history unavailable" : "Capital-flow history"}
+        </h3>
         <p className="mt-1 text-sm text-[#8E8778]">
           {hasCapitalFlowGap
-            ? "Funding, transfers, deposits, and withdrawals are not ingested in Phase 2A."
-            : "Capital-flow history is not proven by the current sync coverage."}
+            ? "Capital-flow history is partial or unavailable for one or more streams."
+            : "Capital-flow streams are synchronized."}
         </p>
-        <p className="mt-1 text-xs text-[#8E8778]">Ledger ingestion and retention validation belong to Phase 2B.</p>
       </div>
     </div>
   );
@@ -233,11 +245,9 @@ function coverageDetail(item: SyncCoverageItem): string {
 }
 
 function unavailableDetail(item: SyncCoverageItem): string {
-  if (item.reason === "requires_spot_wallet_endpoint_and_retention_probe_phase_2b") {
-    return "Requires spot-wallet endpoint and retention probe in Phase 2B.";
-  }
   if (item.reason === "futures_account_snapshot_missing") return "Futures account snapshot missing.";
-  return "This stream is unavailable in Phase 2A.";
+  if (item.reason) return `${humanize(item.reason)}.`;
+  return "This stream is currently unavailable.";
 }
 
 function phase2BDetail(item: SyncCoverageItem): string {

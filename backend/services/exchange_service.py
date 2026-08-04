@@ -260,7 +260,7 @@ async def fetch_portfolio(
     exchange_instance: Any,
     user_id: int,
 ) -> Dict[str, Any]:
-    """Fetch spot balances, futures positions, recent trades, and Phase 2A sync streams."""
+    """Fetch spot balances, futures positions, recent trades, and Phase 2A/2B sync streams."""
     exchange_name = exchange_instance.id  # e.g. "mexc"
 
     try:
@@ -274,6 +274,10 @@ async def fetch_portfolio(
             position_history,
             order_history,
             futures_account,
+            funding,
+            transfers,
+            deposits,
+            withdrawals,
         ) = await asyncio.gather(
             asyncio.to_thread(
                 _fetch_positions, exchange_instance, user_id, exchange_name
@@ -290,6 +294,18 @@ async def fetch_portfolio(
             asyncio.to_thread(
                 _fetch_futures_account_assets_with_coverage, exchange_instance, user_id, exchange_name
             ),
+            asyncio.to_thread(
+                _fetch_funding_history_with_coverage, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_futures_transfers_with_coverage, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_deposits_with_coverage, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_withdrawals_with_coverage, exchange_instance, user_id, exchange_name
+            ),
         )
     except asyncio.TimeoutError:
         raise ExchangeTimeoutError(
@@ -304,7 +320,14 @@ async def fetch_portfolio(
         "positions_history": position_history[1],
         "orders_history": order_history[1],
         "futures_account_assets": futures_account[1],
+        "funding": funding[1],
+        "futures_transfers": transfers[1],
+        "deposits": deposits[1],
+        "withdrawals": withdrawals[1],
     }
+    # Portfolio-level partial reflects core Phase 2A streams only; capital gaps
+    # surface via capital-flow response + sync panel, not top-level partial.
+    _core_phase2a = ("positions_history", "orders_history", "futures_account_assets")
     return {
         "balances": balances,
         "positions": positions,
@@ -312,8 +335,16 @@ async def fetch_portfolio(
         "position_history": position_history[0],
         "order_history": order_history[0],
         "futures_account": futures_account[0],
+        "funding": funding[0],
+        "futures_transfers": transfers[0],
+        "deposits": deposits[0],
+        "withdrawals": withdrawals[0],
         "sync": sync,
-        "partial": any(not coverage.get("complete", False) for coverage in sync.values()),
+        "partial": any(
+            not sync[stream].get("complete", False)
+            for stream in _core_phase2a
+            if stream in sync
+        ),
     }
 
 
@@ -321,16 +352,35 @@ async def fetch_history(
     exchange_instance: Any,
     user_id: int,
 ) -> Dict[str, Any]:
-    """Fetch position history and order history (closed orders) from the exchange."""
+    """Fetch position/order history and Phase 2B capital-flow streams from the exchange."""
     exchange_name = exchange_instance.id  # e.g. "mexc"
 
     try:
-        position_history, order_history = await asyncio.gather(
+        (
+            position_history,
+            order_history,
+            funding,
+            transfers,
+            deposits,
+            withdrawals,
+        ) = await asyncio.gather(
             asyncio.to_thread(
                 _fetch_positions_history_with_coverage, exchange_instance, user_id, exchange_name
             ),
             asyncio.to_thread(
                 _fetch_order_history_with_coverage, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_funding_history_with_coverage, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_futures_transfers_with_coverage, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_deposits_with_coverage, exchange_instance, user_id, exchange_name
+            ),
+            asyncio.to_thread(
+                _fetch_withdrawals_with_coverage, exchange_instance, user_id, exchange_name
             ),
         )
     except asyncio.TimeoutError:
@@ -345,12 +395,26 @@ async def fetch_history(
     sync = {
         "positions_history": position_history[1],
         "orders_history": order_history[1],
+        "funding": funding[1],
+        "futures_transfers": transfers[1],
+        "deposits": deposits[1],
+        "withdrawals": withdrawals[1],
     }
+    # History partial: core Phase 2A streams only (capital gaps do not flip it).
+    _core_phase2a = ("positions_history", "orders_history", "futures_account_assets")
     return {
         "position_history": position_history[0],
         "order_history": order_history[0],
+        "funding": funding[0],
+        "futures_transfers": transfers[0],
+        "deposits": deposits[0],
+        "withdrawals": withdrawals[0],
         "sync": sync,
-        "partial": any(not coverage.get("complete", False) for coverage in sync.values()),
+        "partial": any(
+            not sync[stream].get("complete", False)
+            for stream in _core_phase2a
+            if stream in sync
+        ),
     }
 
 
@@ -926,6 +990,135 @@ def _fetch_futures_account_assets_with_coverage(
     return snapshot, _coverage("futures_account_assets", rows=[snapshot], status="fresh", complete=True, source_total=1, page_num=1, page_size=1, exhausted=True)
 
 
+# ── Phase 2B capital-flow history helpers ────────────────────────────────────
+
+
+def _fetch_funding_history_with_coverage(
+    exchange: Any,
+    user_id: int,
+    exchange_name: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    from backend.services.phase2b_ledger import coerce_funding_row
+
+    if not (exchange_name == "mexc" and hasattr(exchange, "contract_private_get_position_funding_records")):
+        return [], _coverage(
+            "funding", rows=[], status="unavailable", complete=False, reason="stream_not_supported"
+        )
+    rows, paging = _paginate_mexc_history(
+        exchange.contract_private_get_position_funding_records, "funding"
+    )
+    normalised = [coerce_funding_row(r) for r in rows]
+    return normalised, _coverage("funding", rows=normalised, **paging)
+
+
+def _fetch_futures_transfers_with_coverage(
+    exchange: Any,
+    user_id: int,
+    exchange_name: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    from backend.services.phase2b_ledger import coerce_futures_transfer_row
+
+    if not (exchange_name == "mexc" and hasattr(exchange, "contract_private_get_account_transfer_record")):
+        return [], _coverage(
+            "futures_transfers",
+            rows=[],
+            status="unavailable",
+            complete=False,
+            reason="stream_not_supported",
+        )
+    rows, paging = _paginate_mexc_history(
+        exchange.contract_private_get_account_transfer_record, "futures_transfers"
+    )
+    normalised = [coerce_futures_transfer_row(r) for r in rows]
+    return normalised, _coverage("futures_transfers", rows=normalised, **paging)
+
+
+def _fetch_deposits_with_coverage(
+    exchange: Any,
+    user_id: int,
+    exchange_name: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    from backend.services.phase2b_ledger import coerce_deposit_row
+
+    method = getattr(exchange, "fetch_deposits", None) or getattr(exchange, "fetchDeposits", None)
+    if not callable(method):
+        return [], _coverage(
+            "deposits", rows=[], status="unavailable", complete=False, reason="stream_not_supported"
+        )
+    try:
+        raw = method(limit=100) or []
+    except Exception as exc:
+        return [], _coverage(
+            "deposits",
+            rows=[],
+            status="error",
+            complete=False,
+            error_code=str(getattr(exc, "code", "exchange_error")),
+            error_message=_redact_error(str(exc)),
+        )
+    normalised = [coerce_deposit_row(r if isinstance(r, dict) else {"amount": r}) for r in raw]
+    complete = len(normalised) < 100
+    return normalised, _coverage(
+        "deposits",
+        rows=normalised,
+        status="fresh" if complete else "partial",
+        complete=complete,
+        reason=None if complete else "exchange_boundary_before_source_total",
+        source_total=len(normalised) if complete else None,
+        page_num=1,
+        page_size=100,
+        exhausted=complete,
+        unrecoverable_gaps=[] if complete else [
+            {"stream": "deposits", "reason": "exchange_boundary_before_source_total"}
+        ],
+    )
+
+
+def _fetch_withdrawals_with_coverage(
+    exchange: Any,
+    user_id: int,
+    exchange_name: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    from backend.services.phase2b_ledger import coerce_withdrawal_row
+
+    method = getattr(exchange, "fetch_withdrawals", None) or getattr(exchange, "fetchWithdrawals", None)
+    if not callable(method):
+        return [], _coverage(
+            "withdrawals",
+            rows=[],
+            status="unavailable",
+            complete=False,
+            reason="stream_not_supported",
+        )
+    try:
+        raw = method(limit=100) or []
+    except Exception as exc:
+        return [], _coverage(
+            "withdrawals",
+            rows=[],
+            status="error",
+            complete=False,
+            error_code=str(getattr(exc, "code", "exchange_error")),
+            error_message=_redact_error(str(exc)),
+        )
+    normalised = [coerce_withdrawal_row(r if isinstance(r, dict) else {"amount": r}) for r in raw]
+    complete = len(normalised) < 100
+    return normalised, _coverage(
+        "withdrawals",
+        rows=normalised,
+        status="fresh" if complete else "partial",
+        complete=complete,
+        reason=None if complete else "exchange_boundary_before_source_total",
+        source_total=len(normalised) if complete else None,
+        page_num=1,
+        page_size=100,
+        exhausted=complete,
+        unrecoverable_gaps=[] if complete else [
+            {"stream": "withdrawals", "reason": "exchange_boundary_before_source_total"}
+        ],
+    )
+
+
 def _paginate_mexc_history(method: Any, stream: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     rows_all: List[Dict[str, Any]] = []
     source_total: Optional[int] = None
@@ -1061,7 +1254,10 @@ def _normalise_mexc_order_rows(rows: List[Dict[str, Any]], user_id: int, exchang
 
 
 def _coverage(stream: str, rows: List[Dict[str, Any]], status: str = "fresh", complete: bool = True, reason: Optional[str] = None, source_total: Optional[int] = None, page_num: int = 1, page_size: int = 100, exhausted: bool = True, error_code: Optional[str] = None, error_message: Optional[str] = None, unrecoverable_gaps: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    times = [row.get("close_time") or row.get("timestamp") or row.get("source_ts") for row in rows]
+    times = [
+        row.get("close_time") or row.get("timestamp") or row.get("source_ts") or row.get("occurred_at")
+        for row in rows
+    ]
     times = [ts for ts in times if ts is not None]
     return {
         "stream": stream,

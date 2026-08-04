@@ -40,6 +40,9 @@ jest.mock("@/components/portfolio/risk-metrics-panel", () => ({
 jest.mock("@/components/portfolio/dca-panel", () => ({
   DcaPanel: () => <div>DCA panel</div>,
 }));
+jest.mock("@/components/portfolio/capital-flow-table", () => ({
+  CapitalFlowTable: () => <div>Capital flow table</div>,
+}));
 
 function coverage(overrides: Partial<SyncCoverageItem>): SyncCoverageItem {
   return {
@@ -85,10 +88,10 @@ const PORTFOLIO: PortfolioResponse = {
     coverage({ stream: "positions_history", status: "partial", complete: false, reason: "retention_boundary", rows_fetched_total: 237, source_total: 300 }),
     coverage({ stream: "orders_history", status: "fresh" }),
     coverage({ stream: "futures_account_assets", status: "unavailable", complete: false, reason: "futures_account_snapshot_missing", rows_fetched_total: 0, source_total: null }),
-    coverage({ stream: "funding", status: "not_enabled_phase_2b", complete: false, rows_fetched_total: 0, source_total: null }),
-    coverage({ stream: "futures_transfers", status: "not_enabled_phase_2b", complete: false, rows_fetched_total: 0, source_total: null }),
-    coverage({ stream: "deposits", status: "unavailable", complete: false, reason: "requires_spot_wallet_endpoint_and_retention_probe_phase_2b", rows_fetched_total: 0, source_total: null }),
-    coverage({ stream: "withdrawals", status: "unavailable", complete: false, reason: "requires_spot_wallet_endpoint_and_retention_probe_phase_2b", rows_fetched_total: 0, source_total: null }),
+    coverage({ stream: "funding", status: "fresh" }),
+    coverage({ stream: "futures_transfers", status: "partial", complete: false, reason: "retention_boundary", rows_fetched_total: 10, source_total: 50 }),
+    coverage({ stream: "deposits", status: "unavailable", complete: false, reason: "endpoint_unavailable", rows_fetched_total: 0, source_total: null }),
+    coverage({ stream: "withdrawals", status: "error", complete: false, error_code: "MEXC_510", rows_fetched_total: 0, source_total: null }),
   ],
   futures_account: null,
   partial: true,
@@ -114,7 +117,15 @@ describe("PortfolioDashboard Phase 2A coverage states", () => {
     expect(screen.getByText("Futures snapshot unavailable")).toBeInTheDocument();
     expect(screen.getByText("Spot balances are not futures collateral. Miraj will not use spot balances as futures equity.")).toBeInTheDocument();
     expect(screen.getByText("Capital-flow history unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText("Capital-flow history is partial or unavailable for one or more streams."),
+    ).toBeInTheDocument();
     expect(screen.getByText("Account return unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Account return needs opening equity and complete capital-flow history. Phase 2B does not calculate it.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Complete history/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Lifetime history/i)).not.toBeInTheDocument();
     expect(screen.queryByText("0%")).not.toBeInTheDocument();

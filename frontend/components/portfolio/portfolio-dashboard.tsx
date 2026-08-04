@@ -24,8 +24,14 @@ import { PositionDesk } from "@/components/portfolio/position-desk";
 import { RiskMetricsPanel } from "@/components/portfolio/risk-metrics-panel";
 import { DcaPanel } from "@/components/portfolio/dca-panel";
 import { SyncStatusPanel, statusLabel } from "@/components/portfolio/sync-status-panel";
+import { CapitalFlowTable } from "@/components/portfolio/capital-flow-table";
 import { formatUtcDateTime } from "@/lib/date-format";
-import type { PortfolioResponse, PositionAlertItem, PositionAlertsResponse } from "@/lib/types";
+import type {
+  CapitalFlowResponse,
+  PortfolioResponse,
+  PositionAlertItem,
+  PositionAlertsResponse,
+} from "@/lib/types";
 import type { PriceMap } from "@/hooks/use-price-stream";
 
 /**
@@ -152,6 +158,14 @@ export function PortfolioDashboard({
 
   // Position alerts state (fetched every 5 min for badges + panel).
   const [alertsMap, setAlertsMap] = useState<Record<string, PositionAlertItem>>({});
+
+  // Capital-flow ledger (Phase 2B) — client-fetched, revalidated after refresh.
+  // Start loading=true so first paint is not a false empty ledger before fetch.
+  const [capitalFlow, setCapitalFlow] = useState<CapitalFlowResponse | null>(null);
+  const [capitalFlowLoading, setCapitalFlowLoading] = useState(true);
+  const [capitalFlowError, setCapitalFlowError] = useState<string | null>(null);
+  // Invalidate in-flight responses when exchange/token changes (or unmount).
+  const capitalFlowKeyRef = useRef(`${exchange}|${token ?? ""}`);
 
   const exchangeName = titleCase(exchange);
 
@@ -309,6 +323,84 @@ export function PortfolioDashboard({
     };
   }, [exchange, token]);
 
+  async function fetchCapitalFlow(options?: { reset?: boolean }) {
+    const requestKey = `${exchange}|${token ?? ""}`;
+    capitalFlowKeyRef.current = requestKey;
+    if (options?.reset) {
+      setCapitalFlow(null);
+      setCapitalFlowError(null);
+    }
+    setCapitalFlowLoading(true);
+    try {
+      const headers: HeadersInit = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch(`/api/v1/portfolio/${exchange}/capital-flow`, {
+        headers,
+      });
+      // Check after await so a switched exchange/token never applies stale data.
+      if (capitalFlowKeyRef.current !== requestKey) return;
+      if (!res.ok) {
+        throw new Error(`${res.status} ${res.statusText}`);
+      }
+      const json: CapitalFlowResponse = await res.json();
+      if (capitalFlowKeyRef.current !== requestKey) return;
+      setCapitalFlow(json);
+      setCapitalFlowError(null);
+    } catch (err) {
+      if (capitalFlowKeyRef.current !== requestKey) return;
+      setCapitalFlowError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (capitalFlowKeyRef.current === requestKey) {
+        setCapitalFlowLoading(false);
+      }
+    }
+  }
+
+  // Capital-flow ledger on mount / exchange or token change.
+  // Clear prior exchange data immediately so we never show a stale ledger.
+  useEffect(() => {
+    const requestKey = `${exchange}|${token ?? ""}`;
+    capitalFlowKeyRef.current = requestKey;
+    setCapitalFlow(null);
+    setCapitalFlowError(null);
+    setCapitalFlowLoading(true);
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const headers: HeadersInit = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const res = await fetch(`/api/v1/portfolio/${exchange}/capital-flow`, {
+          headers,
+        });
+        if (cancelled || capitalFlowKeyRef.current !== requestKey) return;
+        if (!res.ok) {
+          throw new Error(`${res.status} ${res.statusText}`);
+        }
+        const json: CapitalFlowResponse = await res.json();
+        if (cancelled || capitalFlowKeyRef.current !== requestKey) return;
+        setCapitalFlow(json);
+        setCapitalFlowError(null);
+      } catch (err) {
+        if (cancelled || capitalFlowKeyRef.current !== requestKey) return;
+        setCapitalFlowError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled && capitalFlowKeyRef.current === requestKey) {
+          setCapitalFlowLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      // Bump key so any in-flight response from this effect is ignored.
+      if (capitalFlowKeyRef.current === requestKey) {
+        capitalFlowKeyRef.current = `${requestKey}|cancelled`;
+      }
+    };
+  }, [exchange, token]);
+
   // The price map is only "live" once the stream is open and we have data.
   const livePrices: PriceMap | null =
     isConnected && Object.keys(prices).length > 0 ? prices : null;
@@ -336,6 +428,9 @@ export function PortfolioDashboard({
           }`,
         );
       }
+      // Re-fetch capital-flow after a successful portfolio refresh so the
+      // ledger tab reflects newly ingested funding/transfers/deposits/withdrawals.
+      await fetchCapitalFlow();
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -531,6 +626,14 @@ export function PortfolioDashboard({
           <TabsTrigger value="analytics">
             Analytics
           </TabsTrigger>
+          <TabsTrigger value="capital-flow">
+            Capital Flow
+            {capitalFlow
+              ? ` (${capitalFlow.entries.length})`
+              : capitalFlowLoading
+                ? " …"
+                : ""}
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="balances">
           <BalancesTable balances={balances} livePrices={livePrices} />
@@ -553,6 +656,27 @@ export function PortfolioDashboard({
         </TabsContent>
         <TabsContent value="analytics">
           <AnalyticsDashboard token={token} exchange={exchange} />
+        </TabsContent>
+        <TabsContent value="capital-flow">
+          {capitalFlowLoading && !capitalFlow ? (
+            <div className="flex items-center gap-2 border border-[#2A2620] bg-[#161411] p-8 text-sm text-[#8E8778]">
+              <Loader2 className="h-4 w-4 animate-spin text-[#C2A36B]" />
+              Loading capital-flow ledger…
+            </div>
+          ) : capitalFlowError && !capitalFlow ? (
+            <div
+              className="border border-[#2A2620] bg-[#161411] p-4 text-sm text-[#C96A55]"
+              role="status"
+            >
+              Failed to load capital-flow ledger: {capitalFlowError}
+            </div>
+          ) : (
+            <CapitalFlowTable
+              entries={capitalFlow?.entries ?? []}
+              sync={capitalFlow?.sync ?? []}
+              partial={capitalFlow?.partial ?? false}
+            />
+          )}
         </TabsContent>
       </Tabs>
     </div>
