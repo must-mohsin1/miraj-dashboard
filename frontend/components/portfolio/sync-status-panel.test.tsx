@@ -162,7 +162,7 @@ describe("SyncStatusPanel", () => {
     expect(screen.getByText("Account return unavailable")).toBeInTheDocument();
     expect(
       screen.getByText(
-        /Account return needs opening futures equity and complete external capital-flow history/,
+        /Account return uses futures wallet equity only \(spot is never the base\)/,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Complete history/i)).not.toBeInTheDocument();
@@ -180,8 +180,44 @@ describe("SyncStatusPanel", () => {
     expect(screen.getByText("Account return unavailable")).toBeInTheDocument();
     expect(
       screen.getByText(
-        /Account return needs opening futures equity and complete external capital-flow history/,
+        /Account return uses futures wallet equity only \(spot is never the base\)/,
       ),
+    ).toBeInTheDocument();
+  });
+
+  it("explains futures_equity_flat without implying spot is the return base", () => {
+    render(
+      <SyncStatusPanel
+        sync={ALL_CAPITAL_FRESH}
+        futuresAccount={{ ...FUTURES_ACCOUNT, equity: 0 }}
+        accountReturnReason="futures_equity_flat"
+      />,
+    );
+
+    expect(screen.getByText("Account return unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText(/futures wallet equity is flat \(zero\)/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Spot balances are not account equity for return/i),
+    ).toBeInTheDocument();
+  });
+
+  it("labels available return as futures equity only", () => {
+    render(
+      <SyncStatusPanel
+        sync={ALL_CAPITAL_FRESH}
+        futuresAccount={FUTURES_ACCOUNT}
+        accountReturnPct={5}
+        netAccountProfitUsd={50}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Futures equity only — cash-flow-adjusted/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Spot balances are not account equity for return/i),
     ).toBeInTheDocument();
   });
 });

@@ -160,7 +160,7 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
             ? (
                 <>
                   <span>
-                    Cash-flow-adjusted
+                    Futures equity only · cash-flow-adjusted
                     {typeof metrics.net_account_profit_usd === "number"
                       ? ` · net profit $${metrics.net_account_profit_usd.toFixed(2)}`
                       : ""}
@@ -168,7 +168,7 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
                   {typeof metrics.opening_equity === "number" &&
                     typeof metrics.ending_equity === "number" && (
                       <span>
-                        Open ${metrics.opening_equity.toFixed(2)} → end $
+                        Futures open ${metrics.opening_equity.toFixed(2)} → end $
                         {metrics.ending_equity.toFixed(2)}
                       </span>
                     )}
@@ -177,7 +177,7 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
             : (
                 <span>
                   Unavailable —{" "}
-                  {readableReason(
+                  {accountReturnReason(
                     metrics.account_return_pct_reason ||
                       metrics.total_pnl_percent_reason ||
                       metrics.unavailable_reason,
@@ -240,9 +240,23 @@ function StatCard({
   );
 }
 
-function readableReason(reason?: string | null): string {
+/** Fail-closed account-return reasons — futures equity only, never spot. */
+const ACCOUNT_RETURN_REASONS: Record<string, string> = {
+  futures_equity_flat:
+    "futures wallet equity is flat (zero). Spot balances are not account equity for return",
+  opening_equity_zero:
+    "futures wallet equity is flat (zero). Spot balances are not account equity for return",
+  opening_equity_missing: "no futures equity snapshot yet",
+  ending_equity_missing: "no ending futures equity snapshot",
+  insufficient_equity_snapshots: "need at least two futures equity snapshots",
+  capital_history_missing: "external capital-flow history not synced",
+  capital_history_incomplete: "external capital-flow history incomplete",
+  not_a_valid_account_return: "closed-trade PnL is not account return",
+};
+
+function accountReturnReason(reason?: string | null): string {
   if (!reason) return "reason unavailable";
-  return reason.replaceAll("_", " ");
+  return ACCOUNT_RETURN_REASONS[reason] ?? reason.replaceAll("_", " ");
 }
 
 export default PerformanceMetrics;

@@ -233,20 +233,28 @@ function Phase2AUnavailableStates({
           {hasReturn ? "Account return" : "Account return unavailable"}
         </h3>
         {hasReturn ? (
-          <p className="mt-1 font-mono text-sm tabular-nums text-[#EDE7DB]">
-            {accountReturnPct! >= 0 ? "+" : ""}
-            {accountReturnPct!.toFixed(2)}%
-            {typeof netAccountProfitUsd === "number" && (
-              <span className="ml-2 text-xs text-[#8E8778]">
-                (net profit {netAccountProfitUsd >= 0 ? "+" : ""}${netAccountProfitUsd.toFixed(2)})
-              </span>
-            )}
-          </p>
+          <>
+            <p className="mt-1 font-mono text-sm tabular-nums text-[#EDE7DB]">
+              {accountReturnPct! >= 0 ? "+" : ""}
+              {accountReturnPct!.toFixed(2)}%
+              {typeof netAccountProfitUsd === "number" && (
+                <span className="ml-2 text-xs text-[#8E8778]">
+                  (net profit {netAccountProfitUsd >= 0 ? "+" : ""}${netAccountProfitUsd.toFixed(2)})
+                </span>
+              )}
+            </p>
+            <p className="mt-1 text-xs text-[#8E8778]">
+              Futures equity only — cash-flow-adjusted. Spot balances are not account equity for
+              return.
+            </p>
+          </>
         ) : (
           <p className="mt-1 text-sm text-[#8E8778]">
-            Account return needs opening futures equity and complete external capital-flow
-            history (deposits, withdrawals, transfers).
-            {accountReturnReason ? ` Reason: ${humanize(accountReturnReason)}.` : ""}
+            Account return uses futures wallet equity only (spot is never the base) plus complete
+            external capital-flow history (deposits, withdrawals, transfers).
+            {accountReturnReason
+              ? ` ${accountReturnReasonCopy(accountReturnReason)}`
+              : ""}
           </p>
         )}
       </div>
@@ -308,6 +316,22 @@ function phase2BDetail(item: SyncCoverageItem): string {
 
 function humanize(value: string): string {
   return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+/** Fail-closed account-return reasons — futures equity only, never spot. */
+function accountReturnReasonCopy(reason: string): string {
+  const copy: Record<string, string> = {
+    futures_equity_flat:
+      "Reason: futures wallet equity is flat (zero). Spot balances are not account equity for return.",
+    opening_equity_zero:
+      "Reason: futures wallet equity is flat (zero). Spot balances are not account equity for return.",
+    opening_equity_missing: "Reason: no futures equity snapshot yet.",
+    ending_equity_missing: "Reason: no ending futures equity snapshot.",
+    insufficient_equity_snapshots: "Reason: need at least two futures equity snapshots.",
+    capital_history_missing: "Reason: external capital-flow history not synced.",
+    capital_history_incomplete: "Reason: external capital-flow history incomplete.",
+  };
+  return copy[reason] ?? `Reason: ${humanize(reason)}.`;
 }
 
 function formatCurrency(value: FuturesAccountItem[keyof FuturesAccountItem]): string {

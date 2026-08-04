@@ -242,6 +242,33 @@ async def test_missing_sync_state_is_capital_history_missing(session: AsyncSessi
     assert result["account_return_pct_reason"] == "capital_history_missing"
 
 
+async def test_flat_futures_equity_is_futures_equity_flat_not_spot_base(session: AsyncSession):
+    """Zero futures equity fails closed — never falls back to spot as return base."""
+    user = await _user(session, "phase3flat")
+    t0 = datetime(2026, 7, 1, 0, 0, 0)
+    t_end = datetime(2026, 8, 1, 0, 0, 0)
+    session.add_all(
+        [
+            _snap(user.id, 0.0, t0, "USDT"),
+            _snap(user.id, 0.0, t_end, "USDT"),
+            _sync(user.id, "deposits"),
+            _sync(user.id, "withdrawals"),
+            _sync(user.id, "futures_transfers"),
+        ]
+    )
+    await session.flush()
+
+    result = await compute_account_return(session, user.id, "mexc")
+
+    assert result["account_return_pct"] is None
+    assert result["account_return_pct_reason"] == "futures_equity_flat"
+    assert result["opening_equity"] == 0.0
+    assert result["ending_equity"] == 0.0
+    assert result["complete"] is False
+    # Basis stays unset when unavailable — product rule is futures-only.
+    assert result["basis"] is None
+
+
 def test_select_primary_futures_prefers_usdt_over_dust_steth():
     from backend.services.futures_settlement import select_primary_futures_raw
 

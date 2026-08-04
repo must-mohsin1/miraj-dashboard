@@ -58,9 +58,12 @@ async def compute_account_return(
 
     opening_equity = float(opening.equity)
     ending_equity = float(ending.equity)
+    # Futures-only product rule: return base is futures wallet equity.
+    # Spot balances are never the denominator. Flat (≈0) futures equity
+    # cannot produce a meaningful cash-flow-adjusted return.
     if abs(opening_equity) <= 1e-8:
         return _unavailable(
-            "opening_equity_zero",
+            "futures_equity_flat",
             coverage_detail=coverage,
             opening_equity=0.0,
             ending_equity=ending_equity,
