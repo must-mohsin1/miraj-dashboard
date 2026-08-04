@@ -268,7 +268,9 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
           ) : (
             <EquityCurve
               points={equity?.points ?? []}
+              markers={equity?.markers ?? []}
               basis={equity?.basis ?? null}
+              settlementAsset={equity?.settlement_asset ?? null}
               unavailableReason={equity?.unavailable_reason ?? null}
             />
           )}

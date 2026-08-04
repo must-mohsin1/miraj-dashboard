@@ -103,13 +103,24 @@ class EquityCurvePoint(BaseModel):
     timestamp: str
     total_value: float
     basis: str | None = None
+    settlement_asset: str | None = None
+
+
+class EquityCurveMarker(BaseModel):
+    timestamp: str
+    entry_type: str
+    signed_amount: float | None = None
+    asset: str | None = None
+    exchange_entry_id: str | None = None
 
 
 class EquityCurveResponse(BaseModel):
     exchange: str
     points: List[EquityCurvePoint]
+    markers: List[EquityCurveMarker] = Field(default_factory=list)
     basis: str | None = None
     source: str | None = None
+    settlement_asset: str | None = None
     complete: bool = False
     unavailable_reason: str | None = None
 
@@ -631,13 +642,11 @@ async def get_equity_curve(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> EquityCurveResponse:
-    """Return account equity curve points from snapshot history.
+    """Return futures wallet equity curve + external capital-flow markers.
 
-    Each point is ``{timestamp, total_value}`` and is emitted only from a
-    snapshot with non-null ``total_balance_usd``. When no account-equity
-    snapshots are available, the response returns ``points=[]`` with
-    ``source=PortfolioSnapshot.total_balance_usd``, ``complete=False``, and
-    ``unavailable_reason=no_account_equity_data``.
+    Points come from ``FuturesAccountSnapshot.equity`` (preferred settlement
+    series). Spot / portfolio total-balance snapshots are never used. External
+    capital events are returned in ``markers`` for chart annotation.
     """
     exchange_slug = _require_supported_exchange(exchange)
     curve = await analytics_service.get_equity_curve(
@@ -646,8 +655,10 @@ async def get_equity_curve(
     return EquityCurveResponse(
         exchange=exchange_slug,
         points=[EquityCurvePoint(**p) for p in curve["points"]],
+        markers=[EquityCurveMarker(**m) for m in curve.get("markers") or []],
         basis=curve.get("basis"),
         source=curve.get("source"),
+        settlement_asset=curve.get("settlement_asset"),
         complete=curve.get("complete", False),
         unavailable_reason=curve.get("unavailable_reason"),
     )
