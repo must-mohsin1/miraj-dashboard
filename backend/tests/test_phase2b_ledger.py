@@ -205,3 +205,91 @@ async def test_unavailable_and_error_coverage_states_persist(session):
     assert states["funding"].status == "unavailable"
     assert states["futures_transfers"].status == "error"
     assert "synthetic-key" not in (states["futures_transfers"].error_message_redacted or "")
+
+
+class MockMexcCapitalExchange:
+    id = "mexc"
+    markets = {}
+
+    def __init__(self, **streams):
+        self._streams = streams
+        self.funding_pages_requested = []
+
+    def contract_private_get_position_funding_records(self, params):
+        self.funding_pages_requested.append(params["pageNum"])
+        pages = self._streams.get("funding_pages", [[]])
+        if isinstance(pages, dict):
+            return pages
+        page = pages[params["pageNum"] - 1] if params["pageNum"] <= len(pages) else []
+        return {
+            "success": True,
+            "data": {
+                "list": page,
+                "totalPage": max(len(pages), 1),
+                "total": sum(len(p) for p in pages),
+                "pageNum": params["pageNum"],
+                "pageSize": 100,
+            },
+        }
+
+    def contract_private_get_account_transfer_record(self, params):
+        pages = self._streams.get("transfer_pages", [[]])
+        page = pages[params["pageNum"] - 1] if params["pageNum"] <= len(pages) else []
+        return {
+            "success": True,
+            "data": {
+                "list": page,
+                "totalPage": max(len(pages), 1),
+                "total": sum(len(p) for p in pages),
+            },
+        }
+
+    def fetch_deposits(self, code=None, since=None, limit=None, params=None):
+        return self._streams.get("deposits", [])
+
+    def fetch_withdrawals(self, code=None, since=None, limit=None, params=None):
+        return self._streams.get("withdrawals", [])
+
+
+async def test_fetch_history_includes_capital_flow_streams_and_coverage():
+    from backend.services.exchange_service import fetch_history
+
+    exchange = MockMexcCapitalExchange(
+        funding_pages=[[FUNDING_WITH_ID, FUNDING_RECEIPT]],
+        transfer_pages=[[TRANSFER_IN]],
+        deposits=[DEPOSIT],
+        withdrawals=[WITHDRAWAL],
+    )
+    # attach position/order methods as empty so Phase 2A streams stay available
+    exchange.contract_private_get_position_list_history_positions = lambda params: {
+        "success": True, "data": {"list": [], "totalPage": 1, "total": 0}
+    }
+    exchange.contract_private_get_order_list_history_orders = lambda params: {
+        "success": True, "data": {"list": [], "totalPage": 1, "total": 0}
+    }
+
+    data = await fetch_history(exchange, user_id=9)
+    assert "funding" in data["sync"]
+    assert data["sync"]["funding"]["status"] == "fresh"
+    assert len(data["funding"]) == 2
+    assert data["funding"][0]["entry_type"] == "funding"
+    assert data["sync"]["deposits"]["rows_fetched_total"] == 1
+    assert data["sync"]["withdrawals"]["complete"] is True
+
+
+async def test_missing_capability_marks_stream_unavailable():
+    from backend.services.exchange_service import fetch_history
+
+    class Bare:
+        id = "mexc"
+        def contract_private_get_position_list_history_positions(self, params):
+            return {"success": True, "data": {"list": [], "totalPage": 1, "total": 0}}
+        def contract_private_get_order_list_history_orders(self, params):
+            return {"success": True, "data": {"list": [], "totalPage": 1, "total": 0}}
+
+    data = await fetch_history(Bare(), user_id=9)
+    assert data["sync"]["funding"]["status"] == "unavailable"
+    assert data["sync"]["funding"]["reason"] == "stream_not_supported"
+    assert data["sync"]["futures_transfers"]["status"] == "unavailable"
+    assert data["sync"]["deposits"]["status"] == "unavailable"
+    assert data["sync"]["withdrawals"]["status"] == "unavailable"
