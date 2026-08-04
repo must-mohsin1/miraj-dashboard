@@ -397,14 +397,26 @@ export interface EquityCurvePoint {
   timestamp: string;
   total_value: number;
   basis?: string | null;
+  settlement_asset?: string | null;
+}
+
+/** External capital-flow annotation on the equity curve. */
+export interface EquityCurveMarker {
+  timestamp: string;
+  entry_type: string;
+  signed_amount?: number | null;
+  asset?: string | null;
+  exchange_entry_id?: string | null;
 }
 
 /** Response for `GET /api/v1/analytics/{exchange}/equity-curve`. */
 export interface EquityCurveResponse {
   exchange: string;
   points: EquityCurvePoint[];
+  markers?: EquityCurveMarker[];
   basis: string | null;
   source: string | null;
+  settlement_asset?: string | null;
   complete: boolean;
   unavailable_reason: string | null;
 }

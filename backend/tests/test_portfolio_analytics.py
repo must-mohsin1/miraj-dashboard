@@ -18,7 +18,15 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-key-not-for-production")
 from backend import database
 from backend.auth import hash_password
 from backend.database import Base, set_db_path
-from backend.models import PortfolioBalance, PortfolioPosition, PortfolioSnapshot, PositionHistory, User
+from backend.models import (
+    CapitalFlowLedger,
+    FuturesAccountSnapshot,
+    PortfolioBalance,
+    PortfolioPosition,
+    PortfolioSnapshot,
+    PositionHistory,
+    User,
+)
 from backend.routes import analytics as analytics_routes
 from backend.services import analytics_service
 from backend.tests.fixtures.frozen_positions import (
@@ -112,8 +120,8 @@ async def test_route_docstrings_keep_phase0_analytics_contract_truthful():
 
     assert "trade_quality_score" in performance_doc
     assert "realised_pnl_drawdown_*" in performance_doc
-    assert "total_balance_usd" in equity_doc
-    assert "no_account_equity_data" in equity_doc
+    assert "FuturesAccountSnapshot" in equity_doc
+    assert "markers" in equity_doc
 
 
 async def test_frozen_positions_fixture_pins_reported_mexc_contract(session, user: User):
@@ -240,10 +248,11 @@ async def test_drawdown_and_trade_quality_are_named_by_realised_pnl_basis(sessio
 
 
 async def test_equity_curve_does_not_fallback_to_unrealised_or_total_pnl(session, user: User):
+    # PortfolioSnapshot / total_pnl must never become the equity curve.
     session.add_all(
         [
             PortfolioSnapshot(user_id=user.id, exchange="mexc", total_balance_usd=None, total_pnl_usd=-12.0, open_positions=1, timestamp=datetime(2026, 7, 1, 23, 59)),
-            PortfolioSnapshot(user_id=user.id, exchange="mexc", total_balance_usd=None, total_pnl_usd=0.0, open_positions=0, timestamp=datetime(2026, 7, 2, 0, 1)),
+            PortfolioSnapshot(user_id=user.id, exchange="mexc", total_balance_usd=9999.0, total_pnl_usd=0.0, open_positions=0, timestamp=datetime(2026, 7, 2, 0, 1)),
         ]
     )
     await session.flush()
@@ -253,27 +262,93 @@ async def test_equity_curve_does_not_fallback_to_unrealised_or_total_pnl(session
     assert curve["points"] == []
     assert curve["basis"] is None
     assert curve["unavailable_reason"] == "no_account_equity_data"
-    assert curve["source"] == "PortfolioSnapshot.total_balance_usd"
+    assert curve["source"] == "FuturesAccountSnapshot.equity"
     assert curve["complete"] is False
+    assert curve["markers"] == []
 
 
-async def test_equity_curve_omits_null_points_from_partial_history(session, user: User):
+async def test_equity_curve_uses_futures_series_and_external_markers(session, user: User):
+    t0 = datetime(2026, 7, 1, 0, 0, 0)
+    t1 = datetime(2026, 7, 2, 0, 0, 0)
+    t_mid = datetime(2026, 7, 1, 12, 0, 0)
     session.add_all(
         [
-            PortfolioSnapshot(user_id=user.id, exchange="mexc", total_balance_usd=None, total_pnl_usd=7.0, open_positions=1, timestamp=datetime(2026, 7, 1, 23, 59)),
-            PortfolioSnapshot(user_id=user.id, exchange="mexc", total_balance_usd=1000.25, total_pnl_usd=8.0, open_positions=1, timestamp=datetime(2026, 7, 2, 0, 1)),
+            # Dust series must not win over USDT.
+            FuturesAccountSnapshot(
+                user_id=user.id, exchange="mexc", settlement_asset="STETH",
+                equity=0.0, source_ts=t0, synced_at=t0,
+            ),
+            FuturesAccountSnapshot(
+                user_id=user.id, exchange="mexc", settlement_asset="USDT",
+                equity=1000.0, source_ts=t0, synced_at=t0,
+            ),
+            FuturesAccountSnapshot(
+                user_id=user.id, exchange="mexc", settlement_asset="USDT",
+                equity=1100.5, source_ts=t1, synced_at=t1,
+            ),
+            CapitalFlowLedger(
+                user_id=user.id, exchange="mexc", entry_type="deposit",
+                exchange_entry_id="dep-1", asset="USDT", amount=50.0, signed_amount=50.0,
+                occurred_at=t_mid, synced_at=t_mid,
+            ),
+            # Funding is not an external capital marker.
+            CapitalFlowLedger(
+                user_id=user.id, exchange="mexc", entry_type="funding",
+                exchange_entry_id="fund-1", asset="USDT", amount=1.0, signed_amount=-1.0,
+                occurred_at=t_mid, synced_at=t_mid,
+            ),
         ]
     )
     await session.flush()
 
     curve = await analytics_service.get_equity_curve(session, user.id, "mexc")
 
-    assert curve["basis"] == "account_snapshot"
+    assert curve["basis"] == "futures_equity"
+    assert curve["settlement_asset"] == "USDT"
     assert curve["unavailable_reason"] is None
-    assert curve["complete"] is False
-    assert curve["points"] == [
-        {"timestamp": "2026-07-02T00:01:00+00:00", "total_value": 1000.25, "basis": "account_snapshot"}
-    ]
+    assert curve["complete"] is True
+    assert curve["source"] == "FuturesAccountSnapshot.equity"
+    assert len(curve["points"]) == 2
+    assert curve["points"][0]["total_value"] == 1000.0
+    assert curve["points"][1]["total_value"] == 1100.5
+    assert len(curve["markers"]) == 1
+    assert curve["markers"][0]["entry_type"] == "deposit"
+    assert curve["markers"][0]["signed_amount"] == 50.0
+
+
+async def test_account_equity_drawdown_from_futures_series(session, user: User):
+    t0 = datetime(2026, 7, 1, 0, 0, 0)
+    t1 = datetime(2026, 7, 2, 0, 0, 0)
+    t2 = datetime(2026, 7, 3, 0, 0, 0)
+    session.add_all(
+        [
+            FuturesAccountSnapshot(
+                user_id=user.id, exchange="mexc", settlement_asset="USDT",
+                equity=1000.0, source_ts=t0, synced_at=t0,
+            ),
+            FuturesAccountSnapshot(
+                user_id=user.id, exchange="mexc", settlement_asset="USDT",
+                equity=1200.0, source_ts=t1, synced_at=t1,
+            ),
+            FuturesAccountSnapshot(
+                user_id=user.id, exchange="mexc", settlement_asset="USDT",
+                equity=900.0, source_ts=t2, synced_at=t2,
+            ),
+            PositionHistory(
+                user_id=user.id, exchange="mexc", symbol="BTCUSDT", side="long",
+                size=1.0, entry_price=1.0, exit_price=1.0, pnl=10.0, close_time=t2,
+            ),
+        ]
+    )
+    await session.flush()
+
+    metrics = await analytics_service.compute_performance_metrics(session, user.id, "mexc")
+    # Peak 1200 → trough 900 = 300 drawdown (25% of peak)
+    assert metrics["account_equity_drawdown_usd"] == 300.0
+    assert metrics["account_equity_drawdown_pct"] == 25.0
+    assert metrics["account_equity_drawdown_reason"] is None
+    # Realised PnL drawdown stays separate.
+    assert metrics["drawdown_basis"] == "cumulative_closed_pnl"
 
 
 async def test_spot_allocation_is_labeled_and_risk_does_not_use_spot_as_futures_denominator(session, user: User, monkeypatch: pytest.MonkeyPatch):

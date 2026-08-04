@@ -161,7 +161,8 @@ describe("portfolio analytics Phase 0 truth labels", () => {
 
     expect(screen.getByText("MEXC-reported closed-position PnL")).toBeInTheDocument();
     expect(screen.getByText("Account return")).toBeInTheDocument();
-    expect(screen.getByText(/Unavailable — capital history missing/)).toBeInTheDocument();
+    expect(screen.getByText(/Unavailable —/)).toBeInTheDocument();
+    expect(screen.getByText(/capital-flow history not synced|capital history missing/i)).toBeInTheDocument();
     expect(screen.queryByText("+25.00%")).not.toBeInTheDocument();
   });
 
@@ -226,7 +227,11 @@ describe("portfolio analytics Phase 0 truth labels", () => {
     );
 
     expect(screen.getByText("Account equity unavailable — no account equity data")).toBeInTheDocument();
-    expect(screen.getByText("PortfolioSnapshot.total_balance_usd is missing; realised-PnL reconstruction is shown separately.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Futures wallet equity history is missing\. Spot balances are not account equity for this curve\./,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("labels spot allocation separately from futures collateral", () => {

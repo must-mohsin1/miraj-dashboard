@@ -20,8 +20,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models import PortfolioBalance, PortfolioSnapshot, PositionHistory, TradeJournalEntry
-from backend.services.phase3_account_return import compute_account_return
+from backend.models import (
+    CapitalFlowLedger,
+    FuturesAccountSnapshot,
+    PortfolioBalance,
+    PositionHistory,
+    TradeJournalEntry,
+)
+from backend.services.phase3_account_return import EXTERNAL_ENTRY_TYPES, compute_account_return
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +61,7 @@ async def compute_performance_metrics(
 
     if total_trades == 0:
         metrics = _empty_metrics()
+        metrics = await _merge_account_equity_drawdown(session, user_id, exchange, metrics)
         return _merge_account_return(metrics, account)
 
     pnls = [float(p.pnl or 0.0) for p in positions]
@@ -103,7 +110,7 @@ async def compute_performance_metrics(
         "drawdown_basis": "cumulative_closed_pnl",
         "account_equity_drawdown_usd": None,
         "account_equity_drawdown_pct": None,
-        "account_equity_drawdown_reason": "capital_history_missing",
+        "account_equity_drawdown_reason": "no_account_equity_data",
         # Backward-compatible aliases retained for Phase 0 clients. New UI uses
         # the explicit replacement names above.
         "sharpe_ratio": rounded_trade_quality,
@@ -124,6 +131,7 @@ async def compute_performance_metrics(
         "source": "PositionHistory.pnl",
         "basis": "closed_position_reconstruction",
     }
+    metrics = await _merge_account_equity_drawdown(session, user_id, exchange, metrics)
     return _merge_account_return(metrics, account)
 
 
@@ -139,7 +147,7 @@ def _empty_metrics() -> Dict[str, Any]:
         "drawdown_basis": "cumulative_closed_pnl",
         "account_equity_drawdown_usd": None,
         "account_equity_drawdown_pct": None,
-        "account_equity_drawdown_reason": "capital_history_missing",
+        "account_equity_drawdown_reason": "no_account_equity_data",
         "sharpe_ratio": None,
         "max_drawdown": 0.0,
         "max_drawdown_percent": 0.0,
@@ -157,6 +165,19 @@ def _empty_metrics() -> Dict[str, Any]:
         "source": "PositionHistory.pnl",
         "basis": "closed_position_reconstruction",
     }
+
+
+async def _merge_account_equity_drawdown(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+    metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    equity_dd = await _account_equity_drawdown(session, user_id, exchange)
+    metrics["account_equity_drawdown_usd"] = equity_dd["usd"]
+    metrics["account_equity_drawdown_pct"] = equity_dd["pct"]
+    metrics["account_equity_drawdown_reason"] = equity_dd["reason"]
+    return metrics
 
 
 def _merge_account_return(metrics: Dict[str, Any], account: Dict[str, Any]) -> Dict[str, Any]:
@@ -203,6 +224,87 @@ def _compute_max_drawdown(pnls: List[float]) -> tuple[float, Optional[float]]:
     return max_dd, max_dd_pct
 
 
+def _compute_series_drawdown(values: List[float]) -> tuple[Optional[float], Optional[float]]:
+    """Peak-to-trough drawdown over an equity level series (not cumulative PnL)."""
+    if len(values) < 2:
+        return None, None
+    peak = values[0]
+    max_dd = 0.0
+    max_dd_pct: Optional[float] = 0.0
+    for value in values:
+        if value > peak:
+            peak = value
+        drawdown = peak - value
+        if drawdown > max_dd:
+            max_dd = drawdown
+            max_dd_pct = (drawdown / peak) * 100 if abs(peak) > 1e-8 else None
+    return max_dd, max_dd_pct
+
+
+async def _load_futures_equity_series(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+) -> tuple[List[FuturesAccountSnapshot], Optional[str]]:
+    """Load settlement-aware futures equity history (USDT preferred over dust)."""
+    from backend.services.futures_settlement import choose_settlement_asset_for_series
+
+    result = await session.execute(
+        select(FuturesAccountSnapshot)
+        .where(
+            FuturesAccountSnapshot.user_id == user_id,
+            FuturesAccountSnapshot.exchange == exchange,
+            FuturesAccountSnapshot.equity.is_not(None),
+        )
+        .order_by(
+            FuturesAccountSnapshot.source_ts.asc(),
+            FuturesAccountSnapshot.id.asc(),
+        )
+    )
+    rows = list(result.scalars().all())
+    if not rows:
+        return [], None
+    peak: Dict[str, float] = {}
+    for row in rows:
+        asset = (row.settlement_asset or "USDT").upper()
+        peak[asset] = max(peak.get(asset, 0.0), abs(float(row.equity or 0.0)))
+    chosen = choose_settlement_asset_for_series(peak.keys(), peak)
+    if chosen is None:
+        return rows, None
+    series = [r for r in rows if (r.settlement_asset or "").upper() == chosen]
+    return series, chosen
+
+
+async def _account_equity_drawdown(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+) -> Dict[str, Any]:
+    series, settlement = await _load_futures_equity_series(session, user_id, exchange)
+    if len(series) < 2:
+        return {
+            "usd": None,
+            "pct": None,
+            "reason": "no_account_equity_data" if not series else "insufficient_equity_snapshots",
+            "settlement_asset": settlement,
+        }
+    values = [float(s.equity or 0.0) for s in series]
+    if all(abs(v) <= 1e-8 for v in values):
+        return {
+            "usd": 0.0,
+            "pct": None,
+            "reason": "futures_equity_flat",
+            "settlement_asset": settlement,
+        }
+    usd, pct = _compute_series_drawdown(values)
+    return {
+        "usd": round(usd, 2) if usd is not None else None,
+        "pct": round(pct, 2) if pct is not None else None,
+        "reason": None,
+        "settlement_asset": settlement,
+    }
+
+
 # ── Equity curve ────────────────────────────────────────────────────────────
 
 
@@ -211,50 +313,80 @@ async def get_equity_curve(
     user_id: int,
     exchange: str,
 ) -> Dict[str, Any]:
-    """Return account-equity points from ``PortfolioSnapshot.total_balance_usd``.
+    """Return futures wallet equity curve + external capital-flow markers.
 
-    Null snapshot balances are omitted. Phase 0 does not fallback to unrealised
-    PnL or realised-PnL reconstruction because those are not account equity.
+    Source of truth is ``FuturesAccountSnapshot.equity`` for the preferred
+    settlement series (USDT over dust). Spot / ``PortfolioSnapshot`` is never
+    used as account equity. External capital events (deposit, withdrawal,
+    futures_transfer) are returned as markers for the chart.
     """
-    result = await session.execute(
-        select(PortfolioSnapshot)
-        .where(
-            PortfolioSnapshot.user_id == user_id,
-            PortfolioSnapshot.exchange == exchange,
-        )
-        .order_by(PortfolioSnapshot.timestamp.asc())
-    )
-    snapshots: List[PortfolioSnapshot] = list(result.scalars().all())
-
+    series, settlement = await _load_futures_equity_series(session, user_id, exchange)
     points: List[Dict[str, Any]] = []
-    for snapshot in snapshots:
-        if snapshot.total_balance_usd is None:
+    for snap in series:
+        if snap.equity is None or snap.source_ts is None:
             continue
         points.append(
             {
-                "timestamp": _iso_ts(snapshot.timestamp),
-                "total_value": round(float(snapshot.total_balance_usd), 2),
-                "basis": "account_snapshot",
+                "timestamp": _iso_ts(snap.source_ts),
+                "total_value": round(float(snap.equity), 4),
+                "basis": "futures_equity",
+                "settlement_asset": snap.settlement_asset,
             }
         )
 
-    has_null_snapshots = any(snapshot.total_balance_usd is None for snapshot in snapshots)
+    markers = await _capital_flow_markers(session, user_id, exchange)
+
     if not points:
         return {
             "points": [],
+            "markers": markers,
             "basis": None,
-            "source": "PortfolioSnapshot.total_balance_usd",
+            "source": "FuturesAccountSnapshot.equity",
+            "settlement_asset": settlement,
             "complete": False,
             "unavailable_reason": "no_account_equity_data",
         }
 
     return {
         "points": points,
-        "basis": "account_snapshot",
-        "source": "PortfolioSnapshot.total_balance_usd",
-        "complete": not has_null_snapshots,
+        "markers": markers,
+        "basis": "futures_equity",
+        "source": "FuturesAccountSnapshot.equity",
+        "settlement_asset": settlement,
+        "complete": True,
         "unavailable_reason": None,
     }
+
+
+async def _capital_flow_markers(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+) -> List[Dict[str, Any]]:
+    result = await session.execute(
+        select(CapitalFlowLedger)
+        .where(
+            CapitalFlowLedger.user_id == user_id,
+            CapitalFlowLedger.exchange == exchange,
+            CapitalFlowLedger.entry_type.in_(EXTERNAL_ENTRY_TYPES),
+            CapitalFlowLedger.occurred_at.is_not(None),
+        )
+        .order_by(CapitalFlowLedger.occurred_at.asc())
+    )
+    markers: List[Dict[str, Any]] = []
+    for row in result.scalars().all():
+        markers.append(
+            {
+                "timestamp": _iso_ts(row.occurred_at),
+                "entry_type": row.entry_type,
+                "signed_amount": round(float(row.signed_amount), 4)
+                if row.signed_amount is not None
+                else None,
+                "asset": row.asset,
+                "exchange_entry_id": row.exchange_entry_id,
+            }
+        )
+    return markers
 
 
 # ── Daily / period PnL ──────────────────────────────────────────────────────
