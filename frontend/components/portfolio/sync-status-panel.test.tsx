@@ -20,13 +20,52 @@ function coverage(overrides: Partial<SyncCoverageItem>): SyncCoverageItem {
   };
 }
 
+/** Real capital-flow stream statuses (Phase 2B): funding fresh, transfers partial, deposits unavailable, withdrawals error. */
 const ALL_STATES: SyncCoverageItem[] = [
   coverage({ stream: "positions_history", status: "fresh" }),
   coverage({ stream: "orders_history", status: "stale", complete: false, last_success_at: "2026-07-24T20:00:00Z" }),
-  coverage({ stream: "futures_account_assets", status: "partial", complete: false, reason: "retention_boundary", rows_fetched_total: 80, source_total: 100 }),
-  coverage({ stream: "funding", status: "error", complete: false, error_code: "MEXC_510", last_success_at: "2026-07-23T20:00:00Z" }),
-  coverage({ stream: "deposits", status: "unavailable", complete: false, reason: "requires_spot_wallet_endpoint_and_retention_probe_phase_2b", rows_fetched_total: 0, source_total: null }),
-  coverage({ stream: "futures_transfers", status: "not_enabled_phase_2b", complete: false, rows_fetched_total: 0, source_total: null }),
+  coverage({
+    stream: "futures_account_assets",
+    status: "partial",
+    complete: false,
+    reason: "retention_boundary",
+    rows_fetched_total: 80,
+    source_total: 100,
+  }),
+  coverage({ stream: "funding", status: "fresh" }),
+  coverage({
+    stream: "futures_transfers",
+    status: "partial",
+    complete: false,
+    reason: "retention_boundary",
+    rows_fetched_total: 10,
+    source_total: 50,
+  }),
+  coverage({
+    stream: "deposits",
+    status: "unavailable",
+    complete: false,
+    reason: "endpoint_unavailable",
+    rows_fetched_total: 0,
+    source_total: null,
+  }),
+  coverage({
+    stream: "withdrawals",
+    status: "error",
+    complete: false,
+    error_code: "MEXC_510",
+    last_success_at: "2026-07-23T20:00:00Z",
+    rows_fetched_total: 0,
+    source_total: null,
+  }),
+];
+
+const ALL_CAPITAL_FRESH: SyncCoverageItem[] = [
+  coverage({ stream: "positions_history", status: "fresh" }),
+  coverage({ stream: "funding", status: "fresh" }),
+  coverage({ stream: "futures_transfers", status: "fresh" }),
+  coverage({ stream: "deposits", status: "fresh" }),
+  coverage({ stream: "withdrawals", status: "fresh" }),
 ];
 
 const FUTURES_ACCOUNT: FuturesAccountItem = {
@@ -45,22 +84,24 @@ const FUTURES_ACCOUNT: FuturesAccountItem = {
 };
 
 describe("SyncStatusPanel", () => {
-  it("renders every Phase 2A coverage state as visible text paired with stream labels", () => {
+  it("renders every coverage state as visible text paired with stream labels", () => {
     render(<SyncStatusPanel sync={ALL_STATES} futuresAccount={FUTURES_ACCOUNT} partial />);
 
     const table = screen.getByRole("table", { name: "MEXC stream synchronization coverage states" });
     expect(within(table).getByText("Position history")).toBeInTheDocument();
-    expect(within(table).getByText("Fresh")).toBeInTheDocument();
     expect(within(table).getByText("Order history")).toBeInTheDocument();
     expect(within(table).getByText("Stale")).toBeInTheDocument();
     expect(within(table).getByText("Futures account assets")).toBeInTheDocument();
-    expect(within(table).getByText("Partial history")).toBeInTheDocument();
     expect(within(table).getByText("Funding history")).toBeInTheDocument();
-    expect(within(table).getByText("Sync error")).toBeInTheDocument();
+    expect(within(table).getByText("Futures transfers")).toBeInTheDocument();
     expect(within(table).getByText("Deposits")).toBeInTheDocument();
     expect(within(table).getByText("Unavailable")).toBeInTheDocument();
-    expect(within(table).getByText("Futures transfers")).toBeInTheDocument();
-    expect(within(table).getByText("Phase 2B")).toBeInTheDocument();
+    expect(within(table).getByText("Withdrawals")).toBeInTheDocument();
+    expect(within(table).getByText("Sync error")).toBeInTheDocument();
+    // Capital streams use real statuses — partial (not Phase 2B placeholder)
+    expect(within(table).getAllByText("Partial history").length).toBeGreaterThanOrEqual(1);
+    expect(within(table).getAllByText("Fresh").length).toBeGreaterThanOrEqual(1);
+    expect(within(table).queryByText("Phase 2B")).not.toBeInTheDocument();
     expect(within(table).getAllByText("Jul 1, 2026, 00:00 UTC to Jul 25, 2026, 20:00 UTC").length).toBeGreaterThan(0);
     expect(within(table).getAllByText("237 of 237").length).toBeGreaterThan(0);
   });
@@ -90,18 +131,41 @@ describe("SyncStatusPanel", () => {
     expect(screen.queryByText("Account return")).not.toBeInTheDocument();
   });
 
-  it("renders partial history and capital-flow/account-return unavailable copy without lifetime-complete claims", () => {
+  it("renders partial history and capital-flow/account-return copy without lifetime-complete claims", () => {
     render(<SyncStatusPanel sync={ALL_STATES} futuresAccount={null} partial />);
 
     expect(screen.getByText("Futures snapshot unavailable")).toBeInTheDocument();
     expect(screen.getByText("Spot balances are not futures collateral. Miraj will not use spot balances as futures equity.")).toBeInTheDocument();
     expect(screen.getAllByText("Partial history").length).toBeGreaterThan(0);
     expect(screen.getByText("Capital-flow history unavailable")).toBeInTheDocument();
-    expect(screen.getByText("Funding, transfers, deposits, and withdrawals are not ingested in Phase 2A.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Capital-flow history is partial or unavailable for one or more streams."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Funding, transfers, deposits, and withdrawals are not ingested in Phase 2A.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ledger ingestion and retention validation belong to Phase 2B.")).not.toBeInTheDocument();
     expect(screen.getByText("Account return unavailable")).toBeInTheDocument();
-    expect(screen.getByText("Account return needs opening equity and complete capital-flow history. Phase 2A does not calculate it.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Account return needs opening equity and complete capital-flow history. Phase 2B does not calculate it.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Complete history/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Full history/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Lifetime history/i)).not.toBeInTheDocument();
+  });
+
+  it("shows synchronized capital-flow copy when all four streams are fresh", () => {
+    render(<SyncStatusPanel sync={ALL_CAPITAL_FRESH} futuresAccount={FUTURES_ACCOUNT} />);
+
+    expect(screen.getByText("Capital-flow streams are synchronized.")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Capital-flow history is partial or unavailable for one or more streams."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Account return unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Account return needs opening equity and complete capital-flow history. Phase 2B does not calculate it.",
+      ),
+    ).toBeInTheDocument();
   });
 });
