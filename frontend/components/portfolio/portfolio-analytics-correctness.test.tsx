@@ -23,6 +23,9 @@ const METRICS: PerformanceMetricsType = {
   realised_pnl_drawdown_usd: 5,
   realised_pnl_drawdown_pct: 20,
   drawdown_basis: "cumulative_closed_pnl",
+  account_equity_drawdown_usd: null,
+  account_equity_drawdown_pct: null,
+  account_equity_drawdown_reason: "futures_equity_flat",
   trade_quality_score: 1.25,
   trade_quality_basis: "per_trade_pnl_dispersion",
   average_win: 15,
@@ -161,7 +164,7 @@ describe("portfolio analytics Phase 0 truth labels", () => {
 
     expect(screen.getByText("MEXC-reported closed-position PnL")).toBeInTheDocument();
     expect(screen.getByText("Account return")).toBeInTheDocument();
-    expect(screen.getByText(/Unavailable —/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Unavailable —/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/capital-flow history not synced|capital history missing/i)).toBeInTheDocument();
     expect(screen.queryByText("+25.00%")).not.toBeInTheDocument();
   });
@@ -214,6 +217,8 @@ describe("portfolio analytics Phase 0 truth labels", () => {
     expect(screen.getByText("Per-trade PnL dispersion")).toBeInTheDocument();
     expect(screen.getByText("Realised-PnL Drawdown")).toBeInTheDocument();
     expect(screen.getByText(/Cumulative closed PnL/)).toBeInTheDocument();
+    expect(screen.getByText("Futures equity drawdown")).toBeInTheDocument();
+    expect(screen.getByText(/futures wallet equity is flat/i)).toBeInTheDocument();
     expect(screen.queryByText("Sharpe Ratio")).not.toBeInTheDocument();
   });
 

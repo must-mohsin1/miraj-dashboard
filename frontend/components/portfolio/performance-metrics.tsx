@@ -91,6 +91,38 @@ export function PerformanceMetrics({ metrics }: PerformanceMetricsProps) {
       />
 
       <StatCard
+        label="Futures equity drawdown"
+        value={
+          metrics.account_equity_drawdown_usd === null ||
+          metrics.account_equity_drawdown_usd === undefined
+            ? "—"
+            : `-$${metrics.account_equity_drawdown_usd.toFixed(2)}`
+        }
+        icon={<AlertTriangle className="h-4 w-4" />}
+        negative={(metrics.account_equity_drawdown_usd ?? 0) > 0}
+        hint={
+          metrics.account_equity_drawdown_usd !== null &&
+          metrics.account_equity_drawdown_usd !== undefined &&
+          !metrics.account_equity_drawdown_reason
+            ? (
+                <span>
+                  {metrics.account_equity_drawdown_pct !== null &&
+                  metrics.account_equity_drawdown_pct !== undefined
+                    ? `${metrics.account_equity_drawdown_pct.toFixed(1)}% of peak · `
+                    : ""}
+                  Futures wallet equity (spot not included)
+                </span>
+              )
+            : (
+                <span>
+                  Unavailable —{" "}
+                  {equityDrawdownReason(metrics.account_equity_drawdown_reason)}
+                </span>
+              )
+        }
+      />
+
+      <StatCard
         label="Total Trades"
         value={String(metrics.total_trades)}
         icon={<Zap className="h-4 w-4" />}
@@ -254,9 +286,22 @@ const ACCOUNT_RETURN_REASONS: Record<string, string> = {
   not_a_valid_account_return: "closed-trade PnL is not account return",
 };
 
+const EQUITY_DRAWDOWN_REASONS: Record<string, string> = {
+  futures_equity_flat:
+    "futures wallet equity is flat (zero). Spot is not used for equity drawdown",
+  no_account_equity_data: "no futures equity snapshots yet",
+  insufficient_equity_snapshots: "need at least two futures equity snapshots",
+  capital_history_missing: "no futures equity history for drawdown",
+};
+
 function accountReturnReason(reason?: string | null): string {
   if (!reason) return "reason unavailable";
   return ACCOUNT_RETURN_REASONS[reason] ?? reason.replaceAll("_", " ");
+}
+
+function equityDrawdownReason(reason?: string | null): string {
+  if (!reason) return "reason unavailable";
+  return EQUITY_DRAWDOWN_REASONS[reason] ?? reason.replaceAll("_", " ");
 }
 
 export default PerformanceMetrics;

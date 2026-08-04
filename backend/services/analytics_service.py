@@ -1166,5 +1166,114 @@ async def get_journal_summary(
         bucket["win_rate"] = (
             round((bucket["winning_trades"] / decisive) * 100, 2) if decisive else 0.0
         )
+        bucket["avg_pnl"] = (
+            round(bucket["total_pnl"] / bucket["trade_count"], 2)
+            if bucket["trade_count"]
+            else 0.0
+        )
 
-    return {"total_entries": total_entries, "tags": tag_stats}
+    linked = sum(1 for e in entries if e.position_id is not None)
+    insights = _strategy_insights_from_tags(tag_stats, total_entries, linked)
+
+    return {
+        "total_entries": total_entries,
+        "linked_to_position": linked,
+        "unlinked_to_position": total_entries - linked,
+        "tags": tag_stats,
+        "insights": insights,
+    }
+
+
+def _strategy_insights_from_tags(
+    tag_stats: Dict[str, Dict[str, Any]],
+    total_entries: int,
+    linked_to_position: int,
+) -> List[Dict[str, Any]]:
+    """Descriptive, evidence-based insight cards (Phase 4). Fail closed when empty."""
+    insights: List[Dict[str, Any]] = []
+    if total_entries == 0:
+        return [
+            {
+                "id": "no_journal_entries",
+                "severity": "warning",
+                "title": "No journal entries yet",
+                "body": "Tag closed trades in the journal to build strategy scorecards.",
+                "evidence_tag": None,
+                "evidence_count": 0,
+            }
+        ]
+
+    ranked = sorted(
+        ((tag, stats) for tag, stats in tag_stats.items() if tag != "untagged"),
+        key=lambda item: (item[1]["total_pnl"], item[1]["trade_count"]),
+        reverse=True,
+    )
+    if ranked:
+        best_tag, best = ranked[0]
+        if best["trade_count"] >= 2 and best["total_pnl"] > 0:
+            insights.append(
+                {
+                    "id": "best_tag_edge",
+                    "severity": "positive",
+                    "title": f"Repeatable edge candidate: {best_tag}",
+                    "body": (
+                        f"{best['trade_count']} tagged trades, "
+                        f"${best['total_pnl']:.2f} total PnL, "
+                        f"{best['win_rate']:.0f}% win rate."
+                    ),
+                    "evidence_tag": best_tag,
+                    "evidence_count": best["trade_count"],
+                }
+            )
+        worst_tag, worst = ranked[-1]
+        if worst["trade_count"] >= 2 and worst["total_pnl"] < 0:
+            insights.append(
+                {
+                    "id": "worst_tag_drag",
+                    "severity": "negative",
+                    "title": f"Drag on results: {worst_tag}",
+                    "body": (
+                        f"{worst['trade_count']} tagged trades lost "
+                        f"${abs(worst['total_pnl']):.2f} total "
+                        f"({worst['win_rate']:.0f}% win rate)."
+                    ),
+                    "evidence_tag": worst_tag,
+                    "evidence_count": worst["trade_count"],
+                }
+            )
+
+    untagged = tag_stats.get("untagged")
+    if untagged and total_entries > 0:
+        share = (untagged["trade_count"] / total_entries) * 100
+        if share >= 40:
+            insights.append(
+                {
+                    "id": "untagged_concentration",
+                    "severity": "warning",
+                    "title": "High untagged share",
+                    "body": (
+                        f"{share:.0f}% of journal entries have no strategy tag — "
+                        "scorecards stay incomplete until tags are added."
+                    ),
+                    "evidence_tag": "untagged",
+                    "evidence_count": untagged["trade_count"],
+                }
+            )
+
+    if total_entries > 0:
+        link_share = (linked_to_position / total_entries) * 100
+        insights.append(
+            {
+                "id": "position_journal_link_rate",
+                "severity": "neutral" if link_share >= 50 else "warning",
+                "title": "Journal ↔ closed-position link rate",
+                "body": (
+                    f"{linked_to_position} of {total_entries} entries "
+                    f"({link_share:.0f}%) are linked to a stored closed position."
+                ),
+                "evidence_tag": None,
+                "evidence_count": linked_to_position,
+            }
+        )
+
+    return insights
