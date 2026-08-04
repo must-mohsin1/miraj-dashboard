@@ -1158,18 +1158,49 @@ def _paginate_mexc_history(method: Any, stream: str) -> Tuple[List[Dict[str, Any
             total_pages = page
             source_total = len(rows_all) + len(rows)
         elif isinstance(page_data, dict):
-            rows = page_data.get("list") or page_data.get("result") or []
-            total_pages = int(page_data.get("totalPage") or page_data.get("pages") or page)
-            source_total = int(page_data.get("total") or page_data.get("totalCount") or source_total or 0) or None
+            # MEXC history endpoints disagree on collection keys:
+            # positions/orders often use "list"; funding/transfers use "resultList"
+            # (see ccxt mexc.fetch_funding_history sample payload).
+            rows = (
+                page_data.get("list")
+                or page_data.get("result")
+                or page_data.get("resultList")
+                or page_data.get("dataList")
+                or page_data.get("rows")
+                or page_data.get("records")
+                or []
+            )
+            total_pages = int(
+                page_data.get("totalPage")
+                or page_data.get("pages")
+                or page_data.get("totalPages")
+                or page
+            )
+            source_total = int(
+                page_data.get("total")
+                or page_data.get("totalCount")
+                or source_total
+                or 0
+            ) or None
         else:
             rows = []
             total_pages = page
         rows_all.extend(rows)
-        if not rows or page >= total_pages:
-            exhausted = page >= total_pages
+        # Empty page with more totalPages remaining: stop only when we have
+        # actually exhausted declared pages, not merely because this page is empty.
+        if page >= total_pages:
+            exhausted = True
+            break
+        if not rows:
+            # No rows but exchange claims more pages — still stop to avoid
+            # infinite empty loops; mark incomplete below if source_total > fetched.
+            exhausted = False
             break
         page += 1
     complete = bool(exhausted and (source_total is None or len(rows_all) >= source_total))
+    # Empty history that the exchange reports as total=0 / exhausted is complete.
+    if complete is False and not rows_all and source_total in (None, 0) and exhausted:
+        complete = True
     return rows_all, {
         "status": "fresh" if complete else "partial",
         "complete": complete,

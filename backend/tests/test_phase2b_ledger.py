@@ -216,31 +216,40 @@ class MockMexcCapitalExchange:
         self.funding_pages_requested = []
 
     def contract_private_get_position_funding_records(self, params):
-        self.funding_pages_requested.append(params["pageNum"])
+        self.funding_pages_requested.append(params.get("pageNum") or params.get("page_num") or 1)
         pages = self._streams.get("funding_pages", [[]])
         if isinstance(pages, dict):
             return pages
-        page = pages[params["pageNum"] - 1] if params["pageNum"] <= len(pages) else []
-        return {
-            "success": True,
-            "data": {
-                "list": page,
-                "totalPage": max(len(pages), 1),
-                "total": sum(len(p) for p in pages),
-                "pageNum": params["pageNum"],
-                "pageSize": 100,
-            },
+        page_num = int(params.get("pageNum") or params.get("page_num") or 1)
+        page = pages[page_num - 1] if page_num <= len(pages) else []
+        # MEXC real shape uses resultList + totalCount (not list/total).
+        use_result_list = self._streams.get("funding_use_result_list", True)
+        data = {
+            "totalPage": max(len(pages), 1),
+            "totalCount": sum(len(p) for p in pages),
+            "currentPage": page_num,
+            "pageSize": 100,
         }
+        if use_result_list:
+            data["resultList"] = page
+        else:
+            data["list"] = page
+            data["total"] = data["totalCount"]
+        return {"success": True, "data": data}
 
     def contract_private_get_account_transfer_record(self, params):
         pages = self._streams.get("transfer_pages", [[]])
-        page = pages[params["pageNum"] - 1] if params["pageNum"] <= len(pages) else []
+        if isinstance(pages, dict):
+            return pages
+        page_num = int(params.get("pageNum") or params.get("page_num") or 1)
+        page = pages[page_num - 1] if page_num <= len(pages) else []
         return {
             "success": True,
             "data": {
-                "list": page,
+                "resultList": page,
                 "totalPage": max(len(pages), 1),
-                "total": sum(len(p) for p in pages),
+                "totalCount": sum(len(p) for p in pages),
+                "currentPage": page_num,
             },
         }
 
@@ -293,3 +302,40 @@ async def test_missing_capability_marks_stream_unavailable():
     assert data["sync"]["futures_transfers"]["status"] == "unavailable"
     assert data["sync"]["deposits"]["status"] == "unavailable"
     assert data["sync"]["withdrawals"]["status"] == "unavailable"
+
+
+async def test_funding_resultlist_shape_is_not_false_partial():
+    """Regression: MEXC funding uses data.resultList + totalCount.
+
+    Before the fix, only data.list/result were read → 0 rows + source_total=N →
+    partial exchange_boundary (prod: funding 0 of 80, transfers 0 of 4).
+    """
+    from backend.services.exchange_service import fetch_history
+    from backend.tests.fixtures.phase2b_ledger import FUNDING_RECEIPT, FUNDING_WITH_ID, TRANSFER_IN
+
+    exchange = MockMexcCapitalExchange(
+        funding_pages=[[FUNDING_WITH_ID, FUNDING_RECEIPT]],
+        transfer_pages=[[TRANSFER_IN]],
+        funding_use_result_list=True,
+        deposits=[],
+        withdrawals=[],
+    )
+    exchange.contract_private_get_position_list_history_positions = lambda params: {
+        "success": True, "data": {"list": [], "totalPage": 1, "total": 0}
+    }
+    exchange.contract_private_get_order_list_history_orders = lambda params: {
+        "success": True, "data": {"list": [], "totalPage": 1, "total": 0}
+    }
+
+    data = await fetch_history(exchange, user_id=9)
+
+    assert len(data["funding"]) == 2
+    assert data["sync"]["funding"]["status"] == "fresh"
+    assert data["sync"]["funding"]["complete"] is True
+    assert data["sync"]["funding"]["rows_fetched_total"] == 2
+    assert data["sync"]["funding"]["source_total"] == 2
+    assert data["sync"]["funding"].get("reason") is None
+
+    assert len(data["futures_transfers"]) == 1
+    assert data["sync"]["futures_transfers"]["status"] == "fresh"
+    assert data["sync"]["futures_transfers"]["complete"] is True
