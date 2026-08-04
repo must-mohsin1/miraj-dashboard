@@ -19,6 +19,9 @@ const CAPITAL_FLOW_STREAMS = new Set([
 
 const GAP_STATUSES = new Set(["partial", "unavailable", "error"]);
 
+/** Statuses that surface the coverage banner (includes pre-sync stale). */
+const BANNER_STATUSES = new Set(["partial", "unavailable", "error", "stale"]);
+
 function typeLabel(entryType: string): string {
   return TYPE_LABELS[entryType] ?? humanize(entryType);
 }
@@ -46,12 +49,49 @@ function signedAmountClass(value: number | null | undefined): string {
   return value > 0 ? "text-[#6CA98F]" : "text-[#C96A55]";
 }
 
-function bannerDetail(sync: SyncCoverageItem[]): string | null {
-  const gaps = sync.filter(
-    (item) => CAPITAL_FLOW_STREAMS.has(item.stream) && GAP_STATUSES.has(item.status),
+function capitalGaps(sync: SyncCoverageItem[]): SyncCoverageItem[] {
+  return sync.filter(
+    (item) => CAPITAL_FLOW_STREAMS.has(item.stream) && BANNER_STATUSES.has(item.status),
   );
+}
+
+/**
+ * Status-honest primary banner copy.
+ * Severity order: error → unavailable → partial/boundary → stale/no_sync_state.
+ */
+function bannerPrimaryMessage(sync: SyncCoverageItem[]): string {
+  const gaps = capitalGaps(sync);
+  const statuses = new Set(gaps.map((g) => g.status));
+  const reasons = gaps.map((g) => g.reason ?? "");
+
+  if (statuses.has("error")) {
+    return "Capital-flow sync error. Miraj only shows proven ledger coverage.";
+  }
+  if (statuses.has("unavailable")) {
+    return "Capital-flow stream unavailable. Miraj only shows proven ledger coverage.";
+  }
+  if (
+    statuses.has("partial") ||
+    reasons.some((r) => r.includes("exchange_boundary"))
+  ) {
+    return "History truncated at exchange boundary. Miraj only shows proven ledger coverage.";
+  }
+  if (
+    statuses.has("stale") ||
+    reasons.some((r) => r === "no_sync_state")
+  ) {
+    return "Capital-flow history is not yet synchronized. Miraj only shows proven ledger coverage.";
+  }
+  return "Capital-flow history is incomplete. Miraj only shows proven ledger coverage.";
+}
+
+function bannerDetail(sync: SyncCoverageItem[]): string | null {
+  const gaps = capitalGaps(sync);
   if (gaps.length === 0) return null;
-  const withReason = gaps.find((item) => item.reason);
+  // Prefer non-placeholder reasons when present
+  const withReason =
+    gaps.find((item) => item.reason && item.reason !== "no_sync_state") ??
+    gaps.find((item) => item.reason);
   if (!withReason?.reason) return null;
   return humanize(withReason.reason);
 }
@@ -65,12 +105,15 @@ export function CapitalFlowTable({
   sync: SyncCoverageItem[];
   partial?: boolean;
 }) {
+  // Banner for meaningful gaps only — pure stale/no_sync_state does not force
+  // partial from the API; show only when partial flag or real gap statuses.
   const showBanner =
     partial ||
     sync.some(
       (s) => CAPITAL_FLOW_STREAMS.has(s.stream) && GAP_STATUSES.has(s.status),
     );
 
+  const primaryMessage = bannerPrimaryMessage(sync);
   const detail = bannerDetail(sync);
 
   return (
@@ -99,7 +142,7 @@ export function CapitalFlowTable({
           className="border-b border-[#2A2620] px-4 py-3 text-sm text-[#D19A4A]"
           role="status"
         >
-          <p>History truncated at exchange boundary. Miraj only shows proven ledger coverage.</p>
+          <p>{primaryMessage}</p>
           {detail && (
             <p className="mt-1 text-xs text-[#8E8778]">{detail}.</p>
           )}

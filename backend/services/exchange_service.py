@@ -325,6 +325,9 @@ async def fetch_portfolio(
         "deposits": deposits[1],
         "withdrawals": withdrawals[1],
     }
+    # Portfolio-level partial reflects core Phase 2A streams only; capital gaps
+    # surface via capital-flow response + sync panel, not top-level partial.
+    _core_phase2a = ("positions_history", "orders_history", "futures_account_assets")
     return {
         "balances": balances,
         "positions": positions,
@@ -337,7 +340,11 @@ async def fetch_portfolio(
         "deposits": deposits[0],
         "withdrawals": withdrawals[0],
         "sync": sync,
-        "partial": any(not coverage.get("complete", False) for coverage in sync.values()),
+        "partial": any(
+            not sync[stream].get("complete", False)
+            for stream in _core_phase2a
+            if stream in sync
+        ),
     }
 
 
@@ -393,6 +400,8 @@ async def fetch_history(
         "deposits": deposits[1],
         "withdrawals": withdrawals[1],
     }
+    # History partial: core Phase 2A streams only (capital gaps do not flip it).
+    _core_phase2a = ("positions_history", "orders_history", "futures_account_assets")
     return {
         "position_history": position_history[0],
         "order_history": order_history[0],
@@ -401,7 +410,11 @@ async def fetch_history(
         "deposits": deposits[0],
         "withdrawals": withdrawals[0],
         "sync": sync,
-        "partial": any(not coverage.get("complete", False) for coverage in sync.values()),
+        "partial": any(
+            not sync[stream].get("complete", False)
+            for stream in _core_phase2a
+            if stream in sync
+        ),
     }
 
 

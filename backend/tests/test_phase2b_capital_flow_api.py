@@ -226,6 +226,70 @@ async def test_capital_flow_endpoint_returns_sorted_entries_and_coverage(
     assert streams["futures_transfers"]["reason"] == "no_sync_state"
     assert streams["withdrawals"]["status"] == "stale"
     assert "not_enabled_phase_2b" not in {s["status"] for s in body["sync"]}
+    # Funding is meaningfully partial → partial true (stale placeholders alone would not)
+    assert body["partial"] is True
+
+
+async def test_capital_flow_partial_false_for_pure_no_sync_state_defaults(
+    app: FastAPI,
+    client: AsyncClient,
+):
+    """Pre-sync stale/no_sync_state placeholders must not flip partial=true."""
+    user, token = await _create_user("presyncflow")
+
+    resp = await client.get(
+        "/api/v1/portfolio/mexc/capital-flow",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    streams = {s["stream"]: s for s in body["sync"]}
+    assert set(streams) == {"funding", "futures_transfers", "deposits", "withdrawals"}
+    for stream in streams.values():
+        assert stream["status"] == "stale"
+        assert stream["reason"] == "no_sync_state"
+        assert stream["complete"] is False
+    assert body["partial"] is False
+    assert body["entries"] == []
+
+
+async def test_capital_flow_partial_true_for_unavailable_or_error(
+    app: FastAPI,
+    client: AsyncClient,
+):
+    user, token = await _create_user("gapflow")
+
+    factory = database.get_session_factory()
+    async with factory() as session:
+        session.add_all([
+            _sync_state(
+                user_id=user.id,
+                stream="funding",
+                status="unavailable",
+                complete=False,
+                reason="stream_not_supported",
+            ),
+            _sync_state(
+                user_id=user.id,
+                stream="deposits",
+                status="error",
+                complete=False,
+                reason="rate_limit",
+            ),
+        ])
+        await session.commit()
+
+    resp = await client.get(
+        "/api/v1/portfolio/mexc/capital-flow",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    streams = {s["stream"]: s for s in body["sync"]}
+    assert streams["funding"]["status"] == "unavailable"
+    assert streams["deposits"]["status"] == "error"
     assert body["partial"] is True
 
 

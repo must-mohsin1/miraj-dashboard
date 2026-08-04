@@ -672,11 +672,28 @@ async def _load_sync_coverage(
 
 
 def _response_partial(sync: List[SyncCoverageItem]) -> bool:
+    """Portfolio-level partial: core Phase 2A streams only (not capital-flow)."""
     return any(
         row.stream in {"positions_history", "orders_history", "futures_account_assets"}
         and not row.complete
         for row in sync
     )
+
+
+def _capital_flow_response_partial(sync: List[SyncCoverageItem]) -> bool:
+    """True only when a capital stream has been attempted and is meaningfully incomplete.
+
+    Pure ``stale`` + ``no_sync_state`` placeholders (pre-sync defaults) do not
+    drive ``partial=true``. Meaningful gaps: status in partial|unavailable|error,
+    or any non-stale incomplete status.
+    """
+    for row in sync:
+        status = (row.status or "").lower()
+        if status in {"partial", "unavailable", "error"}:
+            return True
+        if status != "stale" and not row.complete:
+            return True
+    return False
 
 
 def _get_iso_ts(snapshot: Optional[PortfolioSnapshot]) -> Optional[str]:
@@ -1144,7 +1161,7 @@ async def get_capital_flow(
         else:
             capital_sync.append(SyncCoverageItem(**_phase2a_default_coverage(stream)))
 
-    partial = any(not s.complete for s in capital_sync)
+    partial = _capital_flow_response_partial(capital_sync)
     return CapitalFlowResponse(
         exchange=exchange_slug,
         entries=[

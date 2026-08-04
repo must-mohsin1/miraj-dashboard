@@ -36,6 +36,39 @@ const partialSync: SyncCoverageItem[] = [
   },
 ];
 
+const unavailableSync: SyncCoverageItem[] = [
+  {
+    stream: "deposits",
+    status: "unavailable",
+    complete: false,
+    reason: "stream_not_supported",
+    rows_fetched_total: 0,
+    source_total: 0,
+  },
+];
+
+const errorSync: SyncCoverageItem[] = [
+  {
+    stream: "withdrawals",
+    status: "error",
+    complete: false,
+    reason: "rate_limit",
+    rows_fetched_total: 0,
+    source_total: 0,
+  },
+];
+
+const staleSync: SyncCoverageItem[] = [
+  {
+    stream: "funding",
+    status: "stale",
+    complete: false,
+    reason: "no_sync_state",
+    rows_fetched_total: 0,
+    source_total: 0,
+  },
+];
+
 describe("CapitalFlowTable", () => {
   it("renders entries with signed amount formatting and type badges", () => {
     render(<CapitalFlowTable entries={entries} sync={[]} />);
@@ -46,9 +79,31 @@ describe("CapitalFlowTable", () => {
     expect(screen.getByText(/-1\.25/)).toBeInTheDocument();
   });
 
-  it("shows coverage banner when a stream is partial or unavailable", () => {
+  it("shows truncated-boundary banner when a stream is partial", () => {
     render(<CapitalFlowTable entries={entries} sync={partialSync} partial />);
     expect(screen.getByText(/history truncated at exchange boundary/i)).toBeInTheDocument();
+  });
+
+  it("shows stream-unavailable banner for unavailable capital streams", () => {
+    render(<CapitalFlowTable entries={entries} sync={unavailableSync} />);
+    expect(screen.getByText(/capital-flow stream unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/history truncated at exchange boundary/i)).not.toBeInTheDocument();
+  });
+
+  it("shows sync-error banner for error capital streams", () => {
+    render(<CapitalFlowTable entries={entries} sync={errorSync} />);
+    expect(screen.getByText(/capital-flow sync error/i)).toBeInTheDocument();
+  });
+
+  it("shows not-yet-synchronized banner when partial is true with only stale/no_sync_state", () => {
+    render(<CapitalFlowTable entries={entries} sync={staleSync} partial />);
+    expect(screen.getByText(/not yet synchronized/i)).toBeInTheDocument();
+    expect(screen.queryByText(/history truncated at exchange boundary/i)).not.toBeInTheDocument();
+  });
+
+  it("does not show coverage banner for pure stale/no_sync_state without partial", () => {
+    render(<CapitalFlowTable entries={entries} sync={staleSync} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("uses INK & OXIDE tokens not slate/indigo", () => {
