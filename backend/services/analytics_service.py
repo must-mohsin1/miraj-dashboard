@@ -22,13 +22,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
+    Analysis,
     CapitalFlowLedger,
     FuturesAccountSnapshot,
+    OrderHistory,
     PortfolioBalance,
     PositionHistory,
     TradeJournalEntry,
 )
 from backend.services.phase3_account_return import EXTERNAL_ENTRY_TYPES, compute_account_return
+from backend.services.position_alert_service import normalize_to_scan_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -1041,6 +1044,245 @@ def _explorer_item(position: PositionHistory) -> Dict[str, Any]:
         "duration_minutes": duration_minutes,
         "close_reason": position.close_reason,
         "unavailable_reasons": unavailable_reasons,
+    }
+
+
+# ── Trade Explorer detail (orders window + pre-entry scan + journal) ─────────
+
+ORDER_MATCH_PAD = timedelta(minutes=2)
+ORDER_MATCH_STRATEGY = "symbol_time_window"
+ORDER_MATCH_NOTE = (
+    "Orders are matched by normalised symbol and open/close time window, "
+    "not by exchange position id (MEXC position↔order link not stored)."
+)
+
+
+def _symbol_key(symbol: Optional[str]) -> str:
+    """Collapse BTC_USDT / BTCUSDT / BTC/USDT:USDT into a comparable key."""
+    if not symbol:
+        return ""
+    return "".join(ch for ch in str(symbol).upper() if ch.isalnum())
+
+
+async def get_trade_explorer_detail(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+    position_id: int,
+) -> Dict[str, Any]:
+    """Return one closed position with related orders, scan attribution, journal.
+
+    Cache-only. Fails closed with HTTP 404 when the position is missing or not
+    owned by the user. Order matching is best-effort (symbol + time window).
+    """
+    result = await session.execute(
+        select(PositionHistory).where(
+            PositionHistory.id == position_id,
+            PositionHistory.user_id == user_id,
+            PositionHistory.exchange == exchange,
+        )
+    )
+    position = result.scalar_one_or_none()
+    if position is None:
+        raise LookupError("closed_position_not_found")
+
+    position_payload = _explorer_item(position)
+    orders_payload, orders_meta = await _orders_for_position(session, user_id, exchange, position)
+    scan_payload = await _scan_for_position(session, user_id, position)
+    journal_payload = await _journal_for_position(session, user_id, position)
+
+    fee_sum = 0.0
+    fee_known = False
+    for order in orders_payload:
+        fee = order.get("fee")
+        if fee is not None:
+            fee_sum += float(fee)
+            fee_known = True
+
+    return {
+        "exchange": exchange,
+        "position": position_payload,
+        "orders": orders_payload,
+        "orders_match": orders_meta,
+        "scan": scan_payload,
+        "journal": journal_payload,
+        "fees": {
+            "sum_order_fees": round(fee_sum, 8) if fee_known else None,
+            "currency_unit": CURRENCY_UNIT,
+            "basis": "sum of OrderHistory.fee for matched window" if fee_known else None,
+            "unavailable_reason": None if fee_known else "no_matched_orders_with_fee",
+        },
+        "unavailable": {
+            "fee_net_pnl": FEE_STATUS,
+            "order_position_link": ORDER_MATCH_STRATEGY,
+            "order_position_link_note": ORDER_MATCH_NOTE,
+        },
+    }
+
+
+async def _orders_for_position(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+    position: PositionHistory,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    open_ts = position.open_time
+    close_ts = position.close_time
+    if open_ts is None and close_ts is None:
+        return [], {
+            "strategy": ORDER_MATCH_STRATEGY,
+            "count": 0,
+            "reason": "missing_open_and_close_time",
+            "note": ORDER_MATCH_NOTE,
+        }
+
+    # Normalise to naive UTC for SQLite comparisons (OrderHistory timestamps are naive).
+    def _naive(ts: Optional[datetime]) -> Optional[datetime]:
+        if ts is None:
+            return None
+        if ts.tzinfo is not None:
+            return ts.astimezone(timezone.utc).replace(tzinfo=None)
+        return ts
+
+    open_n = _naive(open_ts)
+    close_n = _naive(close_ts)
+    if open_n is None and close_n is not None:
+        open_n = close_n - timedelta(days=1)
+    if close_n is None and open_n is not None:
+        close_n = open_n + timedelta(days=1)
+    assert open_n is not None and close_n is not None
+    window_start = open_n - ORDER_MATCH_PAD
+    window_end = close_n + ORDER_MATCH_PAD
+
+    pos_key = _symbol_key(position.symbol)
+    order_result = await session.execute(
+        select(OrderHistory)
+        .where(
+            OrderHistory.user_id == user_id,
+            OrderHistory.exchange == exchange,
+            OrderHistory.timestamp >= window_start,
+            OrderHistory.timestamp <= window_end,
+        )
+        .order_by(OrderHistory.timestamp.asc(), OrderHistory.id.asc())
+    )
+    matched = [
+        o for o in order_result.scalars().all() if _symbol_key(o.symbol) == pos_key
+    ]
+    items = [
+        {
+            "id": o.id,
+            "exchange_order_id": o.exchange_order_id,
+            "symbol": o.symbol,
+            "type": o.type,
+            "side": o.side,
+            "side_action": o.side_action,
+            "price": o.price,
+            "amount": o.amount,
+            "filled": o.filled,
+            "filled_price": o.filled_price,
+            "cost": o.cost,
+            "status": o.status,
+            "timestamp": _iso_ts(o.timestamp) if o.timestamp else None,
+            "fee": o.fee,
+            "fee_currency": o.fee_currency,
+            "leverage": o.leverage,
+            "reduce_only": bool(o.reduce_only) if o.reduce_only is not None else None,
+        }
+        for o in matched
+    ]
+    return items, {
+        "strategy": ORDER_MATCH_STRATEGY,
+        "count": len(items),
+        "window_start": _iso_ts(window_start),
+        "window_end": _iso_ts(window_end),
+        "reason": None if items else "no_orders_in_symbol_time_window",
+        "note": ORDER_MATCH_NOTE,
+    }
+
+
+async def _scan_for_position(
+    session: AsyncSession,
+    user_id: int,
+    position: PositionHistory,
+) -> Dict[str, Any]:
+    from backend.services.scan_attribution_service import (
+        _extract_direction,
+        _extract_qqe_signals,
+        _extract_score,
+        _find_nearest_scan_before,
+        _parse_result,
+    )
+
+    scan_symbol = normalize_to_scan_symbol(position.symbol)
+    an_result = await session.execute(
+        select(Analysis)
+        .where(
+            Analysis.user_id == user_id,
+            Analysis.pair == scan_symbol,
+            Analysis.analysis_type == "scan",
+        )
+        .order_by(Analysis.created_at.asc())
+    )
+    scans = list(an_result.scalars().all())
+    linked = _find_nearest_scan_before(scans, position.open_time)
+    if linked is None:
+        return {
+            "found": False,
+            "scan_symbol": scan_symbol,
+            "analysis_id": None,
+            "score": None,
+            "direction": None,
+            "qqe_signals": None,
+            "created_at": None,
+            "href_path": f"/analysis/{scan_symbol}" if scan_symbol else None,
+            "reason": "no_pre_entry_scan",
+        }
+
+    parsed = _parse_result(linked.result)
+    return {
+        "found": True,
+        "scan_symbol": scan_symbol,
+        "analysis_id": linked.id,
+        "score": _extract_score(parsed),
+        "direction": _extract_direction(parsed),
+        "qqe_signals": _extract_qqe_signals(parsed),
+        "created_at": _iso_ts(linked.created_at) if linked.created_at else None,
+        "href_path": f"/analysis/{scan_symbol}" if scan_symbol else None,
+        "reason": None,
+    }
+
+
+async def _journal_for_position(
+    session: AsyncSession,
+    user_id: int,
+    position: PositionHistory,
+) -> Dict[str, Any]:
+    result = await session.execute(
+        select(TradeJournalEntry)
+        .where(
+            TradeJournalEntry.user_id == user_id,
+            TradeJournalEntry.position_id == position.id,
+        )
+        .order_by(TradeJournalEntry.id.desc())
+        .limit(20)
+    )
+    entries = list(result.scalars().all())
+    return {
+        "count": len(entries),
+        "entries": [
+            {
+                "id": e.id,
+                "symbol": e.symbol,
+                "tags": e.tags,
+                "notes_preview": (e.notes or "")[:160] or None,
+            }
+            for e in entries
+        ],
+        "href_path": (
+            f"/journal?symbol={position.symbol}&exchange={position.exchange}"
+            if position.symbol
+            else "/journal"
+        ),
     }
 
 

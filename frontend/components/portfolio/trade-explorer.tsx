@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -68,10 +68,73 @@ export type TradeExplorerResponse = {
   items: TradeExplorerItem[];
 };
 
+export type TradeExplorerOrderRow = {
+  id: number | string;
+  exchange_order_id?: string | null;
+  symbol?: string | null;
+  type?: string | null;
+  side?: string | null;
+  side_action?: string | null;
+  price?: number | null;
+  amount?: number | null;
+  filled?: number | null;
+  filled_price?: number | null;
+  cost?: number | null;
+  status?: string | null;
+  timestamp?: string | null;
+  fee?: number | null;
+  fee_currency?: string | null;
+  leverage?: number | null;
+  reduce_only?: boolean | null;
+};
+
+export type TradeExplorerDetailResponse = {
+  exchange?: string | null;
+  position: TradeExplorerItem;
+  orders: TradeExplorerOrderRow[];
+  orders_match?: {
+    strategy?: string | null;
+    count?: number | null;
+    reason?: string | null;
+    note?: string | null;
+    window_start?: string | null;
+    window_end?: string | null;
+  } | null;
+  scan?: {
+    found?: boolean;
+    scan_symbol?: string | null;
+    analysis_id?: number | null;
+    score?: number | null;
+    direction?: string | null;
+    created_at?: string | null;
+    href_path?: string | null;
+    reason?: string | null;
+  } | null;
+  journal?: {
+    count?: number | null;
+    entries?: Array<{
+      id: number | string;
+      symbol?: string | null;
+      tags?: string | null;
+      notes_preview?: string | null;
+    }>;
+    href_path?: string | null;
+  } | null;
+  fees?: {
+    sum_order_fees?: number | null;
+    currency_unit?: string | null;
+    unavailable_reason?: string | null;
+  } | null;
+};
+
 export interface TradeExplorerProps {
   data: TradeExplorerResponse | null;
   loading?: boolean;
   error?: string | null;
+  /** JWT for lazy-loading trade detail (orders / scan). */
+  token?: string | null;
+  /** Exchange slug used for detail fetch (defaults to data.exchange). */
+  exchange?: string | null;
   onPageChange?: (offset: number) => void;
   onPageSizeChange?: (limit: number) => void;
   /** Called when a sortable column header is activated. Receives sort token e.g. `-pnl`. */
@@ -98,11 +161,14 @@ export function TradeExplorer({
   data,
   loading = false,
   error = null,
+  token = null,
+  exchange = null,
   onPageChange,
   onPageSizeChange,
   onSortChange,
 }: TradeExplorerProps) {
   const [selected, setSelected] = useState<TradeExplorerItem | null>(null);
+  const detailExchange = exchange || data?.exchange || null;
 
   if (loading) {
     return (
@@ -284,7 +350,8 @@ export function TradeExplorer({
         }}
         pnlBasis={pnlBasis}
         sizeUnit={selected?.size_unit || sizeUnit}
-        exchange={safeData.exchange}
+        exchange={detailExchange}
+        token={token}
       />
     </section>
   );
@@ -460,6 +527,7 @@ function TradeDetailDrawer({
   pnlBasis,
   sizeUnit,
   exchange,
+  token,
 }: {
   item: TradeExplorerItem | null;
   open: boolean;
@@ -467,12 +535,62 @@ function TradeDetailDrawer({
   pnlBasis: string;
   sizeUnit: string;
   exchange?: string | null;
+  token?: string | null;
 }) {
+  const [detail, setDetail] = useState<TradeExplorerDetailResponse | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !item?.id || !exchange || !token) {
+      setDetail(null);
+      setDetailError(null);
+      setDetailLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError(null);
+    setDetail(null);
+
+    const headers: HeadersInit = { Authorization: `Bearer ${token}` };
+    fetch(`/api/v1/analytics/${encodeURIComponent(exchange)}/trade-explorer/${encodeURIComponent(String(item.id))}`, {
+      headers,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`detail_${res.status}`);
+        }
+        return res.json() as Promise<TradeExplorerDetailResponse>;
+      })
+      .then((payload) => {
+        if (!cancelled) {
+          setDetail(payload);
+          setDetailLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetailError("Could not load related orders or scan for this trade.");
+          setDetailLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, item?.id, exchange, token]);
+
   const symbol = item?.symbol || "";
-  const journalHref = symbol
-    ? `/journal?symbol=${encodeURIComponent(symbol)}${exchange ? `&exchange=${encodeURIComponent(exchange)}` : ""}`
-    : "/journal";
+  const journalHref =
+    detail?.journal?.href_path ||
+    (symbol
+      ? `/journal?symbol=${encodeURIComponent(symbol)}${exchange ? `&exchange=${encodeURIComponent(exchange)}` : ""}`
+      : "/journal");
   const pnlState = pnlStateLabel(item?.pnl);
+  const scan = detail?.scan;
+  const orders = detail?.orders ?? [];
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -482,7 +600,7 @@ function TradeDetailDrawer({
             {item?.symbol || "Trade detail"}
           </SheetTitle>
           <SheetDescription id="trade-detail-description">
-            Closed-position detail from stored history. Fee-net PnL stays unavailable until ledger coverage allows it.
+            Closed-position detail from stored history. Related orders match by symbol and time window; fee-net PnL stays unavailable until ledger coverage allows it.
           </SheetDescription>
         </SheetHeader>
         {item ? (
@@ -514,16 +632,133 @@ function TradeDetailDrawer({
               </p>
               <UnavailableReasons reasons={item.unavailable_reasons} />
             </div>
+
+            <section className="grid gap-2 border border-border bg-card p-3" aria-label="Pre-entry scan">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Pre-entry scan</h3>
+              {detailLoading ? (
+                <p className="text-xs text-muted-foreground">Loading scan attribution…</p>
+              ) : detailError ? (
+                <p className="text-xs text-muted-foreground">{detailError}</p>
+              ) : scan?.found ? (
+                <div className="grid gap-1 text-sm">
+                  <p>
+                    Score{" "}
+                    <span className="font-mono tabular-nums text-foreground">
+                      {scan.score == null ? "—" : scan.score}
+                    </span>
+                    {scan.direction ? (
+                      <>
+                        {" · "}
+                        <span className="text-foreground">{scan.direction}</span>
+                      </>
+                    ) : null}
+                  </p>
+                  {scan.created_at ? (
+                    <p className="text-xs text-muted-foreground">Scan at {formatTime(scan.created_at)}</p>
+                  ) : null}
+                  {scan.href_path ? (
+                    <Link
+                      href={scan.href_path}
+                      className="mt-1 border border-border bg-background px-3 py-2 text-center text-sm text-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    >
+                      Open scan{scan.scan_symbol ? ` (${scan.scan_symbol})` : ""}
+                    </Link>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {scan?.reason === "no_pre_entry_scan"
+                    ? "No Miraj scan found before this entry."
+                    : token
+                      ? "No pre-entry scan linked."
+                      : "Sign in to load scan attribution."}
+                </p>
+              )}
+            </section>
+
+            <section className="grid gap-2 border border-border bg-card p-3" aria-label="Matched orders">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                Matched orders ({orders.length})
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                {detail?.orders_match?.note ||
+                  "Matched by symbol and open/close time window — not exchange position id."}
+              </p>
+              {detailLoading ? (
+                <p className="text-xs text-muted-foreground">Loading orders…</p>
+              ) : orders.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {detail?.orders_match?.reason
+                    ? readableReason(detail.orders_match.reason)
+                    : "No orders in window."}
+                </p>
+              ) : (
+                <ul className="grid gap-2">
+                  {orders.map((order) => (
+                    <li
+                      key={order.id}
+                      className="border border-border bg-background p-2 text-xs"
+                      aria-label={`Order ${order.exchange_order_id || order.id}`}
+                    >
+                      <p className="font-mono tabular-nums text-foreground">
+                        {formatTime(order.timestamp)} · {(order.side || "—").toUpperCase()}{" "}
+                        {order.type || ""}
+                      </p>
+                      <p className="mt-1 text-muted-foreground">
+                        filled{" "}
+                        <span className="font-mono tabular-nums text-foreground">
+                          {formatNumber(order.filled ?? order.amount)}
+                        </span>{" "}
+                        @{" "}
+                        <span className="font-mono tabular-nums text-foreground">
+                          {formatNumber(order.filled_price ?? order.price)}
+                        </span>
+                        {order.fee != null ? (
+                          <>
+                            {" · fee "}
+                            <span className="font-mono tabular-nums text-foreground">
+                              {formatNumber(order.fee)} {order.fee_currency || "USDT"}
+                            </span>
+                          </>
+                        ) : null}
+                      </p>
+                      {order.side_action ? (
+                        <p className="mt-1 text-muted-foreground">{order.side_action}</p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {detail?.fees?.sum_order_fees != null ? (
+                <p className="text-xs text-muted-foreground">
+                  Sum of matched order fees:{" "}
+                  <span className="font-mono tabular-nums text-foreground">
+                    {formatNumber(detail.fees.sum_order_fees)} {detail.fees.currency_unit || "USDT"}
+                  </span>
+                  . Not fee-net account PnL.
+                </p>
+              ) : null}
+            </section>
+
             <div className="grid gap-2">
               <Link
                 href={journalHref}
                 className="border border-border bg-background px-3 py-2 text-center text-sm text-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
               >
                 Open journal{symbol ? ` for ${symbol}` : ""}
+                {detail?.journal?.count ? ` (${detail.journal.count} linked)` : ""}
               </Link>
-              <p className="text-xs text-muted-foreground">
-                Orders, fills, and funding are not on this payload; use Trade Attribution / capital flow for linked streams when available.
-              </p>
+              {(detail?.journal?.entries?.length ?? 0) > 0 ? (
+                <ul className="grid gap-1 text-xs text-muted-foreground" aria-label="Linked journal entries">
+                  {detail!.journal!.entries!.map((entry) => (
+                    <li key={entry.id}>
+                      #{entry.id}
+                      {entry.tags ? ` · ${entry.tags}` : ""}
+                      {entry.notes_preview ? ` — ${entry.notes_preview}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           </div>
         ) : null}
