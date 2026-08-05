@@ -314,6 +314,130 @@ async def test_equity_curve_uses_futures_series_and_external_markers(session, us
     assert len(curve["markers"]) == 1
     assert curve["markers"][0]["entry_type"] == "deposit"
     assert curve["markers"][0]["signed_amount"] == 50.0
+    # as_of is the last raw snapshot; small series is not downsampled.
+    assert curve["as_of"] is not None
+    assert curve["as_of"].startswith("2026-07-02")
+    assert curve["point_count_raw"] == 2
+    assert curve["point_count_returned"] == 2
+
+
+def test_downsample_equity_points_keeps_endpoints_and_caps_length():
+    """Dense series downsamples but always keeps first/last timestamps."""
+    # 400 snapshots across ~40 calendar days (10/day) → daily pass still has 40;
+    # force thin path with max_points=20 after daily collapse needs many days.
+    points = []
+    start = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    for i in range(400):
+        # 2 snapshots per day for 200 days → daily last-of-day still 200 → even thin.
+        ts = start + timedelta(hours=12 * i)
+        points.append(
+            {
+                "timestamp": ts.isoformat(),
+                "total_value": 1000.0 + i,
+                "basis": "futures_equity",
+                "settlement_asset": "USDT",
+            }
+        )
+
+    down = analytics_service._downsample_equity_points(points, max_points=200)
+    assert len(down) <= 200
+    assert down[0]["timestamp"] == points[0]["timestamp"]
+    assert down[-1]["timestamp"] == points[-1]["timestamp"]
+    assert down[0]["total_value"] == points[0]["total_value"]
+    assert down[-1]["total_value"] == points[-1]["total_value"]
+
+    # Prefer last point of each UTC day when under the daily-collapse path.
+    # 5 points on day1 + 3 on day2 with max 200 → last-of-day only.
+    day1 = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    multi_day = [
+        {"timestamp": (day1 + timedelta(hours=h)).isoformat(), "total_value": float(h), "basis": "futures_equity", "settlement_asset": "USDT"}
+        for h in (0, 6, 12, 18, 22)
+    ] + [
+        {"timestamp": (day1 + timedelta(days=1, hours=h)).isoformat(), "total_value": 100.0 + h, "basis": "futures_equity", "settlement_asset": "USDT"}
+        for h in (1, 8, 20)
+    ]
+    # Force daily path by using a series longer than max_points with few days.
+    padded = []
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    for i in range(205):
+        padded.append(
+            {
+                "timestamp": (base + timedelta(hours=i)).isoformat(),
+                "total_value": float(i),
+                "basis": "futures_equity",
+                "settlement_asset": "USDT",
+            }
+        )
+    daily = analytics_service._downsample_equity_points(padded, max_points=200)
+    assert len(daily) <= 200
+    assert daily[0]["timestamp"] == padded[0]["timestamp"]
+    assert daily[-1]["timestamp"] == padded[-1]["timestamp"]
+    # ~9 calendar days → should collapse near one-per-day (+ endpoints already in set).
+    assert len(daily) < len(padded)
+    assert len(daily) <= 10
+
+    # Sanity: multi-day last-of-day preference (no cap pressure).
+    short = multi_day  # 8 points < 200 → unchanged
+    assert analytics_service._downsample_equity_points(short) == short
+
+
+async def test_equity_curve_downsample_as_of_and_markers_preserved(session, user: User):
+    """Dense futures snapshots are downsampled; as_of + markers stay full-history."""
+    start = datetime(2025, 1, 1, 0, 0, 0)
+    snaps = []
+    for i in range(250):
+        # Multiple snapshots per calendar day so raw count >> returned days.
+        ts = start + timedelta(hours=6 * i)
+        snaps.append(
+            FuturesAccountSnapshot(
+                user_id=user.id,
+                exchange="mexc",
+                settlement_asset="USDT",
+                equity=1000.0 + i,
+                source_ts=ts,
+                synced_at=ts,
+            )
+        )
+    marker_ts = start + timedelta(days=3, hours=3)
+    snaps.append(
+        CapitalFlowLedger(
+            user_id=user.id,
+            exchange="mexc",
+            entry_type="withdrawal",
+            exchange_entry_id="wd-dense-1",
+            asset="USDT",
+            amount=25.0,
+            signed_amount=-25.0,
+            occurred_at=marker_ts,
+            synced_at=marker_ts,
+        )
+    )
+    session.add_all(snaps)
+    await session.flush()
+
+    curve = await analytics_service.get_equity_curve(session, user.id, "mexc")
+
+    assert curve["point_count_raw"] == 250
+    assert curve["point_count_returned"] == len(curve["points"])
+    assert curve["point_count_returned"] < curve["point_count_raw"]
+    assert curve["point_count_returned"] <= analytics_service.MAX_EQUITY_CURVE_POINTS
+    assert curve["points"][0]["total_value"] == 1000.0
+    assert curve["points"][-1]["total_value"] == 1000.0 + 249
+    # as_of is last *raw* snapshot, not a thinned intermediate.
+    last_raw_ts = start + timedelta(hours=6 * 249)
+    assert curve["as_of"] == analytics_service._iso_ts(last_raw_ts)
+    assert len(curve["markers"]) == 1
+    assert curve["markers"][0]["entry_type"] == "withdrawal"
+    assert curve["markers"][0]["signed_amount"] == -25.0
+
+
+async def test_equity_curve_empty_includes_as_of_counts(session, user: User):
+    curve = await analytics_service.get_equity_curve(session, user.id, "mexc")
+    assert curve["points"] == []
+    assert curve["as_of"] is None
+    assert curve["point_count_raw"] == 0
+    assert curve["point_count_returned"] == 0
+    assert curve["unavailable_reason"] == "no_account_equity_data"
 
 
 async def test_account_equity_drawdown_from_futures_series(session, user: User):

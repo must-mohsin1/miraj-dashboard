@@ -28,6 +28,8 @@ interface EquityCurveProps {
   basis?: string | null;
   settlementAsset?: string | null;
   unavailableReason?: string | null;
+  /** ISO timestamp of the last raw futures snapshot (pre-downsample). */
+  asOf?: string | null;
 }
 
 const TOOLTIP_STYLE = {
@@ -110,12 +112,23 @@ function EquityTooltip({ active, payload }: {
   );
 }
 
+function markerTitle(m: EquityCurveMarker): string {
+  const typeLabel = markerLabel(m.entry_type);
+  const amount =
+    typeof m.signed_amount === "number"
+      ? `${m.signed_amount >= 0 ? "+" : ""}$${m.signed_amount.toFixed(2)}`
+      : null;
+  const when = formatDateTime(m.timestamp);
+  return amount ? `${typeLabel} ${amount} · ${when}` : `${typeLabel} · ${when}`;
+}
+
 export function EquityCurve({
   points,
   markers = [],
   basis,
   settlementAsset,
   unavailableReason,
+  asOf,
 }: EquityCurveProps) {
   if (!points || points.length === 0) {
     const reason = unavailableReason ? unavailableReason.replaceAll("_", " ") : "no account equity data";
@@ -160,12 +173,17 @@ export function EquityCurve({
         ? "Account snapshot"
         : "Account equity data";
 
+  const asOfLabel = asOf ? `As of ${formatDateTime(asOf)}` : null;
+
   return (
     <div className="border border-[#2A2620] bg-[#161411] p-4">
       <h3 className="mb-1 text-sm font-medium text-[#EDE7DB]">
         Account Equity Curve
       </h3>
-      <div className="mb-3 text-xs text-[#8E8778]">{basisLabel}</div>
+      <div className="mb-3 text-xs text-[#8E8778]">
+        <div>{basisLabel}</div>
+        {asOfLabel && <div className="mt-0.5 text-[11px]">{asOfLabel}</div>}
+      </div>
       {chartMarkers.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-3 text-[11px] text-[#8E8778]">
           <span className="inline-flex items-center gap-1">
@@ -248,7 +266,10 @@ export function EquityCurve({
       {chartMarkers.length > 0 && (
         <ul className="mt-3 max-h-28 space-y-1 overflow-y-auto text-[11px] text-[#8E8778]">
           {chartMarkers.map((m) => (
-            <li key={`legend-${m.entry_type}-${m.timestamp}-${m.exchange_entry_id ?? ""}`}>
+            <li
+              key={`legend-${m.entry_type}-${m.timestamp}-${m.exchange_entry_id ?? ""}`}
+              title={markerTitle(m)}
+            >
               <span className="text-[#EDE7DB]">{formatDateTime(m.timestamp)}</span>
               {" · "}
               {markerLabel(m.entry_type)}

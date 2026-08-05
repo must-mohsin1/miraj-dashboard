@@ -322,6 +322,7 @@ export function AnalyticsDashboard({
               basis={equity?.basis ?? null}
               settlementAsset={equity?.settlement_asset ?? null}
               unavailableReason={equity?.unavailable_reason ?? null}
+              asOf={equity?.as_of ?? null}
             />
           )}
         </div>

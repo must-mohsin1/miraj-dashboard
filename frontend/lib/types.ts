@@ -419,6 +419,10 @@ export interface EquityCurveResponse {
   settlement_asset?: string | null;
   complete: boolean;
   unavailable_reason: string | null;
+  /** ISO timestamp of the last raw futures snapshot (pre-downsample). */
+  as_of?: string | null;
+  point_count_raw?: number | null;
+  point_count_returned?: number | null;
 }
 
 /** A single day's PnL. */
