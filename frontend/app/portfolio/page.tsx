@@ -94,21 +94,40 @@ interface PageProps {
   }>;
 }
 
+/** Coerce Next searchParam values (string | string[] | undefined) safely. */
+function paramString(
+  value: string | string[] | undefined,
+  fallback = "",
+): string {
+  if (Array.isArray(value)) {
+    const first = value[0];
+    return first == null ? fallback : String(first).trim();
+  }
+  if (value == null) return fallback;
+  return String(value).trim();
+}
+
 export default async function PortfolioPage({ searchParams }: PageProps) {
-  const params = await searchParams;
-  const rawExchange = (params.exchange ?? "mexc").toLowerCase();
+  const params = (await searchParams) ?? {};
+  const rawExchange = paramString(params.exchange, "mexc").toLowerCase();
   const exchange = KNOWN_EXCHANGES.includes(rawExchange) ? rawExchange : "mexc";
 
-  const rawTab = (params.tab ?? "").toLowerCase().trim();
+  const rawTab = paramString(params.tab).toLowerCase();
   const initialTab = PORTFOLIO_TABS.has(rawTab) ? rawTab : undefined;
 
-  const rawAnalyticsTab = (params.analytics_tab ?? "").toLowerCase().trim();
+  const rawAnalyticsTab = paramString(params.analytics_tab).toLowerCase();
   const analyticsTab = ANALYTICS_TABS.has(rawAnalyticsTab)
     ? rawAnalyticsTab
     : undefined;
 
   // Closed-position filter deep-link (symbols + side/sort/period/pagination…).
-  const initialClosedFilters = parseClosedPositionFiltersFromSearch(params);
+  // Never let filter parsing take down the whole portfolio page.
+  let initialClosedFilters;
+  try {
+    initialClosedFilters = parseClosedPositionFiltersFromSearch(params);
+  } catch {
+    initialClosedFilters = parseClosedPositionFiltersFromSearch({});
+  }
   const initialSymbols = initialClosedFilters.symbols;
   const closedFilterKey = closedPositionFiltersQueryFingerprint(initialClosedFilters);
 

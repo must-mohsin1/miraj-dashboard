@@ -68,4 +68,21 @@ describe("closed-position URL helpers", () => {
       closedPositionFiltersQueryFingerprint(b),
     );
   });
+
+  it("does not throw on empty/missing search params or array values", () => {
+    expect(() => parseClosedPositionFiltersFromSearch({})).not.toThrow();
+    expect(() =>
+      parseClosedPositionFiltersFromSearch({
+        symbols: undefined,
+        side: ["long"],
+        limit: ["50"],
+      } as Record<string, string | string[] | undefined>),
+    ).not.toThrow();
+    const filters = parseClosedPositionFiltersFromSearch({
+      side: ["short"],
+      symbols: ["btcusdt"],
+    } as Record<string, string | string[] | undefined>);
+    expect(filters.side).toBe("short");
+    expect(filters.symbols).toBe("BTCUSDT");
+  });
 });
