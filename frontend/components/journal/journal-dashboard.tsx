@@ -43,12 +43,18 @@ interface JournalDashboardProps {
   exchange?: string;
   /** Symbol supplied by a read-only manual journal prefill link. */
   prefillSymbol?: string;
+  /** Initial list filter: strategy tag (from Strategy insights / URL). */
+  filterTag?: string;
+  /** Initial list filter: symbol (from Strategy concentration insights). */
+  filterSymbol?: string;
 }
 
 export function JournalDashboard({
   token: tokenProp,
   exchange = "mexc",
   prefillSymbol,
+  filterTag,
+  filterSymbol,
 }: JournalDashboardProps) {
   const [entries, setEntries] = useState<TradeJournalEntry[]>([]);
   const [summary, setSummary] = useState<JournalSummaryResponse | null>(null);
@@ -60,6 +66,10 @@ export function JournalDashboard({
   // Dialog state.
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TradeJournalEntry | null>(null);
+  const [activeTag, setActiveTag] = useState<string | undefined>(filterTag);
+  const [activeSymbol, setActiveSymbol] = useState<string | undefined>(
+    filterSymbol ?? prefillSymbol,
+  );
 
   /** Fetch the JWT token — use the prop if provided, otherwise hit the
    * Next.js auth session endpoint (client-side). */
@@ -91,7 +101,12 @@ export function JournalDashboard({
     setError(null);
     setAuthRequired(false);
     try {
-      const res = await fetch("/api/v1/journal", { headers });
+      const params = new URLSearchParams();
+      if (activeTag) params.set("tag", activeTag);
+      if (activeSymbol) params.set("symbol", activeSymbol);
+      if (exchange) params.set("exchange", exchange);
+      const qs = params.toString();
+      const res = await fetch(`/api/v1/journal${qs ? `?${qs}` : ""}`, { headers });
       if (!res.ok) {
         if (res.status === 401) {
           setEntries([]);
@@ -116,7 +131,7 @@ export function JournalDashboard({
     } finally {
       setLoading(false);
     }
-  }, [getToken]);
+  }, [getToken, activeTag, activeSymbol, exchange]);
 
   /** Fetch the tag summary from the analytics endpoint. */
   const fetchSummary = useCallback(async () => {
@@ -270,6 +285,36 @@ export function JournalDashboard({
         </div>
       )}
 
+      {(activeTag || activeSymbol) && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          <span>
+            Filtered
+            {activeTag ? (
+              <>
+                {" "}
+                by tag <span className="font-mono font-semibold">{activeTag}</span>
+              </>
+            ) : null}
+            {activeSymbol ? (
+              <>
+                {" "}
+                by symbol <span className="font-mono font-semibold">{activeSymbol}</span>
+              </>
+            ) : null}
+          </span>
+          <button
+            type="button"
+            className="underline decoration-amber-200/60 hover:decoration-amber-100"
+            onClick={() => {
+              setActiveTag(undefined);
+              setActiveSymbol(undefined);
+            }}
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
+
       {/* Tag summary cards */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {summaryLoading ? (
@@ -282,10 +327,21 @@ export function JournalDashboard({
         ) : (
           tagEntries.map(([tag, stat]) => {
             const pnlPositive = stat.total_pnl >= 0;
+            const selected = activeTag === tag;
             return (
-              <div
+              <button
                 key={tag}
-                className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"
+                type="button"
+                onClick={() => {
+                  setActiveTag(tag);
+                  setActiveSymbol(undefined);
+                }}
+                className={cn(
+                  "rounded-xl border p-4 text-left transition-colors",
+                  selected
+                    ? "border-emerald-500/50 bg-emerald-500/10"
+                    : "border-slate-800 bg-slate-900/60 hover:border-slate-700",
+                )}
               >
                 <div className="flex items-center gap-1.5 text-xs font-medium text-slate-400">
                   <Tag className="h-3 w-3" />
@@ -323,7 +379,7 @@ export function JournalDashboard({
                     style={{ width: `${Math.min(100, stat.win_rate)}%` }}
                   />
                 </div>
-              </div>
+              </button>
             );
           })
         )}

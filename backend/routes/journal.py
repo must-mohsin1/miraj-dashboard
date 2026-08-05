@@ -177,32 +177,57 @@ def _serialise_entry(e: TradeJournalEntry) -> Dict[str, Any]:
 @router.get(
     "",
     response_model=JournalEntryListResponse,
-    summary="List all journal entries (optionally filtered by symbol)",
+    summary="List journal entries (filter by symbol, exchange, or tag)",
 )
 async def list_journal_entries(
     symbol: Optional[str] = None,
+    exchange: Optional[str] = None,
+    tag: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> JournalEntryListResponse:
-    """Return all journal entries for the current user, most recent first.
+    """Return journal entries for the current user, most recent first.
 
-    An optional ``?symbol=BTCUSDT`` query parameter filters entries to a
-    single trading pair (case-insensitive, exact match after upper-casing).
+    Filters (all optional, AND-combined):
+    - ``symbol`` — exact match after upper-casing
+    - ``exchange`` — exact match after lower-casing
+    - ``tag`` — case-insensitive match against comma-separated tags;
+      use ``untagged`` for entries with no tags
     """
     stmt = select(TradeJournalEntry).where(
         TradeJournalEntry.user_id == current_user.id
     )
     if symbol:
         stmt = stmt.where(TradeJournalEntry.symbol == symbol.upper().strip())
+    if exchange:
+        stmt = stmt.where(TradeJournalEntry.exchange == exchange.lower().strip())
 
     stmt = stmt.order_by(TradeJournalEntry.created_at.desc())
     result = await session.execute(stmt)
     entries = list(result.scalars().all())
 
+    if tag is not None and str(tag).strip() != "":
+        entries = _filter_entries_by_tag(entries, str(tag).strip())
+
     return JournalEntryListResponse(
         total=len(entries),
         entries=[JournalEntryResponse(**_serialise_entry(e)) for e in entries],
     )
+
+
+def _filter_entries_by_tag(entries: list, tag: str) -> list:
+    """Filter journal rows by a single tag token (or the special 'untagged')."""
+    needle = tag.strip().lower()
+    if needle == "untagged":
+        return [e for e in entries if not (e.tags and str(e.tags).strip())]
+    out = []
+    for e in entries:
+        if not e.tags:
+            continue
+        parts = [p.strip().lower() for p in str(e.tags).split(",") if p.strip()]
+        if needle in parts:
+            out.append(e)
+    return out
 
 
 @router.get(
@@ -245,9 +270,15 @@ async def create_journal_entry(
     """Create a new trading journal entry.
 
     Optional trade metadata (entry_price, exit_price, pnl, exchange,
-    position_id) is copied verbatim so the journal entry remains a stable
-    snapshot even if the linked PositionHistory row is later deleted.
+    position_id) is copied so the journal entry remains a stable snapshot
+    even if the linked PositionHistory row is later deleted.
+
+    When ``position_id`` is omitted, Miraj auto-links the most recent
+    unlinked closed position matching symbol (+ exchange when set) and
+    fills missing price/PnL fields from that row.
     """
+    from backend.models import PositionHistory
+
     # Normalise the symbol to upper-case.
     symbol = body.symbol.strip().upper()
     if not symbol:
@@ -264,22 +295,103 @@ async def create_journal_entry(
             tags_norm = ",".join(parts)
 
     exchange_norm = body.exchange.strip().lower() if body.exchange else None
+    position_id = body.position_id
+    entry_price = body.entry_price
+    exit_price = body.exit_price
+    pnl = body.pnl
+
+    if position_id is not None:
+        pos = await session.scalar(
+            select(PositionHistory).where(
+                PositionHistory.id == position_id,
+                PositionHistory.user_id == current_user.id,
+            )
+        )
+        if pos is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"position_id {position_id} not found for this user",
+            )
+        if entry_price is None:
+            entry_price = pos.entry_price
+        if exit_price is None:
+            exit_price = pos.exit_price
+        if pnl is None:
+            pnl = pos.pnl
+        if exchange_norm is None and pos.exchange:
+            exchange_norm = pos.exchange
+    else:
+        resolved = await _auto_link_closed_position(
+            session,
+            user_id=current_user.id,
+            symbol=symbol,
+            exchange=exchange_norm,
+        )
+        if resolved is not None:
+            position_id = resolved.id
+            if entry_price is None:
+                entry_price = resolved.entry_price
+            if exit_price is None:
+                exit_price = resolved.exit_price
+            if pnl is None:
+                pnl = resolved.pnl
+            if exchange_norm is None and resolved.exchange:
+                exchange_norm = resolved.exchange
 
     entry = TradeJournalEntry(
         user_id=current_user.id,
         exchange=exchange_norm,
         symbol=symbol,
-        position_id=body.position_id,
+        position_id=position_id,
         notes=body.notes,
         tags=tags_norm,
         lessons=body.lessons,
-        entry_price=body.entry_price,
-        exit_price=body.exit_price,
-        pnl=body.pnl,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        pnl=pnl,
     )
     session.add(entry)
     await session.flush()  # Populate entry.id
     return JournalEntryResponse(**_serialise_entry(entry))
+
+
+async def _auto_link_closed_position(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    symbol: str,
+    exchange: Optional[str],
+):
+    """Pick the newest unlinked closed position for symbol (+ exchange)."""
+    from backend.models import PositionHistory
+
+    already = await session.execute(
+        select(TradeJournalEntry.position_id).where(
+            TradeJournalEntry.user_id == user_id,
+            TradeJournalEntry.position_id.is_not(None),
+        )
+    )
+    used_ids = {row[0] for row in already.all() if row[0] is not None}
+
+    stmt = (
+        select(PositionHistory)
+        .where(
+            PositionHistory.user_id == user_id,
+            PositionHistory.symbol == symbol,
+        )
+        .order_by(
+            PositionHistory.close_time.desc().nullslast(),
+            PositionHistory.id.desc(),
+        )
+    )
+    if exchange:
+        stmt = stmt.where(PositionHistory.exchange == exchange)
+
+    result = await session.execute(stmt)
+    for pos in result.scalars().all():
+        if pos.id not in used_ids:
+            return pos
+    return None
 
 
 @router.put(
