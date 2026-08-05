@@ -15,6 +15,7 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -307,6 +308,85 @@ async def _account_equity_drawdown(
 
 # ── Equity curve ────────────────────────────────────────────────────────────
 
+# Cap chart series length so dense snapshot histories stay readable.
+MAX_EQUITY_CURVE_POINTS = 200
+
+
+def _downsample_equity_points(
+    points: List[Dict[str, Any]],
+    max_points: int = MAX_EQUITY_CURVE_POINTS,
+) -> List[Dict[str, Any]]:
+    """Downsample a dense equity series while keeping first/last endpoints.
+
+    When ``len(points) > max_points``:
+    1. Prefer the last snapshot per UTC calendar day.
+    2. Always include the original first and last points.
+    3. If still above the cap, thin evenly to ``max_points``.
+
+    Markers are not part of this series and must be preserved by the caller.
+    """
+    n = len(points)
+    if n <= max_points:
+        return points
+
+    # Last point per UTC calendar day (points are chronological).
+    by_day: Dict[str, Dict[str, Any]] = {}
+    day_order: List[str] = []
+    for point in points:
+        day_key = _as_utc(datetime.fromisoformat(point["timestamp"])).date().isoformat()
+        if day_key not in by_day:
+            day_order.append(day_key)
+        by_day[day_key] = point
+
+    selected: List[Dict[str, Any]] = [by_day[day] for day in day_order]
+
+    first = points[0]
+    last = points[-1]
+    selected_ts = {p["timestamp"] for p in selected}
+    if first["timestamp"] not in selected_ts:
+        selected = [first] + selected
+        selected_ts.add(first["timestamp"])
+    if last["timestamp"] not in selected_ts:
+        selected = selected + [last]
+
+    # Keep chronological order after forced endpoints.
+    selected = sorted(selected, key=lambda p: p["timestamp"])
+
+    if len(selected) <= max_points:
+        return selected
+    return _evenly_thin_points(selected, max_points)
+
+
+def _evenly_thin_points(
+    points: List[Dict[str, Any]],
+    max_points: int,
+) -> List[Dict[str, Any]]:
+    """Return up to ``max_points`` evenly spaced points, always keeping ends."""
+    n = len(points)
+    if n <= max_points or max_points < 2:
+        return points if n <= max_points else [points[0], points[-1]][:max_points]
+
+    # Linspace-style indices always include 0 and n-1 when max_points >= 2.
+    indices: List[int] = []
+    seen: set[int] = set()
+    for i in range(max_points):
+        idx = int(round(i * (n - 1) / (max_points - 1)))
+        if idx not in seen:
+            seen.add(idx)
+            indices.append(idx)
+
+    # Rounding collisions can drop under the cap; fill gaps from the middle.
+    if len(indices) < max_points:
+        for idx in range(1, n - 1):
+            if idx not in seen:
+                seen.add(idx)
+                indices.append(idx)
+                if len(indices) >= max_points:
+                    break
+        indices.sort()
+
+    return [points[i] for i in indices]
+
 
 async def get_equity_curve(
     session: AsyncSession,
@@ -319,6 +399,10 @@ async def get_equity_curve(
     settlement series (USDT over dust). Spot / ``PortfolioSnapshot`` is never
     used as account equity. External capital events (deposit, withdrawal,
     futures_transfer) are returned as markers for the chart.
+
+    Dense series are downsampled for chart readability (see
+    ``_downsample_equity_points``); markers and ``as_of`` always reflect the
+    full raw snapshot history.
     """
     series, settlement = await _load_futures_equity_series(session, user_id, exchange)
     points: List[Dict[str, Any]] = []
@@ -335,6 +419,9 @@ async def get_equity_curve(
         )
 
     markers = await _capital_flow_markers(session, user_id, exchange)
+    point_count_raw = len(points)
+    as_of = points[-1]["timestamp"] if points else None
+    returned_points = _downsample_equity_points(points)
 
     if not points:
         return {
@@ -345,16 +432,22 @@ async def get_equity_curve(
             "settlement_asset": settlement,
             "complete": False,
             "unavailable_reason": "no_account_equity_data",
+            "as_of": None,
+            "point_count_raw": 0,
+            "point_count_returned": 0,
         }
 
     return {
-        "points": points,
+        "points": returned_points,
         "markers": markers,
         "basis": "futures_equity",
         "source": "FuturesAccountSnapshot.equity",
         "settlement_asset": settlement,
         "complete": True,
         "unavailable_reason": None,
+        "as_of": as_of,
+        "point_count_raw": point_count_raw,
+        "point_count_returned": len(returned_points),
     }
 
 
@@ -1335,7 +1428,18 @@ async def _closed_position_concentration_insights(
                 "evidence_tag": None,
                 "evidence_count": top["count"],
                 "evidence_symbol": top_sym,
-                "evidence_href": f"/journal?symbol={top_sym}",
+                # Deep-link into portfolio Analytics → Closed Positions with symbol filter
+                "evidence_href": (
+                    "/portfolio?"
+                    + urlencode(
+                        {
+                            "exchange": (exchange or "mexc"),
+                            "tab": "analytics",
+                            "analytics_tab": "closed-positions",
+                            "symbols": top_sym,
+                        }
+                    )
+                ),
             }
         )
     return insights

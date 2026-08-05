@@ -123,6 +123,9 @@ class EquityCurveResponse(BaseModel):
     settlement_asset: str | None = None
     complete: bool = False
     unavailable_reason: str | None = None
+    as_of: str | None = None
+    point_count_raw: int | None = None
+    point_count_returned: int | None = None
 
 
 class DailyPnlPoint(BaseModel):
@@ -685,6 +688,9 @@ async def get_equity_curve(
         settlement_asset=curve.get("settlement_asset"),
         complete=curve.get("complete", False),
         unavailable_reason=curve.get("unavailable_reason"),
+        as_of=curve.get("as_of"),
+        point_count_raw=curve.get("point_count_raw"),
+        point_count_returned=curve.get("point_count_returned"),
     )
 
 

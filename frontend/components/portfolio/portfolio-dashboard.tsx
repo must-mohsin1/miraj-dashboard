@@ -137,6 +137,12 @@ interface PortfolioDashboardProps {
   maskedKey: string | null;
   /** Exchange slug (e.g. "mexc", "binance", "bybit"). */
   exchange: string;
+  /** Deep-link: outer tab value (e.g. `analytics`). */
+  initialTab?: string;
+  /** Deep-link: nested AnalyticsDashboard tab (e.g. `closed-positions`). */
+  analyticsTab?: string;
+  /** Deep-link: CSV symbols seed for closed-position filters. */
+  initialSymbols?: string;
 }
 
 export function PortfolioDashboard({
@@ -144,12 +150,24 @@ export function PortfolioDashboard({
   portfolio,
   maskedKey,
   exchange,
+  initialTab,
+  analyticsTab,
+  initialSymbols,
 }: PortfolioDashboardProps) {
   const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefreshing, setAutoRefreshing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Controlled outer tab so same-route deep-links (Strategy → closed positions)
+  // switch tabs even if the parent remount key is absent.
+  const [activeTab, setActiveTab] = useState(initialTab || "balances");
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   // Live prices state (SSE).
   const [prices, setPrices] = useState<PriceMap>({});
@@ -605,8 +623,8 @@ export function PortfolioDashboard({
         partial={partial}
       />
 
-      {/* Tabs */}
-      <Tabs defaultValue="balances" className="w-full">
+      {/* Tabs — controlled so deep-link `tab=` reapplies on same-route nav */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList>
           <TabsTrigger value="balances">
             Balances ({balances.length})
@@ -655,7 +673,12 @@ export function PortfolioDashboard({
           <OrderHistoryTable orders={orderHistory} />
         </TabsContent>
         <TabsContent value="analytics">
-          <AnalyticsDashboard token={token} exchange={exchange} />
+          <AnalyticsDashboard
+            token={token}
+            exchange={exchange}
+            defaultAnalyticsTab={analyticsTab}
+            initialSymbols={initialSymbols}
+          />
         </TabsContent>
         <TabsContent value="capital-flow">
           {capitalFlowLoading && !capitalFlow ? (
