@@ -143,6 +143,8 @@ interface PortfolioDashboardProps {
   analyticsTab?: string;
   /** Deep-link: CSV symbols seed for closed-position filters. */
   initialSymbols?: string;
+  /** Deep-link: full closed-position filter seed for Trade Explorer URL state. */
+  initialClosedFilters?: import("@/components/portfolio/closed-position-filters").ClosedPositionFiltersValue;
 }
 
 export function PortfolioDashboard({
@@ -153,6 +155,7 @@ export function PortfolioDashboard({
   initialTab,
   analyticsTab,
   initialSymbols,
+  initialClosedFilters,
 }: PortfolioDashboardProps) {
   const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
@@ -678,6 +681,7 @@ export function PortfolioDashboard({
             exchange={exchange}
             defaultAnalyticsTab={analyticsTab}
             initialSymbols={initialSymbols}
+            initialClosedFilters={initialClosedFilters}
           />
         </TabsContent>
         <TabsContent value="capital-flow">
