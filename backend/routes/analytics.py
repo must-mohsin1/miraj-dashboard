@@ -634,6 +634,36 @@ async def get_trade_explorer(
 
 
 @router.get(
+    "/{exchange}/trade-explorer/{position_id}",
+    summary="Trade Explorer detail — position, matched orders, pre-entry scan, journal",
+)
+async def get_trade_explorer_detail(
+    exchange: str,
+    position_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Dict[str, Any]:
+    """Return one closed position with best-effort related context.
+
+    Orders match by normalised symbol + open/close time window (not exchange
+    position id). Scan is the nearest pre-entry Miraj scan for the symbol.
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+    try:
+        return await analytics_service.get_trade_explorer_detail(
+            session,
+            current_user.id,
+            exchange_slug,
+            position_id,
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Closed position not found for this exchange and user.",
+        ) from None
+
+
+@router.get(
     "/{exchange}/performance",
     response_model=PerformanceMetricsResponse,
     summary="Portfolio performance metrics",

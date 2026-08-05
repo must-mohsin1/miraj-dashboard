@@ -430,6 +430,8 @@ export function AnalyticsDashboard({
             data={closedAnalytics?.explorer ?? null}
             loading={loading.closed}
             error={errors.closed}
+            token={token}
+            exchange={exchange}
             onPageChange={(offset) => setClosedFilters((filters) => ({ ...filters, offset }))}
             onPageSizeChange={(limit) => setClosedFilters((filters) => ({ ...filters, limit, offset: 0 }))}
             onSortChange={(sort) =>

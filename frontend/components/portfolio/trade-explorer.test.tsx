@@ -216,6 +216,65 @@ describe("TradeExplorer", () => {
     expect(onSortChange).toHaveBeenCalledWith("-pnl");
   });
 
+  it("loads trade detail with orders and scan when drawer opens", async () => {
+    const user = userEvent.setup();
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        exchange: "mexc",
+        position: BASE_RESPONSE.items[0],
+        orders: [
+          {
+            id: 1,
+            exchange_order_id: "ord-1",
+            side: "buy",
+            type: "market",
+            filled: 12,
+            filled_price: 118000,
+            fee: 0.02,
+            fee_currency: "USDT",
+            timestamp: "2026-07-24T10:01:00Z",
+            side_action: "Open Long",
+          },
+        ],
+        orders_match: {
+          strategy: "symbol_time_window",
+          count: 1,
+          note: "Matched by symbol and time window.",
+        },
+        scan: {
+          found: true,
+          scan_symbol: "BTC-USD",
+          score: 22.5,
+          direction: "LONG",
+          href_path: "/analysis/BTC-USD",
+          created_at: "2026-07-24T09:00:00Z",
+        },
+        journal: { count: 0, entries: [], href_path: "/journal?symbol=BTC_USDT&exchange=mexc" },
+        fees: { sum_order_fees: 0.02, currency_unit: "USDT" },
+      }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<TradeExplorer data={BASE_RESPONSE} token="test-token" exchange="mexc" />);
+    const openers = screen.getAllByRole("button", { name: /Open trade detail for BTC_USDT ID 911/ });
+    await user.click(openers[0]);
+
+    expect(await screen.findByRole("heading", { name: "Pre-entry scan" })).toBeInTheDocument();
+    expect(await screen.findByText(/Score/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open scan \(BTC-USD\)/ })).toHaveAttribute(
+      "href",
+      "/analysis/BTC-USD",
+    );
+    expect(screen.getByLabelText("Matched orders")).toHaveTextContent("Open Long");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/analytics/mexc/trade-explorer/911",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
+      }),
+    );
+  });
+
   it("uses the approved closed-position analytics error copy without raw status text", () => {
     render(<TradeExplorer data={null} error="raw 503" />);
 

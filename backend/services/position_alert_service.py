@@ -40,8 +40,8 @@ def normalize_to_scan_symbol(position_symbol: str) -> str:
     s = position_symbol.upper().strip()
     # Strip settlement suffix (":USDT")
     s = s.split(":")[0]
-    # Replace slash with dash
-    s = s.replace("/", "-")
+    # Normalise separators — BTC_USDT / BTC/USDT → BTC-USDT
+    s = s.replace("/", "-").replace("_", "-")
     # Strip USDT/USD quote currency → base
     if s.endswith("-USDT"):
         base = s[:-5]
