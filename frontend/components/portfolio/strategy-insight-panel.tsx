@@ -5,8 +5,11 @@ import Link from "next/link";
 import { Loader2, RefreshCw, X } from "lucide-react";
 
 import type {
+  ClosedPositionAnalyticsResponse,
+  ClosedPositionTradeExplorerItem,
   JournalListResponse,
   JournalSummaryResponse,
+  ScanAccuracyResponse,
   StrategyInsightCard,
   TradeJournalEntry,
 } from "@/lib/types";
@@ -14,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * Phase 4 strategy loop: journal tag scorecards + evidence-based insight cards.
- * Click a tag or insight to load supporting journal entries (evidence trail).
+ * Click a tag or insight to load supporting journal entries and closed trades.
  * Concentration / symbol evidence also deep-links into closed-position analytics.
  */
 
@@ -106,8 +109,10 @@ export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelPr
   const [refreshing, setRefreshing] = useState(false);
   const [evidenceQuery, setEvidenceQuery] = useState<EvidenceQuery | null>(null);
   const [evidence, setEvidence] = useState<TradeJournalEntry[]>([]);
+  const [closedEvidence, setClosedEvidence] = useState<ClosedPositionTradeExplorerItem[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [scanSummary, setScanSummary] = useState<ScanAccuracyResponse | null>(null);
 
   async function fetchData() {
     if (!token) {
@@ -117,13 +122,23 @@ export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelPr
     }
     setRefreshing(true);
     try {
-      const res = await fetch(
-        `/api/v1/analytics/${encodeURIComponent(exchange)}/journal-summary`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const json: JournalSummaryResponse = await res.json();
+      const headers = { Authorization: `Bearer ${token}` };
+      const [journalRes, scanRes] = await Promise.all([
+        fetch(`/api/v1/analytics/${encodeURIComponent(exchange)}/journal-summary`, {
+          headers,
+        }),
+        fetch(`/api/v1/analytics/${encodeURIComponent(exchange)}/scan-accuracy`, {
+          headers,
+        }),
+      ]);
+      if (!journalRes.ok) throw new Error(`${journalRes.status} ${journalRes.statusText}`);
+      const json: JournalSummaryResponse = await journalRes.json();
       setData(json);
+      if (scanRes.ok) {
+        setScanSummary((await scanRes.json()) as ScanAccuracyResponse);
+      } else {
+        setScanSummary(null);
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -142,29 +157,55 @@ export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelPr
   useEffect(() => {
     if (!evidenceQuery || !token) {
       setEvidence([]);
+      setClosedEvidence([]);
       setEvidenceError(null);
       return;
     }
     let cancelled = false;
     setEvidenceLoading(true);
     setEvidenceError(null);
-    const params = new URLSearchParams();
-    if (evidenceQuery.tag) params.set("tag", evidenceQuery.tag);
-    if (evidenceQuery.symbol) params.set("symbol", evidenceQuery.symbol);
-    if (exchange) params.set("exchange", exchange);
-    fetch(`/api/v1/journal?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(async (res) => {
+    const headers = { Authorization: `Bearer ${token}` };
+    const journalParams = new URLSearchParams();
+    if (evidenceQuery.tag) journalParams.set("tag", evidenceQuery.tag);
+    if (evidenceQuery.symbol) journalParams.set("symbol", evidenceQuery.symbol);
+    if (exchange) journalParams.set("exchange", exchange);
+
+    const closedPromise = evidenceQuery.symbol
+      ? fetch(
+          `/api/v1/analytics/${encodeURIComponent(exchange)}/closed-position-analytics?` +
+            new URLSearchParams({
+              symbols: evidenceQuery.symbol.toUpperCase(),
+              period: "month",
+              limit: "25",
+              offset: "0",
+              sort: "-close_time",
+              timezone: "UTC",
+            }).toString(),
+          { headers },
+        ).then(async (res) => {
+          if (!res.ok) return [] as ClosedPositionTradeExplorerItem[];
+          const data = (await res.json()) as ClosedPositionAnalyticsResponse;
+          return data.explorer?.items ?? [];
+        })
+      : Promise.resolve([] as ClosedPositionTradeExplorerItem[]);
+
+    Promise.all([
+      fetch(`/api/v1/journal?${journalParams.toString()}`, { headers }).then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
         return res.json() as Promise<JournalListResponse>;
-      })
-      .then((json) => {
-        if (!cancelled) setEvidence(json.entries ?? []);
+      }),
+      closedPromise,
+    ])
+      .then(([journalJson, closedItems]) => {
+        if (!cancelled) {
+          setEvidence(journalJson.entries ?? []);
+          setClosedEvidence(closedItems);
+        }
       })
       .catch((err) => {
         if (!cancelled) {
           setEvidence([]);
+          setClosedEvidence([]);
           setEvidenceError(err instanceof Error ? err.message : String(err));
         }
       })
@@ -264,6 +305,25 @@ export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelPr
           Refresh
         </button>
       </div>
+
+      {scanSummary && (
+        <div className="border border-[#2A2620] bg-[#161411] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-sm font-medium text-[#EDE7DB]">Scan ↔ trade attribution</h4>
+            <Link
+              href={`/portfolio?exchange=${encodeURIComponent(exchange)}&tab=analytics&analytics_tab=attribution`}
+              className="text-xs text-[#C2A36B] hover:underline"
+            >
+              Open attribution
+            </Link>
+          </div>
+          <p className="mt-1 text-xs text-[#8E8778]">
+            {scanSummary.total_trades} closed trades linked to a pre-entry scan.
+            Score-band win rates and per-trade scan scores are on the Attribution
+            tab.
+          </p>
+        </div>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2">
         {insights.map((insight) => {
@@ -395,37 +455,95 @@ export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelPr
             </div>
           ) : evidenceError ? (
             <p className="text-xs text-[#C96A55]">{evidenceError}</p>
-          ) : evidence.length === 0 ? (
-            <p className="text-xs text-[#8E8778]">No journal rows match this evidence filter.</p>
+          ) : evidence.length === 0 && closedEvidence.length === 0 ? (
+            <p className="text-xs text-[#8E8778]">
+              No journal rows or closed trades match this evidence filter.
+            </p>
           ) : (
-            <ul className="max-h-56 space-y-2 overflow-y-auto text-xs">
-              {evidence.map((entry) => (
-                <li
-                  key={entry.id}
-                  className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[#2A2620]/40 py-2"
-                >
-                  <span className="font-mono text-[#EDE7DB]">{entry.symbol}</span>
-                  <span className="text-[#8E8778]">
-                    {entry.tags || "untagged"}
-                    {entry.position_id != null ? ` · pos #${entry.position_id}` : " · unlinked"}
-                  </span>
-                  <span
-                    className={cn(
-                      "font-mono tabular-nums",
-                      (entry.pnl ?? 0) > 0
-                        ? "text-[#6CA98F]"
-                        : (entry.pnl ?? 0) < 0
-                          ? "text-[#C96A55]"
-                          : "text-[#8E8778]",
-                    )}
-                  >
-                    {typeof entry.pnl === "number"
-                      ? `${entry.pnl >= 0 ? "+" : ""}$${entry.pnl.toFixed(2)}`
-                      : "—"}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <h5 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-[#8E8778]">
+                  Journal ({evidence.length})
+                </h5>
+                {evidence.length === 0 ? (
+                  <p className="text-xs text-[#8E8778]">No journal rows.</p>
+                ) : (
+                  <ul className="max-h-56 space-y-2 overflow-y-auto text-xs">
+                    {evidence.map((entry) => (
+                      <li
+                        key={entry.id}
+                        className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[#2A2620]/40 py-2"
+                      >
+                        <span className="font-mono text-[#EDE7DB]">{entry.symbol}</span>
+                        <span className="text-[#8E8778]">
+                          {entry.tags || "untagged"}
+                          {entry.position_id != null
+                            ? ` · pos #${entry.position_id}`
+                            : " · unlinked"}
+                        </span>
+                        <span
+                          className={cn(
+                            "font-mono tabular-nums",
+                            (entry.pnl ?? 0) > 0
+                              ? "text-[#6CA98F]"
+                              : (entry.pnl ?? 0) < 0
+                                ? "text-[#C96A55]"
+                                : "text-[#8E8778]",
+                          )}
+                        >
+                          {typeof entry.pnl === "number"
+                            ? `${entry.pnl >= 0 ? "+" : ""}$${entry.pnl.toFixed(2)}`
+                            : "—"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <h5 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-[#8E8778]">
+                  Closed trades ({closedEvidence.length})
+                </h5>
+                {closedEvidence.length === 0 ? (
+                  <p className="text-xs text-[#8E8778]">
+                    {evidenceQuery.symbol
+                      ? "No closed trades for this symbol."
+                      : "Select a symbol-scoped insight to list closed trades."}
+                  </p>
+                ) : (
+                  <ul className="max-h-56 space-y-2 overflow-y-auto text-xs">
+                    {closedEvidence.map((row) => (
+                      <li
+                        key={`${row.symbol}-${row.close_time}-${row.pnl}`}
+                        className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[#2A2620]/40 py-2"
+                      >
+                        <span className="font-mono text-[#EDE7DB]">{row.symbol}</span>
+                        <span className="text-[#8E8778]">
+                          {(row.side || "").toLowerCase()}
+                          {row.close_time
+                            ? ` · ${new Date(row.close_time).toLocaleDateString()}`
+                            : ""}
+                        </span>
+                        <span
+                          className={cn(
+                            "font-mono tabular-nums",
+                            (row.pnl ?? 0) > 0
+                              ? "text-[#6CA98F]"
+                              : (row.pnl ?? 0) < 0
+                                ? "text-[#C96A55]"
+                                : "text-[#8E8778]",
+                          )}
+                        >
+                          {typeof row.pnl === "number"
+                            ? `${row.pnl >= 0 ? "+" : ""}$${row.pnl.toFixed(2)}`
+                            : "—"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
           )}
         </div>
       )}

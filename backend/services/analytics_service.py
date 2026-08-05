@@ -392,6 +392,7 @@ async def get_equity_curve(
     session: AsyncSession,
     user_id: int,
     exchange: str,
+    resolution: str = "day",
 ) -> Dict[str, Any]:
     """Return futures wallet equity curve + external capital-flow markers.
 
@@ -400,10 +401,17 @@ async def get_equity_curve(
     used as account equity. External capital events (deposit, withdrawal,
     futures_transfer) are returned as markers for the chart.
 
-    Dense series are downsampled for chart readability (see
-    ``_downsample_equity_points``); markers and ``as_of`` always reflect the
-    full raw snapshot history.
+    ``resolution``:
+    - ``day`` (default): last snapshot per UTC day, then hard-cap 200
+    - ``week``: last snapshot per ISO week, then hard-cap 200
+    - ``raw``: all points, hard-cap 200 with even thinning only
+
+    Markers and ``as_of`` always reflect the full raw snapshot history.
     """
+    resolution = (resolution or "day").strip().lower()
+    if resolution not in {"day", "week", "raw"}:
+        resolution = "day"
+
     series, settlement = await _load_futures_equity_series(session, user_id, exchange)
     points: List[Dict[str, Any]] = []
     for snap in series:
@@ -421,7 +429,7 @@ async def get_equity_curve(
     markers = await _capital_flow_markers(session, user_id, exchange)
     point_count_raw = len(points)
     as_of = points[-1]["timestamp"] if points else None
-    returned_points = _downsample_equity_points(points)
+    returned_points = _resolve_equity_points(points, resolution)
 
     if not points:
         return {
@@ -435,6 +443,7 @@ async def get_equity_curve(
             "as_of": None,
             "point_count_raw": 0,
             "point_count_returned": 0,
+            "resolution": resolution,
         }
 
     return {
@@ -448,7 +457,50 @@ async def get_equity_curve(
         "as_of": as_of,
         "point_count_raw": point_count_raw,
         "point_count_returned": len(returned_points),
+        "resolution": resolution,
     }
+
+
+def _resolve_equity_points(
+    points: List[Dict[str, Any]],
+    resolution: str,
+) -> List[Dict[str, Any]]:
+    """Apply resolution bucketing then hard-cap via ``_downsample_equity_points``."""
+    if not points:
+        return []
+    if resolution == "raw":
+        if len(points) <= MAX_EQUITY_CURVE_POINTS:
+            return points
+        return _evenly_thin_points(points, MAX_EQUITY_CURVE_POINTS)
+    if resolution == "week":
+        return _downsample_equity_points(
+            _bucket_last_per_period(points, period="week"),
+            MAX_EQUITY_CURVE_POINTS,
+        )
+    # day (default) — existing path: last per UTC day + hard cap
+    return _downsample_equity_points(points, MAX_EQUITY_CURVE_POINTS)
+
+
+def _bucket_last_per_period(
+    points: List[Dict[str, Any]],
+    *,
+    period: str,
+) -> List[Dict[str, Any]]:
+    """Keep last point per UTC day or ISO week (chronological)."""
+    by_key: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for point in points:
+        dt = _as_utc(datetime.fromisoformat(point["timestamp"]))
+        if period == "week":
+            iso = dt.isocalendar()  # (year, week, weekday) on older Python
+            year, week = int(iso[0]), int(iso[1])
+            key = f"{year}-W{week:02d}"
+        else:
+            key = dt.date().isoformat()
+        if key not in by_key:
+            order.append(key)
+        by_key[key] = point
+    return [by_key[k] for k in order]
 
 
 async def _capital_flow_markers(

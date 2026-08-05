@@ -110,6 +110,7 @@ export function AnalyticsDashboard({
 }: AnalyticsDashboardProps) {
   const [metrics, setMetrics] = useState<PerformanceMetricsType | null>(null);
   const [equity, setEquity] = useState<EquityCurveResponse | null>(null);
+  const [equityResolution, setEquityResolution] = useState<"day" | "week" | "raw">("day");
   const [daily, setDaily] = useState<DailyPnlResponse | null>(null);
   const [allocation, setAllocation] = useState<AllocationResponse | null>(null);
   const [closedAnalytics, setClosedAnalytics] = useState<ClosedPositionAnalyticsResponse | null>(null);
@@ -203,8 +204,12 @@ export function AnalyticsDashboard({
           }
         });
 
-      // Equity curve
-      fetch(`${base}/equity-curve`, { headers })
+      // Equity curve (resolution: day | week | raw)
+      setLoading((s) => ({ ...s, equity: true }));
+      fetch(
+        `${base}/equity-curve?resolution=${encodeURIComponent(equityResolution)}`,
+        { headers },
+      )
         .then((r) => (r.ok ? r.json() : Promise.reject(r.statusText)))
         .then((data: EquityCurveResponse) => {
           if (!cancelled) {
@@ -285,7 +290,7 @@ export function AnalyticsDashboard({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [exchange, token, closedPositionQuery]);
+  }, [exchange, token, closedPositionQuery, equityResolution]);
 
   return (
     <Tabs value={analyticsTab} onValueChange={setAnalyticsTab} className="w-full">
@@ -323,6 +328,10 @@ export function AnalyticsDashboard({
               settlementAsset={equity?.settlement_asset ?? null}
               unavailableReason={equity?.unavailable_reason ?? null}
               asOf={equity?.as_of ?? null}
+              resolution={equityResolution}
+              pointCountRaw={equity?.point_count_raw ?? null}
+              pointCountReturned={equity?.point_count_returned ?? null}
+              onResolutionChange={setEquityResolution}
             />
           )}
         </div>

@@ -267,6 +267,39 @@ async def test_equity_curve_does_not_fallback_to_unrealised_or_total_pnl(session
     assert curve["markers"] == []
 
 
+async def test_equity_curve_resolution_week_and_raw(session, user: User):
+    # Two days in week 1, one day in week 2 — week buckets to 2 points.
+    t0 = datetime(2026, 7, 6, 0, 0, 0)  # Monday
+    t1 = datetime(2026, 7, 7, 12, 0, 0)
+    t2 = datetime(2026, 7, 13, 0, 0, 0)  # next Monday
+    session.add_all(
+        [
+            FuturesAccountSnapshot(
+                user_id=user.id, exchange="mexc", settlement_asset="USDT",
+                equity=100.0, source_ts=t0, synced_at=t0,
+            ),
+            FuturesAccountSnapshot(
+                user_id=user.id, exchange="mexc", settlement_asset="USDT",
+                equity=110.0, source_ts=t1, synced_at=t1,
+            ),
+            FuturesAccountSnapshot(
+                user_id=user.id, exchange="mexc", settlement_asset="USDT",
+                equity=120.0, source_ts=t2, synced_at=t2,
+            ),
+        ]
+    )
+    await session.flush()
+
+    week = await analytics_service.get_equity_curve(session, user.id, "mexc", resolution="week")
+    assert week["resolution"] == "week"
+    assert week["point_count_raw"] == 3
+    assert week["point_count_returned"] == 2
+
+    raw = await analytics_service.get_equity_curve(session, user.id, "mexc", resolution="raw")
+    assert raw["resolution"] == "raw"
+    assert raw["point_count_returned"] == 3
+
+
 async def test_equity_curve_uses_futures_series_and_external_markers(session, user: User):
     t0 = datetime(2026, 7, 1, 0, 0, 0)
     t1 = datetime(2026, 7, 2, 0, 0, 0)

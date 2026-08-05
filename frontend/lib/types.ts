@@ -423,6 +423,8 @@ export interface EquityCurveResponse {
   as_of?: string | null;
   point_count_raw?: number | null;
   point_count_returned?: number | null;
+  /** day | week | raw */
+  resolution?: string | null;
 }
 
 /** A single day's PnL. */

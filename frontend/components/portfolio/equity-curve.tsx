@@ -22,6 +22,8 @@ import type { EquityCurveMarker, EquityCurvePoint } from "@/lib/types";
  * INK & OXIDE tokens only (no Tailwind slate palette).
  */
 
+export type EquityResolution = "day" | "week" | "raw";
+
 interface EquityCurveProps {
   points: EquityCurvePoint[];
   markers?: EquityCurveMarker[];
@@ -30,6 +32,10 @@ interface EquityCurveProps {
   unavailableReason?: string | null;
   /** ISO timestamp of the last raw futures snapshot (pre-downsample). */
   asOf?: string | null;
+  resolution?: EquityResolution;
+  pointCountRaw?: number | null;
+  pointCountReturned?: number | null;
+  onResolutionChange?: (resolution: EquityResolution) => void;
 }
 
 const TOOLTIP_STYLE = {
@@ -89,13 +95,20 @@ interface TooltipPayloadItem {
   payload: { timestamp: string; total_value: number };
 }
 
-function EquityTooltip({ active, payload }: {
+function EquityTooltip({
+  active,
+  payload,
+  markers = [],
+}: {
   active?: boolean;
   payload?: TooltipPayloadItem[];
+  markers?: EquityCurveMarker[];
 }) {
   if (!active || !payload || payload.length === 0) return null;
   const point = payload[0]?.payload;
   if (!point) return null;
+  const day = point.timestamp.slice(0, 10);
+  const dayMarkers = markers.filter((m) => m.timestamp.slice(0, 10) === day);
   return (
     <div style={TOOLTIP_STYLE} className="px-3 py-2">
       <div className="font-medium text-[#EDE7DB]">
@@ -108,6 +121,18 @@ function EquityTooltip({ active, payload }: {
         })}
       </div>
       <div className="mt-0.5 text-[10px] text-[#8E8778]">Futures wallet equity</div>
+      {dayMarkers.length > 0 && (
+        <ul className="mt-2 space-y-0.5 border-t border-[#2A2620] pt-1 text-[10px] text-[#8E8778]">
+          {dayMarkers.map((m) => (
+            <li key={`${m.entry_type}-${m.timestamp}-${m.exchange_entry_id ?? ""}`}>
+              {markerLabel(m.entry_type)}
+              {typeof m.signed_amount === "number"
+                ? ` ${m.signed_amount >= 0 ? "+" : ""}$${m.signed_amount.toFixed(2)}`
+                : ""}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -129,6 +154,10 @@ export function EquityCurve({
   settlementAsset,
   unavailableReason,
   asOf,
+  resolution = "day",
+  pointCountRaw,
+  pointCountReturned,
+  onResolutionChange,
 }: EquityCurveProps) {
   if (!points || points.length === 0) {
     const reason = unavailableReason ? unavailableReason.replaceAll("_", " ") : "no account equity data";
@@ -174,15 +203,40 @@ export function EquityCurve({
         : "Account equity data";
 
   const asOfLabel = asOf ? `As of ${formatDateTime(asOf)}` : null;
+  const countLabel =
+    typeof pointCountRaw === "number" && typeof pointCountReturned === "number"
+      ? `${pointCountReturned} of ${pointCountRaw} snapshots`
+      : null;
 
   return (
     <div className="border border-[#2A2620] bg-[#161411] p-4">
-      <h3 className="mb-1 text-sm font-medium text-[#EDE7DB]">
-        Account Equity Curve
-      </h3>
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-medium text-[#EDE7DB]">Account Equity Curve</h3>
+        {onResolutionChange && (
+          <div className="flex gap-1 text-[11px]" role="group" aria-label="Equity curve resolution">
+            {(["day", "week", "raw"] as const).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => onResolutionChange(r)}
+                className={
+                  resolution === r
+                    ? "border border-[#C2A36B] px-2 py-0.5 text-[#C2A36B]"
+                    : "border border-[#2A2620] px-2 py-0.5 text-[#8E8778] hover:text-[#EDE7DB]"
+                }
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="mb-3 text-xs text-[#8E8778]">
         <div>{basisLabel}</div>
         {asOfLabel && <div className="mt-0.5 text-[11px]">{asOfLabel}</div>}
+        {countLabel && (
+          <div className="mt-0.5 font-mono text-[11px] tabular-nums">{countLabel}</div>
+        )}
       </div>
       {chartMarkers.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-3 text-[11px] text-[#8E8778]">
@@ -234,7 +288,7 @@ export function EquityCurve({
                 })}`
               }
             />
-            <Tooltip content={<EquityTooltip />} />
+            <Tooltip content={<EquityTooltip markers={markers} />} />
             <Area
               type="monotone"
               dataKey="total_value"
@@ -247,6 +301,7 @@ export function EquityCurve({
             {chartMarkers.map((m) => {
               const inflow = (m.signed_amount ?? 0) >= 0;
               const fill = inflow ? "#38bdf8" : "#fbbf24";
+              const tip = markerTitle(m);
               return (
                 <ReferenceDot
                   key={`${m.entry_type}-${m.timestamp}-${m.exchange_entry_id ?? ""}`}
@@ -257,6 +312,19 @@ export function EquityCurve({
                   stroke="#0F0E0C"
                   strokeWidth={1}
                   ifOverflow="extendDomain"
+                  shape={(props: { cx?: number; cy?: number }) => (
+                    <g>
+                      <title>{tip}</title>
+                      <circle
+                        cx={props.cx}
+                        cy={props.cy}
+                        r={5}
+                        fill={fill}
+                        stroke="#0F0E0C"
+                        strokeWidth={1}
+                      />
+                    </g>
+                  )}
                 />
               );
             })}
