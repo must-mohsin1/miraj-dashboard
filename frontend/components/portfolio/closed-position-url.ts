@@ -55,12 +55,19 @@ function readParam(
   source: URLSearchParams | Record<string, string | string[] | undefined>,
   key: string,
 ): string {
-  if (source instanceof URLSearchParams) {
-    return (source.get(key) ?? "").trim();
+  let value: unknown;
+  if (typeof URLSearchParams !== "undefined" && source instanceof URLSearchParams) {
+    value = source.get(key);
+  } else if (source && typeof source === "object") {
+    const raw = (source as Record<string, unknown>)[key];
+    value = Array.isArray(raw) ? raw[0] : raw;
+  } else {
+    value = undefined;
   }
-  const raw = source[key];
-  if (Array.isArray(raw)) return (raw[0] ?? "").trim();
-  return (raw ?? "").trim();
+  // Next searchParams values are usually string | string[] | undefined; coerce
+  // anything else so missing/odd shapes never throw on .trim().
+  if (value == null) return "";
+  return String(value).trim();
 }
 
 export function parseClosedPositionFiltersFromSearch(
