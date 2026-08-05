@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
 import {
@@ -33,6 +34,10 @@ import {
   DEFAULT_CLOSED_POSITION_FILTERS,
   type ClosedPositionFiltersValue,
 } from "@/components/portfolio/closed-position-filters";
+import {
+  applyClosedPositionFiltersToSearchParams,
+  closedPositionFiltersQueryFingerprint,
+} from "@/components/portfolio/closed-position-url";
 import { ClosedPositionBasisNote } from "@/components/portfolio/closed-position-basis-note";
 import { ClosedPositionOverview } from "@/components/portfolio/closed-position-overview";
 import { ClosedPositionPeriodChart } from "@/components/portfolio/closed-position-period-chart";
@@ -69,6 +74,8 @@ interface AnalyticsDashboardProps {
   defaultAnalyticsTab?: string;
   /** Deep-link: seed closed-position symbols CSV filter. */
   initialSymbols?: string;
+  /** Deep-link: full closed-position filter seed (wins over initialSymbols when set). */
+  initialClosedFilters?: ClosedPositionFiltersValue;
 }
 
 const ANALYTICS_TAB_VALUES = new Set([
@@ -107,7 +114,12 @@ export function AnalyticsDashboard({
   exchange,
   defaultAnalyticsTab,
   initialSymbols,
+  initialClosedFilters,
 }: AnalyticsDashboardProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [metrics, setMetrics] = useState<PerformanceMetricsType | null>(null);
   const [equity, setEquity] = useState<EquityCurveResponse | null>(null);
   const [equityResolution, setEquityResolution] = useState<"day" | "week" | "raw">("day");
@@ -115,6 +127,7 @@ export function AnalyticsDashboard({
   const [allocation, setAllocation] = useState<AllocationResponse | null>(null);
   const [closedAnalytics, setClosedAnalytics] = useState<ClosedPositionAnalyticsResponse | null>(null);
   const [closedFilters, setClosedFilters] = useState<ClosedPositionFiltersValue>(() => {
+    if (initialClosedFilters) return { ...initialClosedFilters };
     const symbols = (initialSymbols ?? "").trim().toUpperCase();
     if (!symbols) return DEFAULT_CLOSED_POSITION_FILTERS;
     return { ...DEFAULT_CLOSED_POSITION_FILTERS, symbols };
@@ -131,14 +144,39 @@ export function AnalyticsDashboard({
     }
   }, [defaultAnalyticsTab]);
 
-  // Seed / re-seed symbols filter when deep-link `symbols=` changes.
+  // Seed / re-seed when deep-link filter props change (e.g. Strategy → closed positions).
   useEffect(() => {
+    if (initialClosedFilters) {
+      setClosedFilters((prev) => {
+        const nextFp = closedPositionFiltersQueryFingerprint(initialClosedFilters);
+        const prevFp = closedPositionFiltersQueryFingerprint(prev);
+        return nextFp === prevFp ? prev : { ...initialClosedFilters };
+      });
+      return;
+    }
     const symbols = (initialSymbols ?? "").trim().toUpperCase();
     if (!symbols) return;
     setClosedFilters((prev) =>
       prev.symbols === symbols ? prev : { ...prev, symbols, offset: 0 },
     );
-  }, [initialSymbols]);
+  }, [initialSymbols, initialClosedFilters]);
+
+  // Mirror closed-position filters into the portfolio URL for shareable deep links.
+  useEffect(() => {
+    if (analyticsTab !== "closed-positions") return;
+    if (!pathname) return;
+
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    params.set("tab", "analytics");
+    params.set("analytics_tab", "closed-positions");
+    if (exchange) params.set("exchange", exchange);
+    applyClosedPositionFiltersToSearchParams(params, closedFilters);
+
+    const nextQuery = params.toString();
+    const currentQuery = searchParams?.toString() ?? "";
+    if (nextQuery === currentQuery) return;
+    router.replace(`${pathname}?${nextQuery}`, { scroll: false });
+  }, [analyticsTab, closedFilters, exchange, pathname, router, searchParams]);
 
   const [loading, setLoading] = useState<LoadingState>({
     performance: true,
@@ -391,6 +429,13 @@ export function AnalyticsDashboard({
             error={errors.closed}
             onPageChange={(offset) => setClosedFilters((filters) => ({ ...filters, offset }))}
             onPageSizeChange={(limit) => setClosedFilters((filters) => ({ ...filters, limit, offset: 0 }))}
+            onSortChange={(sort) =>
+              setClosedFilters((filters) => ({
+                ...filters,
+                sort: sort as ClosedPositionFiltersValue["sort"],
+                offset: 0,
+              }))
+            }
           />
         </div>
       </TabsContent>

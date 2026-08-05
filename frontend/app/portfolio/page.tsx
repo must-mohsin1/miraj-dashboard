@@ -8,6 +8,10 @@ import { ConnectForm } from "@/components/portfolio/connect-form";
 import { PortfolioDashboard } from "@/components/portfolio/portfolio-dashboard";
 import { ExchangeSelector } from "@/components/portfolio/exchange-selector";
 import { TabsSkeleton } from "@/components/skeletons";
+import {
+  closedPositionFiltersQueryFingerprint,
+  parseClosedPositionFiltersFromSearch,
+} from "@/components/portfolio/closed-position-url";
 
 /**
  * Portfolio page — async Server Component.
@@ -72,6 +76,21 @@ interface PageProps {
     analytics_tab?: string;
     /** CSV symbols for closed-position filters (e.g. `BTCUSDT`). */
     symbols?: string;
+    side?: string;
+    sort?: string;
+    period?: string;
+    limit?: string;
+    offset?: string;
+    from?: string;
+    to?: string;
+    close_reason?: string;
+    leverage_min?: string;
+    leverage_max?: string;
+    duration_min_minutes?: string;
+    duration_max_minutes?: string;
+    pnl_min?: string;
+    pnl_max?: string;
+    timezone?: string;
   }>;
 }
 
@@ -88,12 +107,10 @@ export default async function PortfolioPage({ searchParams }: PageProps) {
     ? rawAnalyticsTab
     : undefined;
 
-  // Closed-position symbols filter: uppercase CSV, strip empties.
-  const initialSymbols = (params.symbols ?? "")
-    .split(",")
-    .map((s) => s.trim().toUpperCase())
-    .filter(Boolean)
-    .join(",");
+  // Closed-position filter deep-link (symbols + side/sort/period/pagination…).
+  const initialClosedFilters = parseClosedPositionFiltersFromSearch(params);
+  const initialSymbols = initialClosedFilters.symbols;
+  const closedFilterKey = closedPositionFiltersQueryFingerprint(initialClosedFilters);
 
   const token = await getAccessToken();
 
@@ -154,7 +171,7 @@ export default async function PortfolioPage({ searchParams }: PageProps) {
             (Radix defaultValue / useState seed are mount-only otherwise).
           */}
           <PortfolioDashboard
-            key={`${exchange}|${initialTab ?? ""}|${analyticsTab ?? ""}|${initialSymbols}`}
+            key={`${exchange}|${initialTab ?? ""}|${analyticsTab ?? ""}|${closedFilterKey}`}
             token={token}
             portfolio={portfolio}
             maskedKey={keys?.masked_key ?? null}
@@ -162,6 +179,7 @@ export default async function PortfolioPage({ searchParams }: PageProps) {
             initialTab={initialTab}
             analyticsTab={analyticsTab}
             initialSymbols={initialSymbols || undefined}
+            initialClosedFilters={initialClosedFilters}
           />
         </Suspense>
       ) : (

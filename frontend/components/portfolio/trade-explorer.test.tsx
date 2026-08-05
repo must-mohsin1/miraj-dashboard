@@ -164,6 +164,9 @@ describe("TradeExplorer", () => {
     expect(within(scrollRegion).getByRole("table", { name: /Server-paginated Trade Explorer rows/ })).toBeInTheDocument();
 
     await user.tab();
+    expect(screen.getByRole("button", { name: "Export current Trade Explorer page as CSV" })).toHaveFocus();
+
+    await user.tab();
     expect(screen.getByLabelText("Trade Explorer page size")).toHaveFocus();
 
     await user.tab();
@@ -172,8 +175,45 @@ describe("TradeExplorer", () => {
     await user.tab();
     expect(screen.getByRole("button", { name: "Go to next Trade Explorer page" })).toHaveFocus();
 
+    // Mobile card actions render in DOM before the desktop scroll region.
     await user.tab();
-    expect(scrollRegion).toHaveFocus();
+    expect(screen.getAllByRole("button", { name: /Open trade detail for BTC_USDT ID 911/ })[0]).toHaveFocus();
+  });
+
+  it("exports current page CSV control and opens trade detail drawer from a row", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = jest.fn(() => "blob:trade-csv");
+    const revokeObjectURL = jest.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    render(<TradeExplorer data={BASE_RESPONSE} />);
+
+    expect(screen.getByRole("button", { name: "Export current Trade Explorer page as CSV" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Export current Trade Explorer page as CSV" }));
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(clickSpy).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:trade-csv");
+
+    const openers = screen.getAllByRole("button", { name: /Open trade detail for BTC_USDT ID 911/ });
+    await user.click(openers[0]);
+    expect(screen.getByRole("heading", { name: "BTC_USDT" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open journal for BTC_USDT/ })).toHaveAttribute(
+      "href",
+      "/journal?symbol=BTC_USDT&exchange=mexc",
+    );
+
+    clickSpy.mockRestore();
+  });
+
+  it("invokes onSortChange when a sortable column header is activated", async () => {
+    const user = userEvent.setup();
+    const onSortChange = jest.fn();
+    render(<TradeExplorer data={BASE_RESPONSE} onSortChange={onSortChange} />);
+
+    await user.click(screen.getByRole("button", { name: /Sort by PnL/ }));
+    expect(onSortChange).toHaveBeenCalledWith("-pnl");
   });
 
   it("uses the approved closed-position analytics error copy without raw status text", () => {

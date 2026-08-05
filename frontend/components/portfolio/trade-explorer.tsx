@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import Link from "next/link";
+
 import {
   CLOSED_POSITION_ANALYTICS_ERROR,
   CLOSED_POSITION_FEE_UNAVAILABLE,
@@ -15,6 +18,17 @@ import {
   readableReason,
 } from "@/components/portfolio/closed-position-formatters";
 import { type ClosedPositionBasis, type ClosedPositionHistory } from "@/components/portfolio/closed-position-basis-note";
+import {
+  buildTradeExplorerCsvFilename,
+  tradeExplorerItemsToCsv,
+} from "@/components/portfolio/trade-explorer-csv";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 export type TradeExplorerSortField = "close_time" | "pnl" | "symbol" | "side" | "leverage" | "duration_minutes";
 
@@ -60,6 +74,8 @@ export interface TradeExplorerProps {
   error?: string | null;
   onPageChange?: (offset: number) => void;
   onPageSizeChange?: (limit: number) => void;
+  /** Called when a sortable column header is activated. Receives sort token e.g. `-pnl`. */
+  onSortChange?: (sort: string) => void;
 }
 
 const MAX_PAGE_SIZE = 200;
@@ -78,7 +94,16 @@ export function clampTradeExplorerPageSize(value: number): number {
   return Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(value)));
 }
 
-export function TradeExplorer({ data, loading = false, error = null, onPageChange, onPageSizeChange }: TradeExplorerProps) {
+export function TradeExplorer({
+  data,
+  loading = false,
+  error = null,
+  onPageChange,
+  onPageSizeChange,
+  onSortChange,
+}: TradeExplorerProps) {
+  const [selected, setSelected] = useState<TradeExplorerItem | null>(null);
+
   if (loading) {
     return (
       <section className="border border-border bg-card p-6 text-sm text-muted-foreground" aria-busy="true">
@@ -107,6 +132,30 @@ export function TradeExplorer({ data, loading = false, error = null, onPageChang
   const pnlBasis = safeData.basis?.pnl_basis || CLOSED_POSITION_PNL_BASIS;
   const currency = safeData.basis?.currency_unit || "USDT";
   const sizeUnit = safeData.basis?.size_unit || "contracts";
+  const canExport = safeData.items.length > 0;
+
+  function handleExportCsv() {
+    if (!canExport) return;
+    const csv = tradeExplorerItemsToCsv(safeData.items);
+    const filename = buildTradeExplorerCsvFilename(safeData.exchange);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleSortField(field: TradeExplorerSortField) {
+    if (!onSortChange) return;
+    const active = sort.field === field;
+    const nextDescending = active ? sort.direction === "ascending" : true;
+    onSortChange(nextDescending ? `-${field}` : field);
+  }
 
   return (
     <section className="grid min-w-0 gap-4" aria-labelledby="trade-explorer-heading">
@@ -119,8 +168,18 @@ export function TradeExplorer({ data, loading = false, error = null, onPageChang
             Server-paginated closed positions. Showing <span className="font-mono tabular-nums text-foreground">{formatCount(currentStart)}–{formatCount(currentEnd)}</span> of <span className="font-mono tabular-nums text-foreground">{formatCount(total)}</span>; limit <span className="font-mono tabular-nums text-foreground">{formatCount(limit)}</span>, offset <span className="font-mono tabular-nums text-foreground">{formatCount(offset)}</span>, has_more <span className="font-mono tabular-nums text-foreground">{safeData.has_more ? "true" : "false"}</span>.
           </p>
           <p className="mt-1 text-xs text-muted-foreground">Page size cap: <span className="font-mono tabular-nums text-foreground">200</span> max{limit >= MAX_PAGE_SIZE ? " — cap reached" : ""}. Sort: <span className="font-mono tabular-nums text-foreground">{sort.label} {sort.directionLabel}</span>. {pnlBasis}; values displayed in {currency}.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Click a row for trade detail. CSV export covers this page only (not full history).</p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <button
+            type="button"
+            className="border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={handleExportCsv}
+            disabled={!canExport}
+            aria-label="Export current Trade Explorer page as CSV"
+          >
+            Export CSV (this page)
+          </button>
           <label className="grid gap-1 text-xs uppercase tracking-[0.12em] text-muted-foreground">
             Page size
             <select
@@ -167,7 +226,13 @@ export function TradeExplorer({ data, loading = false, error = null, onPageChang
         <>
           <div className="grid gap-3 sm:hidden">
             {safeData.items.map((item) => (
-              <TradeExplorerCard key={item.id} item={item} pnlBasis={pnlBasis} sizeUnit={item.size_unit || sizeUnit} />
+              <TradeExplorerCard
+                key={item.id}
+                item={item}
+                pnlBasis={pnlBasis}
+                sizeUnit={item.size_unit || sizeUnit}
+                onOpen={() => setSelected(item)}
+              />
             ))}
           </div>
           <div
@@ -177,33 +242,50 @@ export function TradeExplorer({ data, loading = false, error = null, onPageChang
             tabIndex={0}
           >
             <table className="w-full min-w-[1180px] border-collapse text-sm">
-              <caption className="sr-only">Server-paginated Trade Explorer rows with deterministic sort indicators, PnL basis, fee status, and unavailable reasons.</caption>
+              <caption className="sr-only">Server-paginated Trade Explorer rows with deterministic sort indicators, PnL basis, fee status, and unavailable reasons. Activate a row to open trade detail.</caption>
               <thead>
                 <tr className="border-b border-border text-xs uppercase tracking-[0.12em] text-muted-foreground">
-                  <SortableHead field="close_time" sort={sort} edge="left" />
-                  <SortableHead field="symbol" sort={sort} />
-                  <SortableHead field="side" sort={sort} />
+                  <SortableHead field="close_time" sort={sort} edge="left" onSort={onSortChange ? handleSortField : undefined} />
+                  <SortableHead field="symbol" sort={sort} onSort={onSortChange ? handleSortField : undefined} />
+                  <SortableHead field="side" sort={sort} onSort={onSortChange ? handleSortField : undefined} />
                   <th scope="col" className="px-3 py-2 text-right font-medium">Size</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Contract size</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Entry</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Exit</th>
-                  <SortableHead field="pnl" sort={sort} align="right" />
+                  <SortableHead field="pnl" sort={sort} align="right" onSort={onSortChange ? handleSortField : undefined} />
                   <th scope="col" className="px-3 py-2 text-left font-medium">Basis / fees</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">PnL %</th>
-                  <SortableHead field="leverage" sort={sort} align="right" />
-                  <SortableHead field="duration_minutes" sort={sort} align="right" />
+                  <SortableHead field="leverage" sort={sort} align="right" onSort={onSortChange ? handleSortField : undefined} />
+                  <SortableHead field="duration_minutes" sort={sort} align="right" onSort={onSortChange ? handleSortField : undefined} />
                   <th scope="col" className="py-2 pl-3 text-left font-medium">Reason / unavailable</th>
                 </tr>
               </thead>
               <tbody>
                 {safeData.items.map((item) => (
-                  <TradeExplorerRow key={item.id} item={item} pnlBasis={pnlBasis} sizeUnit={item.size_unit || sizeUnit} />
+                  <TradeExplorerRow
+                    key={item.id}
+                    item={item}
+                    pnlBasis={pnlBasis}
+                    sizeUnit={item.size_unit || sizeUnit}
+                    onOpen={() => setSelected(item)}
+                  />
                 ))}
               </tbody>
             </table>
           </div>
         </>
       )}
+
+      <TradeDetailDrawer
+        item={selected}
+        open={selected != null}
+        onOpenChange={(open) => {
+          if (!open) setSelected(null);
+        }}
+        pnlBasis={pnlBasis}
+        sizeUnit={selected?.size_unit || sizeUnit}
+        exchange={safeData.exchange}
+      />
     </section>
   );
 }
@@ -235,23 +317,72 @@ function TradeExplorerHistory({ history, basis, excludedReasons }: { history?: C
   );
 }
 
-function SortableHead({ field, sort, align = "left", edge = "middle" }: { field: TradeExplorerSortField; sort: ParsedSort; align?: "left" | "right"; edge?: "left" | "middle" }) {
+function SortableHead({
+  field,
+  sort,
+  align = "left",
+  edge = "middle",
+  onSort,
+}: {
+  field: TradeExplorerSortField;
+  sort: ParsedSort;
+  align?: "left" | "right";
+  edge?: "left" | "middle";
+  onSort?: (field: TradeExplorerSortField) => void;
+}) {
   const active = sort.field === field;
   const indicator = active ? (sort.direction === "ascending" ? "↑" : "↓") : "↕";
   const ariaSort = active ? sort.direction : "none";
   const padding = edge === "left" ? "py-2 pr-3" : "px-3 py-2";
   const alignment = align === "right" ? "text-right" : "text-left";
+  if (!onSort) {
+    return (
+      <th scope="col" aria-sort={ariaSort} className={`${padding} ${alignment} font-medium`}>
+        {SORT_LABELS[field]} <span aria-hidden="true">{indicator}</span><span className="sr-only">, {active ? sort.directionLabel : "not sorted"}</span>
+      </th>
+    );
+  }
   return (
     <th scope="col" aria-sort={ariaSort} className={`${padding} ${alignment} font-medium`}>
-      {SORT_LABELS[field]} <span aria-hidden="true">{indicator}</span><span className="sr-only">, {active ? sort.directionLabel : "not sorted"}</span>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 text-inherit hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        onClick={() => onSort(field)}
+        aria-label={`Sort by ${SORT_LABELS[field]}${active ? `, currently ${sort.directionLabel}` : ""}`}
+      >
+        {SORT_LABELS[field]} <span aria-hidden="true">{indicator}</span>
+        <span className="sr-only">, {active ? sort.directionLabel : "not sorted"}</span>
+      </button>
     </th>
   );
 }
 
-function TradeExplorerRow({ item, pnlBasis, sizeUnit }: { item: TradeExplorerItem; pnlBasis: string; sizeUnit: string }) {
+function TradeExplorerRow({
+  item,
+  pnlBasis,
+  sizeUnit,
+  onOpen,
+}: {
+  item: TradeExplorerItem;
+  pnlBasis: string;
+  sizeUnit: string;
+  onOpen: () => void;
+}) {
   const pnlState = pnlStateLabel(item.pnl);
   return (
-    <tr className="border-b border-border last:border-b-0">
+    <tr
+      className="cursor-pointer border-b border-border last:border-b-0 hover:bg-muted/40"
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      tabIndex={0}
+      role="button"
+      aria-label={`Open trade detail for ${item.symbol || "position"} ID ${item.id}`}
+    >
       <th scope="row" className="py-3 pr-3 text-left align-top font-mono text-xs tabular-nums text-foreground">
         <div>{formatTime(item.close_time)}</div>
         <div className="mt-1 text-muted-foreground">ID {item.id}</div>
@@ -275,7 +406,17 @@ function TradeExplorerRow({ item, pnlBasis, sizeUnit }: { item: TradeExplorerIte
   );
 }
 
-function TradeExplorerCard({ item, pnlBasis, sizeUnit }: { item: TradeExplorerItem; pnlBasis: string; sizeUnit: string }) {
+function TradeExplorerCard({
+  item,
+  pnlBasis,
+  sizeUnit,
+  onOpen,
+}: {
+  item: TradeExplorerItem;
+  pnlBasis: string;
+  sizeUnit: string;
+  onOpen: () => void;
+}) {
   const pnlState = pnlStateLabel(item.pnl);
   return (
     <article className="min-w-0 border border-border bg-card p-4" aria-label={`Trade Explorer row ${item.id}`}>
@@ -300,7 +441,94 @@ function TradeExplorerCard({ item, pnlBasis, sizeUnit }: { item: TradeExplorerIt
       </dl>
       <p className="mt-3 text-xs leading-relaxed text-muted-foreground"><span className="text-foreground">{item.pnl_basis || pnlBasis}</span>; {readableReason(item.fee_status || "fee_net_pnl_unavailable_phase2_ledger_required")}; currency USDT.</p>
       <UnavailableReasons reasons={item.unavailable_reasons} />
+      <button
+        type="button"
+        className="mt-3 w-full border border-border bg-background px-3 py-2 text-sm text-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        onClick={onOpen}
+        aria-label={`Open trade detail for ${item.symbol || "position"} ID ${item.id}`}
+      >
+        View trade detail
+      </button>
     </article>
+  );
+}
+
+function TradeDetailDrawer({
+  item,
+  open,
+  onOpenChange,
+  pnlBasis,
+  sizeUnit,
+  exchange,
+}: {
+  item: TradeExplorerItem | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  pnlBasis: string;
+  sizeUnit: string;
+  exchange?: string | null;
+}) {
+  const symbol = item?.symbol || "";
+  const journalHref = symbol
+    ? `/journal?symbol=${encodeURIComponent(symbol)}${exchange ? `&exchange=${encodeURIComponent(exchange)}` : ""}`
+    : "/journal";
+  const pnlState = pnlStateLabel(item?.pnl);
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md" aria-describedby="trade-detail-description">
+        <SheetHeader>
+          <SheetTitle className="font-mono tabular-nums">
+            {item?.symbol || "Trade detail"}
+          </SheetTitle>
+          <SheetDescription id="trade-detail-description">
+            Closed-position detail from stored history. Fee-net PnL stays unavailable until ledger coverage allows it.
+          </SheetDescription>
+        </SheetHeader>
+        {item ? (
+          <div className="mt-6 grid gap-4 text-sm">
+            <p className="text-xs text-muted-foreground">
+              ID <span className="font-mono tabular-nums text-foreground">{item.id}</span>
+              {" · "}
+              {readableSide(item.side)}
+            </p>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+              <Detail label="PnL" value={`${pnlState} ${formatUsdtMoney(item.pnl, { signed: true, dollarStyle: true })}`} />
+              <Detail label="PnL %" value={`${pnlState} ${formatPercent(item.pnl_percent)}`} />
+              <Detail label="Size" value={`${formatNumber(item.size)} ${item.size_unit || sizeUnit}`} />
+              <Detail label="Contract size" value={formatNumber(item.contract_size)} />
+              <Detail label="Entry" value={formatNumber(item.entry_price)} />
+              <Detail label="Exit" value={formatNumber(item.exit_price)} />
+              <Detail label="Leverage" value={item.leverage == null ? "—" : `${formatNumber(item.leverage)}x`} />
+              <Detail label="Duration" value={formatMinutes(item.duration_minutes)} />
+              <Detail label="Open time" value={formatTime(item.open_time)} />
+              <Detail label="Close time" value={formatTime(item.close_time)} />
+              <Detail label="Close reason" value={readableReason(item.close_reason) || "Closed"} />
+              <Detail label="Currency" value={item.currency_unit || "USDT"} />
+            </dl>
+            <div className="border border-border bg-card p-3 text-xs leading-relaxed text-muted-foreground">
+              <p>
+                <span className="text-foreground">{item.pnl_basis || pnlBasis}</span>
+                {"; "}
+                {readableReason(item.fee_status || "fee_net_pnl_unavailable_phase2_ledger_required")}.
+              </p>
+              <UnavailableReasons reasons={item.unavailable_reasons} />
+            </div>
+            <div className="grid gap-2">
+              <Link
+                href={journalHref}
+                className="border border-border bg-background px-3 py-2 text-center text-sm text-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                Open journal{symbol ? ` for ${symbol}` : ""}
+              </Link>
+              <p className="text-xs text-muted-foreground">
+                Orders, fills, and funding are not on this payload; use Trade Attribution / capital flow for linked streams when available.
+              </p>
+            </div>
+          </div>
+        ) : null}
+      </SheetContent>
+    </Sheet>
   );
 }
 
