@@ -276,6 +276,11 @@ async def create_journal_entry(
     When ``position_id`` is omitted, Miraj auto-links the most recent
     unlinked closed position matching symbol (+ exchange when set) and
     fills missing price/PnL fields from that row.
+
+    When tags are omitted/empty and a closed position is linked (explicitly
+    or via auto-link), tags are suggested from the position side as
+    ``long`` or ``short`` (lowercase). User-supplied tags are never
+    overwritten. If the position has no side, tags remain null.
     """
     from backend.models import PositionHistory
 
@@ -299,6 +304,7 @@ async def create_journal_entry(
     entry_price = body.entry_price
     exit_price = body.exit_price
     pnl = body.pnl
+    pos = None
 
     if position_id is not None:
         pos = await session.scalar(
@@ -321,22 +327,28 @@ async def create_journal_entry(
         if exchange_norm is None and pos.exchange:
             exchange_norm = pos.exchange
     else:
-        resolved = await _auto_link_closed_position(
+        pos = await _auto_link_closed_position(
             session,
             user_id=current_user.id,
             symbol=symbol,
             exchange=exchange_norm,
         )
-        if resolved is not None:
-            position_id = resolved.id
+        if pos is not None:
+            position_id = pos.id
             if entry_price is None:
-                entry_price = resolved.entry_price
+                entry_price = pos.entry_price
             if exit_price is None:
-                exit_price = resolved.exit_price
+                exit_price = pos.exit_price
             if pnl is None:
-                pnl = resolved.pnl
-            if exchange_norm is None and resolved.exchange:
-                exchange_norm = resolved.exchange
+                pnl = pos.pnl
+            if exchange_norm is None and pos.exchange:
+                exchange_norm = pos.exchange
+
+    # Suggest tags from linked position side only when the client sent none.
+    if tags_norm is None and pos is not None and pos.side:
+        side = str(pos.side).strip().lower()
+        if side in ("long", "short"):
+            tags_norm = side
 
     entry = TradeJournalEntry(
         user_id=current_user.id,

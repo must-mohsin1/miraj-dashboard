@@ -170,6 +170,109 @@ async def test_create_journal_auto_links_newest_unlinked_position(client: AsyncC
     assert body["position_id"] == newer_id
     assert body["pnl"] == 10.0
     assert body["entry_price"] == 110.0
+    # User-supplied tags must not be overwritten by side suggestion.
+    assert body["tags"] == "breakout"
+
+
+async def test_create_journal_suggests_side_tag_when_tags_empty(client: AsyncClient, app: FastAPI):
+    """Auto-link + empty tags → suggest lowercase side (long/short)."""
+    user, token = await _create_user("p4sidetag")
+    factory = database.get_session_factory()
+    async with factory() as s:
+        short_pos = PositionHistory(
+            user_id=user.id,
+            exchange="mexc",
+            symbol="ETHUSDT",
+            side="SHORT",
+            size=2.0,
+            entry_price=2000.0,
+            exit_price=1900.0,
+            pnl=50.0,
+            close_time=datetime(2026, 8, 2, 12, 0, 0),
+        )
+        s.add(short_pos)
+        await s.commit()
+        await s.refresh(short_pos)
+        short_id = short_pos.id
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # No tags → suggest "short" from linked position side.
+    res = await client.post(
+        "/api/v1/journal",
+        headers=headers,
+        json={"symbol": "ETHUSDT", "exchange": "mexc"},
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["position_id"] == short_id
+    assert body["tags"] == "short"
+
+    # Explicit position_id + empty tags string → still suggest side.
+    async with factory() as s:
+        long_pos = PositionHistory(
+            user_id=user.id,
+            exchange="mexc",
+            symbol="SOLUSDT",
+            side="long",
+            size=1.0,
+            entry_price=100.0,
+            exit_price=110.0,
+            pnl=10.0,
+            close_time=datetime(2026, 8, 3, 12, 0, 0),
+        )
+        s.add(long_pos)
+        await s.commit()
+        await s.refresh(long_pos)
+        long_id = long_pos.id
+
+    res2 = await client.post(
+        "/api/v1/journal",
+        headers=headers,
+        json={
+            "symbol": "SOLUSDT",
+            "exchange": "mexc",
+            "position_id": long_id,
+            "tags": "  ",
+        },
+    )
+    assert res2.status_code == 201, res2.text
+    body2 = res2.json()
+    assert body2["position_id"] == long_id
+    assert body2["tags"] == "long"
+
+    # User-supplied tags remain unchanged even when position is linked.
+    async with factory() as s:
+        tagged_pos = PositionHistory(
+            user_id=user.id,
+            exchange="mexc",
+            symbol="BNBUSDT",
+            side="short",
+            size=1.0,
+            entry_price=300.0,
+            exit_price=290.0,
+            pnl=5.0,
+            close_time=datetime(2026, 8, 4, 12, 0, 0),
+        )
+        s.add(tagged_pos)
+        await s.commit()
+        await s.refresh(tagged_pos)
+        tagged_id = tagged_pos.id
+
+    res3 = await client.post(
+        "/api/v1/journal",
+        headers=headers,
+        json={
+            "symbol": "BNBUSDT",
+            "exchange": "mexc",
+            "position_id": tagged_id,
+            "tags": "scalp,breakout",
+        },
+    )
+    assert res3.status_code == 201, res3.text
+    body3 = res3.json()
+    assert body3["position_id"] == tagged_id
+    assert body3["tags"] == "scalp,breakout"
 
 
 async def test_journal_summary_includes_symbol_concentration(session: AsyncSession):
