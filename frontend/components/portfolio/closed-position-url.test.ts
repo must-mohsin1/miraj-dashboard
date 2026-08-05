@@ -3,7 +3,10 @@ import {
   closedPositionFiltersQueryFingerprint,
   parseClosedPositionFiltersFromSearch,
 } from "@/components/portfolio/closed-position-url";
-import { DEFAULT_CLOSED_POSITION_FILTERS } from "@/components/portfolio/closed-position-filters";
+import {
+  DEFAULT_CLOSED_POSITION_FILTERS,
+  type ClosedPositionFiltersValue,
+} from "@/components/portfolio/closed-position-filters";
 
 describe("closed-position URL helpers", () => {
   it("parses symbols, side, sort, period, and pagination from search params", () => {
@@ -84,5 +87,18 @@ describe("closed-position URL helpers", () => {
     } as Record<string, string | string[] | undefined>);
     expect(filters.side).toBe("short");
     expect(filters.symbols).toBe("BTCUSDT");
+  });
+
+  it("fingerprints partial filter objects without throwing", () => {
+    expect(() =>
+      closedPositionFiltersQueryFingerprint({
+        symbols: "BTCUSDT",
+      } as ClosedPositionFiltersValue),
+    ).not.toThrow();
+    expect(
+      applyClosedPositionFiltersToSearchParams(new URLSearchParams(), {
+        symbols: "ETHUSDT",
+      } as ClosedPositionFiltersValue).get("symbols"),
+    ).toBe("ETHUSDT");
   });
 });
