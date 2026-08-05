@@ -127,9 +127,11 @@ export function AnalyticsDashboard({
   const [allocation, setAllocation] = useState<AllocationResponse | null>(null);
   const [closedAnalytics, setClosedAnalytics] = useState<ClosedPositionAnalyticsResponse | null>(null);
   const [closedFilters, setClosedFilters] = useState<ClosedPositionFiltersValue>(() => {
-    if (initialClosedFilters) return { ...initialClosedFilters };
-    const symbols = (initialSymbols ?? "").trim().toUpperCase();
-    if (!symbols) return DEFAULT_CLOSED_POSITION_FILTERS;
+    if (initialClosedFilters) {
+      return { ...DEFAULT_CLOSED_POSITION_FILTERS, ...initialClosedFilters };
+    }
+    const symbols = String(initialSymbols ?? "").trim().toUpperCase();
+    if (!symbols) return { ...DEFAULT_CLOSED_POSITION_FILTERS };
     return { ...DEFAULT_CLOSED_POSITION_FILTERS, symbols };
   });
 
@@ -147,14 +149,15 @@ export function AnalyticsDashboard({
   // Seed / re-seed when deep-link filter props change (e.g. Strategy → closed positions).
   useEffect(() => {
     if (initialClosedFilters) {
+      const merged = { ...DEFAULT_CLOSED_POSITION_FILTERS, ...initialClosedFilters };
       setClosedFilters((prev) => {
-        const nextFp = closedPositionFiltersQueryFingerprint(initialClosedFilters);
+        const nextFp = closedPositionFiltersQueryFingerprint(merged);
         const prevFp = closedPositionFiltersQueryFingerprint(prev);
-        return nextFp === prevFp ? prev : { ...initialClosedFilters };
+        return nextFp === prevFp ? prev : merged;
       });
       return;
     }
-    const symbols = (initialSymbols ?? "").trim().toUpperCase();
+    const symbols = String(initialSymbols ?? "").trim().toUpperCase();
     if (!symbols) return;
     setClosedFilters((prev) =>
       prev.symbols === symbols ? prev : { ...prev, symbols, offset: 0 },

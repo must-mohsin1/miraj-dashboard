@@ -71,9 +71,12 @@ function readParam(
 }
 
 export function parseClosedPositionFiltersFromSearch(
-  source: URLSearchParams | Record<string, string | string[] | undefined>,
+  source: URLSearchParams | Record<string, string | string[] | undefined> | null | undefined,
 ): ClosedPositionFiltersValue {
-  const base = { ...DEFAULT_CLOSED_POSITION_FILTERS };
+  const base: ClosedPositionFiltersValue = {
+    ...DEFAULT_CLOSED_POSITION_FILTERS,
+  };
+  if (!source) return base;
 
   const symbols = readParam(source, "symbols")
     .split(",")
@@ -131,8 +134,10 @@ export function applyClosedPositionFiltersToSearchParams(
   const defaults = DEFAULT_CLOSED_POSITION_FILTERS;
 
   const setOrDelete = (key: string, value: string, defaultValue: string) => {
-    const trimmed = value.trim();
-    if (!trimmed || trimmed === defaultValue) {
+    // Coerce — callers may pass partial filter objects or undefined fields.
+    const trimmed = String(value ?? "").trim();
+    const defaultTrimmed = String(defaultValue ?? "").trim();
+    if (!trimmed || trimmed === defaultTrimmed) {
       params.delete(key);
     } else {
       params.set(key, trimmed);
@@ -162,16 +167,18 @@ export function applyClosedPositionFiltersToSearchParams(
   setOrDelete("pnl_min", filters.pnl_min, defaults.pnl_min);
   setOrDelete("pnl_max", filters.pnl_max, defaults.pnl_max);
 
-  if (filters.limit === defaults.limit) {
+  const limit = Number(filters.limit);
+  if (!Number.isFinite(limit) || limit === defaults.limit) {
     params.delete("limit");
   } else {
-    params.set("limit", String(clampClosedPositionPageSize(filters.limit)));
+    params.set("limit", String(clampClosedPositionPageSize(limit)));
   }
 
-  if (!filters.offset || filters.offset === defaults.offset) {
+  const offset = Number(filters.offset);
+  if (!Number.isFinite(offset) || offset === defaults.offset || offset <= 0) {
     params.delete("offset");
   } else {
-    params.set("offset", String(Math.max(0, Math.trunc(filters.offset))));
+    params.set("offset", String(Math.max(0, Math.trunc(offset))));
   }
 
   return params;

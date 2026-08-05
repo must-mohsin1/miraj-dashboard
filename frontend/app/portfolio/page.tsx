@@ -123,13 +123,19 @@ export default async function PortfolioPage({ searchParams }: PageProps) {
   // Closed-position filter deep-link (symbols + side/sort/period/pagination…).
   // Never let filter parsing take down the whole portfolio page.
   let initialClosedFilters;
+  let closedFilterKey = "";
   try {
     initialClosedFilters = parseClosedPositionFiltersFromSearch(params);
+    closedFilterKey = closedPositionFiltersQueryFingerprint(initialClosedFilters);
   } catch {
     initialClosedFilters = parseClosedPositionFiltersFromSearch({});
+    try {
+      closedFilterKey = closedPositionFiltersQueryFingerprint(initialClosedFilters);
+    } catch {
+      closedFilterKey = "";
+    }
   }
-  const initialSymbols = initialClosedFilters.symbols;
-  const closedFilterKey = closedPositionFiltersQueryFingerprint(initialClosedFilters);
+  const initialSymbols = initialClosedFilters.symbols ?? "";
 
   const token = await getAccessToken();
 
