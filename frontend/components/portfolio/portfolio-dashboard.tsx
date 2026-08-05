@@ -137,6 +137,12 @@ interface PortfolioDashboardProps {
   maskedKey: string | null;
   /** Exchange slug (e.g. "mexc", "binance", "bybit"). */
   exchange: string;
+  /** Deep-link: outer tab value (e.g. `analytics`). */
+  initialTab?: string;
+  /** Deep-link: nested AnalyticsDashboard tab (e.g. `closed-positions`). */
+  analyticsTab?: string;
+  /** Deep-link: CSV symbols seed for closed-position filters. */
+  initialSymbols?: string;
 }
 
 export function PortfolioDashboard({
@@ -144,6 +150,9 @@ export function PortfolioDashboard({
   portfolio,
   maskedKey,
   exchange,
+  initialTab,
+  analyticsTab,
+  initialSymbols,
 }: PortfolioDashboardProps) {
   const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
@@ -605,8 +614,8 @@ export function PortfolioDashboard({
         partial={partial}
       />
 
-      {/* Tabs */}
-      <Tabs defaultValue="balances" className="w-full">
+      {/* Tabs — `initialTab` deep-links from Strategy evidence → closed positions */}
+      <Tabs defaultValue={initialTab || "balances"} className="w-full">
         <TabsList>
           <TabsTrigger value="balances">
             Balances ({balances.length})
@@ -655,7 +664,12 @@ export function PortfolioDashboard({
           <OrderHistoryTable orders={orderHistory} />
         </TabsContent>
         <TabsContent value="analytics">
-          <AnalyticsDashboard token={token} exchange={exchange} />
+          <AnalyticsDashboard
+            token={token}
+            exchange={exchange}
+            defaultAnalyticsTab={analyticsTab}
+            initialSymbols={initialSymbols}
+          />
         </TabsContent>
         <TabsContent value="capital-flow">
           {capitalFlowLoading && !capitalFlow ? (

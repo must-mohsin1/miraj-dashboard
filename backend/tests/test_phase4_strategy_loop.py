@@ -206,4 +206,8 @@ async def test_journal_summary_includes_symbol_concentration(session: AsyncSessi
     assert "symbol_pnl_concentration" in ids
     conc = next(i for i in summary["insights"] if i["id"] == "symbol_pnl_concentration")
     assert conc["evidence_symbol"] == "BTCUSDT"
-    assert conc.get("evidence_href")
+    href = conc.get("evidence_href") or ""
+    assert "tab=analytics" in href
+    assert "analytics_tab=closed-positions" in href
+    assert "symbols=BTCUSDT" in href
+    assert href.startswith("/portfolio")

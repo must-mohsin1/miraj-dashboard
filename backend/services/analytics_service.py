@@ -1335,7 +1335,12 @@ async def _closed_position_concentration_insights(
                 "evidence_tag": None,
                 "evidence_count": top["count"],
                 "evidence_symbol": top_sym,
-                "evidence_href": f"/journal?symbol={top_sym}",
+                # Deep-link into portfolio Analytics → Closed Positions with symbol filter
+                "evidence_href": (
+                    f"/portfolio?exchange={exchange or 'mexc'}"
+                    f"&tab=analytics&analytics_tab=closed-positions"
+                    f"&symbols={top_sym}"
+                ),
             }
         )
     return insights

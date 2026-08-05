@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 /**
  * Phase 4 strategy loop: journal tag scorecards + evidence-based insight cards.
  * Click a tag or insight to load supporting journal entries (evidence trail).
+ * Concentration / symbol evidence also deep-links into closed-position analytics.
  */
 
 interface StrategyInsightPanelProps {
@@ -27,6 +28,76 @@ type EvidenceQuery = {
   symbol?: string;
   label: string;
 };
+
+/**
+ * Build a portfolio deep-link that opens Analytics → Closed Positions,
+ * optionally filtered by a symbols CSV (single symbol is fine).
+ */
+export function buildClosedPositionsHref(
+  exchange: string,
+  symbols?: string | null,
+): string {
+  const params = new URLSearchParams();
+  params.set("exchange", exchange);
+  params.set("tab", "analytics");
+  params.set("analytics_tab", "closed-positions");
+  const sym = (symbols ?? "").trim().toUpperCase();
+  if (sym) params.set("symbols", sym);
+  return `/portfolio?${params.toString()}`;
+}
+
+/** Normalize backend evidence_href with exchange when missing. */
+function withExchange(href: string, exchange: string): string {
+  if (href.includes("exchange=")) return href;
+  return `${href}${href.includes("?") ? "&" : "?"}exchange=${exchange}`;
+}
+
+/**
+ * Primary CTA href for an insight card.
+ * Concentration / symbol-evidence insights prefer closed-positions analytics;
+ * tag/journal insights keep journal links.
+ */
+export function insightPrimaryHref(
+  insight: StrategyInsightCard,
+  exchange: string,
+): { href: string; label: string } {
+  // Backend concentration insight already points at closed-positions.
+  if (
+    insight.evidence_href &&
+    insight.evidence_href.startsWith("/portfolio") &&
+    insight.evidence_href.includes("closed-positions")
+  ) {
+    return {
+      href: withExchange(insight.evidence_href, exchange),
+      label: "View closed positions",
+    };
+  }
+
+  if (insight.evidence_symbol) {
+    return {
+      href: buildClosedPositionsHref(exchange, insight.evidence_symbol),
+      label: "View closed positions",
+    };
+  }
+
+  if (insight.evidence_href) {
+    return {
+      href: withExchange(insight.evidence_href, exchange),
+      label: "Open journal",
+    };
+  }
+
+  if (insight.evidence_tag) {
+    const params = new URLSearchParams();
+    params.set("exchange", exchange);
+    params.set("tag", insight.evidence_tag);
+    return { href: `/journal?${params.toString()}`, label: "Open journal" };
+  }
+
+  const params = new URLSearchParams();
+  params.set("exchange", exchange);
+  return { href: `/journal?${params.toString()}`, label: "Open journal" };
+}
 
 export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelProps) {
   const [data, setData] = useState<JournalSummaryResponse | null>(null);
@@ -159,6 +230,17 @@ export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelPr
     return `/journal?${params.toString()}`;
   };
 
+  // Prefer evidence query symbol; else first row symbol when rows share one symbol.
+  const evidenceSymbolForClosed = (() => {
+    if (evidenceQuery?.symbol) return evidenceQuery.symbol;
+    if (evidence.length === 0) return null;
+    const symbols = new Set(
+      evidence.map((e) => (e.symbol || "").toUpperCase()).filter(Boolean),
+    );
+    if (symbols.size === 1) return Array.from(symbols)[0];
+    return null;
+  })();
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-3 border border-[#2A2620] bg-[#161411] p-4">
@@ -184,26 +266,31 @@ export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelPr
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {insights.map((insight) => (
-          <InsightCard
-            key={insight.id}
-            insight={insight}
-            onOpenEvidence={() => openInsightEvidence(insight)}
-            journalHref={
-              insight.evidence_href
-                ? insight.evidence_href.includes("exchange=")
-                  ? insight.evidence_href
-                  : `${insight.evidence_href}${insight.evidence_href.includes("?") ? "&" : "?"}exchange=${exchange}`
-                : journalHref(
-                    insight.evidence_tag
-                      ? { tag: insight.evidence_tag, label: insight.title }
-                      : insight.evidence_symbol
-                        ? { symbol: insight.evidence_symbol, label: insight.title }
-                        : null,
-                  )
-            }
-          />
-        ))}
+        {insights.map((insight) => {
+          const primary = insightPrimaryHref(insight, exchange);
+          const journalFallback = journalHref(
+            insight.evidence_tag
+              ? { tag: insight.evidence_tag, label: insight.title }
+              : insight.evidence_symbol
+                ? { symbol: insight.evidence_symbol, label: insight.title }
+                : null,
+          );
+          return (
+            <InsightCard
+              key={insight.id}
+              insight={insight}
+              onOpenEvidence={() => openInsightEvidence(insight)}
+              primaryHref={primary.href}
+              primaryLabel={primary.label}
+              journalHref={journalFallback}
+              closedPositionsHref={
+                insight.evidence_symbol
+                  ? buildClosedPositionsHref(exchange, insight.evidence_symbol)
+                  : null
+              }
+            />
+          );
+        })}
       </div>
 
       <div className="border border-[#2A2620] bg-[#161411] p-4">
@@ -277,13 +364,21 @@ export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelPr
               <h4 className="text-sm font-medium text-[#EDE7DB]">Evidence</h4>
               <p className="mt-0.5 text-xs text-[#8E8778]">{evidenceQuery.label}</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <Link
                 href={journalHref(evidenceQuery)}
                 className="text-xs text-[#C2A36B] hover:underline"
               >
                 Open in journal
               </Link>
+              {evidenceSymbolForClosed && (
+                <Link
+                  href={buildClosedPositionsHref(exchange, evidenceSymbolForClosed)}
+                  className="text-xs text-[#C2A36B] hover:underline"
+                >
+                  View closed positions
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => setEvidenceQuery(null)}
@@ -341,11 +436,17 @@ export function StrategyInsightPanel({ token, exchange }: StrategyInsightPanelPr
 function InsightCard({
   insight,
   onOpenEvidence,
+  primaryHref,
+  primaryLabel,
   journalHref,
+  closedPositionsHref,
 }: {
   insight: StrategyInsightCard;
   onOpenEvidence: () => void;
+  primaryHref: string;
+  primaryLabel: string;
   journalHref: string;
+  closedPositionsHref: string | null;
 }) {
   const tone =
     insight.severity === "positive"
@@ -360,6 +461,12 @@ function InsightCard({
     Boolean(insight.evidence_tag) ||
     Boolean(insight.evidence_symbol) ||
     Boolean(insight.evidence_href);
+
+  // Avoid duplicating the same destination as the primary CTA.
+  const showJournalSecondary =
+    primaryLabel !== "Open journal" || primaryHref !== journalHref;
+  const showClosedSecondary =
+    closedPositionsHref != null && primaryLabel !== "View closed positions";
 
   return (
     <div className={cn("border bg-[#161411] p-4", tone)}>
@@ -376,9 +483,22 @@ function InsightCard({
             {typeof insight.evidence_count === "number" ? ` (n=${insight.evidence_count})` : ""}
           </button>
         )}
-        <Link href={journalHref} className="text-[#8E8778] hover:text-[#C2A36B] hover:underline">
-          Open journal
+        <Link href={primaryHref} className="text-[#C2A36B] hover:underline">
+          {primaryLabel}
         </Link>
+        {showJournalSecondary && primaryLabel === "View closed positions" && (
+          <Link href={journalHref} className="text-[#8E8778] hover:text-[#C2A36B] hover:underline">
+            Open journal
+          </Link>
+        )}
+        {showClosedSecondary && closedPositionsHref && (
+          <Link
+            href={closedPositionsHref}
+            className="text-[#8E8778] hover:text-[#C2A36B] hover:underline"
+          >
+            View closed positions
+          </Link>
+        )}
       </div>
     </div>
   );

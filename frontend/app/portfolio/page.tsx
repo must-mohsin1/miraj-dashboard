@@ -40,14 +40,60 @@ function titleCase(slug: string): string {
   return slug.charAt(0).toUpperCase() + slug.slice(1);
 }
 
+/** Outer portfolio tabs that can be deep-linked via `?tab=`. */
+const PORTFOLIO_TABS = new Set([
+  "balances",
+  "positions",
+  "position-history",
+  "trades",
+  "order-history",
+  "analytics",
+  "capital-flow",
+]);
+
+/** Nested AnalyticsDashboard tabs via `?analytics_tab=`. */
+const ANALYTICS_TABS = new Set([
+  "performance",
+  "closed-positions",
+  "calendar",
+  "allocation",
+  "attribution",
+  "strategy",
+  "health",
+  "benchmark",
+]);
+
 interface PageProps {
-  searchParams: Promise<{ exchange?: string }>;
+  searchParams: Promise<{
+    exchange?: string;
+    /** Outer portfolio tab (e.g. `analytics`). */
+    tab?: string;
+    /** Nested analytics tab (e.g. `closed-positions`). */
+    analytics_tab?: string;
+    /** CSV symbols for closed-position filters (e.g. `BTCUSDT`). */
+    symbols?: string;
+  }>;
 }
 
 export default async function PortfolioPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const rawExchange = (params.exchange ?? "mexc").toLowerCase();
   const exchange = KNOWN_EXCHANGES.includes(rawExchange) ? rawExchange : "mexc";
+
+  const rawTab = (params.tab ?? "").toLowerCase().trim();
+  const initialTab = PORTFOLIO_TABS.has(rawTab) ? rawTab : undefined;
+
+  const rawAnalyticsTab = (params.analytics_tab ?? "").toLowerCase().trim();
+  const analyticsTab = ANALYTICS_TABS.has(rawAnalyticsTab)
+    ? rawAnalyticsTab
+    : undefined;
+
+  // Closed-position symbols filter: uppercase CSV, strip empties.
+  const initialSymbols = (params.symbols ?? "")
+    .split(",")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean)
+    .join(",");
 
   const token = await getAccessToken();
 
@@ -107,6 +153,9 @@ export default async function PortfolioPage({ searchParams }: PageProps) {
             portfolio={portfolio}
             maskedKey={keys?.masked_key ?? null}
             exchange={exchange}
+            initialTab={initialTab}
+            analyticsTab={analyticsTab}
+            initialSymbols={initialSymbols || undefined}
           />
         </Suspense>
       ) : (

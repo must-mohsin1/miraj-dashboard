@@ -65,7 +65,22 @@ interface AnalyticsDashboardProps {
   token: string | null;
   /** Exchange slug (e.g. "mexc", "binance", "bybit"). */
   exchange: string;
+  /** Deep-link: which analytics sub-tab to open (e.g. `closed-positions`). */
+  defaultAnalyticsTab?: string;
+  /** Deep-link: seed closed-position symbols CSV filter. */
+  initialSymbols?: string;
 }
+
+const ANALYTICS_TAB_VALUES = new Set([
+  "performance",
+  "closed-positions",
+  "calendar",
+  "allocation",
+  "attribution",
+  "strategy",
+  "health",
+  "benchmark",
+]);
 
 type LoadingState = {
   performance: boolean;
@@ -83,13 +98,27 @@ type ErrorState = {
   closed: string | null;
 };
 
-export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps) {
+export function AnalyticsDashboard({
+  token,
+  exchange,
+  defaultAnalyticsTab,
+  initialSymbols,
+}: AnalyticsDashboardProps) {
   const [metrics, setMetrics] = useState<PerformanceMetricsType | null>(null);
   const [equity, setEquity] = useState<EquityCurveResponse | null>(null);
   const [daily, setDaily] = useState<DailyPnlResponse | null>(null);
   const [allocation, setAllocation] = useState<AllocationResponse | null>(null);
   const [closedAnalytics, setClosedAnalytics] = useState<ClosedPositionAnalyticsResponse | null>(null);
-  const [closedFilters, setClosedFilters] = useState<ClosedPositionFiltersValue>(DEFAULT_CLOSED_POSITION_FILTERS);
+  const [closedFilters, setClosedFilters] = useState<ClosedPositionFiltersValue>(() => {
+    const symbols = (initialSymbols ?? "").trim().toUpperCase();
+    if (!symbols) return DEFAULT_CLOSED_POSITION_FILTERS;
+    return { ...DEFAULT_CLOSED_POSITION_FILTERS, symbols };
+  });
+
+  const analyticsDefaultTab =
+    defaultAnalyticsTab && ANALYTICS_TAB_VALUES.has(defaultAnalyticsTab)
+      ? defaultAnalyticsTab
+      : "performance";
 
   const [loading, setLoading] = useState<LoadingState>({
     performance: true,
@@ -240,7 +269,7 @@ export function AnalyticsDashboard({ token, exchange }: AnalyticsDashboardProps)
   }, [exchange, token, closedPositionQuery]);
 
   return (
-    <Tabs defaultValue="performance" className="w-full">
+    <Tabs defaultValue={analyticsDefaultTab} className="w-full">
       <TabsList>
         <TabsTrigger value="performance">Performance</TabsTrigger>
         <TabsTrigger value="closed-positions">Closed Positions</TabsTrigger>
