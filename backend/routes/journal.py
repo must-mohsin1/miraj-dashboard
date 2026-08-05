@@ -278,9 +278,10 @@ async def create_journal_entry(
     fills missing price/PnL fields from that row.
 
     When tags are omitted/empty and a closed position is linked (explicitly
-    or via auto-link), tags are suggested from the position side as
-    ``long`` or ``short`` (lowercase). User-supplied tags are never
-    overwritten. If the position has no side, tags remain null.
+    or via auto-link), tags are suggested from the position side
+    (``long``/``short``) plus pre-entry scan signals when a scan exists
+    (``scan_long``/``scan_short``, ``scan_aligned``/``scan_conflict``).
+    User-supplied tags are never overwritten.
     """
     from backend.models import PositionHistory
 
@@ -344,11 +345,13 @@ async def create_journal_entry(
             if exchange_norm is None and pos.exchange:
                 exchange_norm = pos.exchange
 
-    # Suggest tags from linked position side only when the client sent none.
-    if tags_norm is None and pos is not None and pos.side:
-        side = str(pos.side).strip().lower()
-        if side in ("long", "short"):
-            tags_norm = side
+    # Suggest tags from position side + pre-entry scan when the client sent none.
+    if tags_norm is None and pos is not None:
+        tags_norm = await _suggest_tags_from_position_and_scan(
+            session,
+            user_id=current_user.id,
+            position=pos,
+        )
 
     entry = TradeJournalEntry(
         user_id=current_user.id,
@@ -404,6 +407,68 @@ async def _auto_link_closed_position(
         if pos.id not in used_ids:
             return pos
     return None
+
+
+async def _suggest_tags_from_position_and_scan(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    position,
+) -> Optional[str]:
+    """Build comma-separated suggested tags from side + nearest pre-entry scan.
+
+    Never invents direction tags without source data. Scan tags are best-effort
+    (missing analyses simply omit scan_* tokens).
+    """
+    parts: List[str] = []
+    side = str(getattr(position, "side", None) or "").strip().lower()
+    if side in ("long", "short"):
+        parts.append(side)
+
+    try:
+        from backend.models import Analysis
+        from backend.services.position_alert_service import normalize_to_scan_symbol
+        from backend.services.scan_attribution_service import (
+            _extract_direction,
+            _find_nearest_scan_before,
+            _parse_result,
+        )
+
+        scan_symbol = normalize_to_scan_symbol(position.symbol)
+        an_result = await session.execute(
+            select(Analysis)
+            .where(
+                Analysis.user_id == user_id,
+                Analysis.pair == scan_symbol,
+                Analysis.analysis_type == "scan",
+            )
+            .order_by(Analysis.created_at.asc())
+        )
+        scans = list(an_result.scalars().all())
+        linked = _find_nearest_scan_before(scans, getattr(position, "open_time", None))
+        if linked is not None:
+            parsed = _parse_result(linked.result)
+            direction = _extract_direction(parsed)
+            if direction in ("LONG", "SHORT"):
+                scan_tag = f"scan_{direction.lower()}"
+                if scan_tag not in parts:
+                    parts.append(scan_tag)
+                if side in ("long", "short"):
+                    if side == direction.lower():
+                        parts.append("scan_aligned")
+                    else:
+                        parts.append("scan_conflict")
+            score = parsed.get("confluence_score")
+            try:
+                score_f = float(score) if score is not None else None
+            except (TypeError, ValueError):
+                score_f = None
+            if score_f is not None and score_f >= 20:
+                parts.append("scan_high")
+    except Exception:  # pragma: no cover - never block journal create on scan lookup
+        logger.exception("scan tag suggestion failed for position %s", getattr(position, "id", None))
+
+    return ",".join(parts) if parts else None
 
 
 @router.put(

@@ -129,6 +129,60 @@ async def test_list_journal_filters_by_tag_and_untagged(client: AsyncClient, app
     assert untagged.json()["entries"][0]["symbol"] == "SOLUSDT"
 
 
+async def test_create_journal_suggests_side_and_preserves_user_tags(client: AsyncClient, app: FastAPI):
+    user, token = await _create_user("p4tags")
+    factory = database.get_session_factory()
+    async with factory() as s:
+        pos = PositionHistory(
+            user_id=user.id,
+            exchange="mexc",
+            symbol="ETHUSDT",
+            side="short",
+            size=1.0,
+            entry_price=10.0,
+            exit_price=9.0,
+            pnl=1.0,
+            close_time=datetime(2026, 8, 2, 12, 0, 0),
+            open_time=datetime(2026, 8, 2, 10, 0, 0),
+        )
+        s.add(pos)
+        await s.commit()
+
+    headers = {"Authorization": f"Bearer {token}"}
+    empty = await client.post(
+        "/api/v1/journal",
+        headers=headers,
+        json={"symbol": "ETHUSDT", "exchange": "mexc"},
+    )
+    assert empty.status_code == 201, empty.text
+    tags = (empty.json().get("tags") or "").split(",")
+    assert "short" in tags
+
+    # New position so auto-link still works with user tags
+    async with factory() as s:
+        pos2 = PositionHistory(
+            user_id=user.id,
+            exchange="mexc",
+            symbol="SOLUSDT",
+            side="long",
+            size=1.0,
+            entry_price=1.0,
+            exit_price=2.0,
+            pnl=1.0,
+            close_time=datetime(2026, 8, 3, 12, 0, 0),
+        )
+        s.add(pos2)
+        await s.commit()
+
+    custom = await client.post(
+        "/api/v1/journal",
+        headers=headers,
+        json={"symbol": "SOLUSDT", "exchange": "mexc", "tags": "scalp,breakout"},
+    )
+    assert custom.status_code == 201
+    assert custom.json()["tags"] == "scalp,breakout"
+
+
 async def test_create_journal_auto_links_newest_unlinked_position(client: AsyncClient, app: FastAPI):
     user, token = await _create_user("p4link")
     factory = database.get_session_factory()

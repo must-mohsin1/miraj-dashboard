@@ -126,6 +126,7 @@ class EquityCurveResponse(BaseModel):
     as_of: str | None = None
     point_count_raw: int | None = None
     point_count_returned: int | None = None
+    resolution: str | None = None
 
 
 class DailyPnlPoint(BaseModel):
@@ -666,6 +667,7 @@ async def get_performance_metrics(
 )
 async def get_equity_curve(
     exchange: str,
+    resolution: str = Query("day", pattern="^(day|week|raw)$"),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> EquityCurveResponse:
@@ -674,10 +676,12 @@ async def get_equity_curve(
     Points come from ``FuturesAccountSnapshot.equity`` (preferred settlement
     series). Spot / portfolio total-balance snapshots are never used. External
     capital events are returned in ``markers`` for chart annotation.
+
+    Query ``resolution``: ``day`` (default), ``week``, or ``raw`` (capped).
     """
     exchange_slug = _require_supported_exchange(exchange)
     curve = await analytics_service.get_equity_curve(
-        session, current_user.id, exchange_slug
+        session, current_user.id, exchange_slug, resolution=resolution
     )
     return EquityCurveResponse(
         exchange=exchange_slug,
@@ -691,6 +695,7 @@ async def get_equity_curve(
         as_of=curve.get("as_of"),
         point_count_raw=curve.get("point_count_raw"),
         point_count_returned=curve.get("point_count_returned"),
+        resolution=curve.get("resolution"),
     )
 
 
