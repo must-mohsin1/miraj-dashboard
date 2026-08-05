@@ -148,7 +148,13 @@ export default async function PortfolioPage({ searchParams }: PageProps) {
 
       {isConnected ? (
         <Suspense fallback={<TabsSkeleton />}>
+          {/*
+            Remount when deep-link identity changes so same-route Strategy →
+            closed-positions navigation reapplies tabs + symbols filter
+            (Radix defaultValue / useState seed are mount-only otherwise).
+          */}
           <PortfolioDashboard
+            key={`${exchange}|${initialTab ?? ""}|${analyticsTab ?? ""}|${initialSymbols}`}
             token={token}
             portfolio={portfolio}
             maskedKey={keys?.masked_key ?? null}

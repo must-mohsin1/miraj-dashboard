@@ -15,6 +15,7 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -1337,9 +1338,15 @@ async def _closed_position_concentration_insights(
                 "evidence_symbol": top_sym,
                 # Deep-link into portfolio Analytics → Closed Positions with symbol filter
                 "evidence_href": (
-                    f"/portfolio?exchange={exchange or 'mexc'}"
-                    f"&tab=analytics&analytics_tab=closed-positions"
-                    f"&symbols={top_sym}"
+                    "/portfolio?"
+                    + urlencode(
+                        {
+                            "exchange": (exchange or "mexc"),
+                            "tab": "analytics",
+                            "analytics_tab": "closed-positions",
+                            "symbols": top_sym,
+                        }
+                    )
                 ),
             }
         )

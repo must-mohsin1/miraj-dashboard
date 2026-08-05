@@ -160,6 +160,15 @@ export function PortfolioDashboard({
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Controlled outer tab so same-route deep-links (Strategy → closed positions)
+  // switch tabs even if the parent remount key is absent.
+  const [activeTab, setActiveTab] = useState(initialTab || "balances");
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
   // Live prices state (SSE).
   const [prices, setPrices] = useState<PriceMap>({});
   const [isConnected, setIsConnected] = useState(false);
@@ -614,8 +623,8 @@ export function PortfolioDashboard({
         partial={partial}
       />
 
-      {/* Tabs — `initialTab` deep-links from Strategy evidence → closed positions */}
-      <Tabs defaultValue={initialTab || "balances"} className="w-full">
+      {/* Tabs — controlled so deep-link `tab=` reapplies on same-route nav */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList>
           <TabsTrigger value="balances">
             Balances ({balances.length})

@@ -98,6 +98,10 @@ type ErrorState = {
   closed: string | null;
 };
 
+function resolveAnalyticsTab(tab?: string): string {
+  return tab && ANALYTICS_TAB_VALUES.has(tab) ? tab : "performance";
+}
+
 export function AnalyticsDashboard({
   token,
   exchange,
@@ -115,10 +119,25 @@ export function AnalyticsDashboard({
     return { ...DEFAULT_CLOSED_POSITION_FILTERS, symbols };
   });
 
-  const analyticsDefaultTab =
-    defaultAnalyticsTab && ANALYTICS_TAB_VALUES.has(defaultAnalyticsTab)
-      ? defaultAnalyticsTab
-      : "performance";
+  // Controlled analytics sub-tab — reacts when deep-link props change.
+  const [analyticsTab, setAnalyticsTab] = useState(() =>
+    resolveAnalyticsTab(defaultAnalyticsTab),
+  );
+
+  useEffect(() => {
+    if (defaultAnalyticsTab && ANALYTICS_TAB_VALUES.has(defaultAnalyticsTab)) {
+      setAnalyticsTab(defaultAnalyticsTab);
+    }
+  }, [defaultAnalyticsTab]);
+
+  // Seed / re-seed symbols filter when deep-link `symbols=` changes.
+  useEffect(() => {
+    const symbols = (initialSymbols ?? "").trim().toUpperCase();
+    if (!symbols) return;
+    setClosedFilters((prev) =>
+      prev.symbols === symbols ? prev : { ...prev, symbols, offset: 0 },
+    );
+  }, [initialSymbols]);
 
   const [loading, setLoading] = useState<LoadingState>({
     performance: true,
@@ -269,7 +288,7 @@ export function AnalyticsDashboard({
   }, [exchange, token, closedPositionQuery]);
 
   return (
-    <Tabs defaultValue={analyticsDefaultTab} className="w-full">
+    <Tabs value={analyticsTab} onValueChange={setAnalyticsTab} className="w-full">
       <TabsList>
         <TabsTrigger value="performance">Performance</TabsTrigger>
         <TabsTrigger value="closed-positions">Closed Positions</TabsTrigger>
