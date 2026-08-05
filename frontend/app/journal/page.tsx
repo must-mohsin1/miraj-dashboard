@@ -25,7 +25,7 @@ export const dynamic = "force-dynamic";
 const KNOWN_EXCHANGES = ["mexc", "binance", "bybit"];
 
 interface PageProps {
-  searchParams: Promise<{ exchange?: string; symbol?: string }>;
+  searchParams: Promise<{ exchange?: string; symbol?: string; tag?: string }>;
 }
 
 export default async function JournalPage({ searchParams }: PageProps) {
@@ -35,6 +35,9 @@ export default async function JournalPage({ searchParams }: PageProps) {
   const requestedSymbol = (params.symbol ?? "").trim().toUpperCase();
   // A navigation prefill is display-only and constrained to an exchange symbol shape.
   const prefillSymbol = /^[A-Z0-9_-]{1,30}$/.test(requestedSymbol) ? requestedSymbol : undefined;
+  const rawTag = (params.tag ?? "").trim().toLowerCase();
+  const filterTag =
+    rawTag && /^[a-z0-9_\-]{1,40}$/.test(rawTag) ? rawTag : undefined;
 
   const token = await getAccessToken();
 
@@ -50,11 +53,17 @@ export default async function JournalPage({ searchParams }: PageProps) {
         <p className="text-sm text-slate-400">
           Document your trades, tag them for analysis, and review lessons
           learned. Screenshot uploads and per-tag PnL analytics help you spot
-          what's working.
+          what&apos;s working.
         </p>
       </header>
 
-      <JournalDashboard token={token} exchange={exchange} prefillSymbol={prefillSymbol} />
+      <JournalDashboard
+        token={token}
+        exchange={exchange}
+        prefillSymbol={prefillSymbol}
+        filterTag={filterTag}
+        filterSymbol={prefillSymbol}
+      />
     </div>
   );
 }

@@ -204,6 +204,8 @@ class StrategyInsightCard(BaseModel):
     body: str
     evidence_tag: str | None = None
     evidence_count: int = 0
+    evidence_symbol: str | None = None
+    evidence_href: str | None = None
 
 
 class JournalSummaryResponse(BaseModel):

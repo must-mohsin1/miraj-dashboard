@@ -1174,6 +1174,10 @@ async def get_journal_summary(
 
     linked = sum(1 for e in entries if e.position_id is not None)
     insights = _strategy_insights_from_tags(tag_stats, total_entries, linked)
+    pos_insights = await _closed_position_concentration_insights(
+        session, user_id, exchange
+    )
+    insights.extend(pos_insights)
 
     return {
         "total_entries": total_entries,
@@ -1200,6 +1204,7 @@ def _strategy_insights_from_tags(
                 "body": "Tag closed trades in the journal to build strategy scorecards.",
                 "evidence_tag": None,
                 "evidence_count": 0,
+                "evidence_href": "/journal",
             }
         ]
 
@@ -1223,6 +1228,7 @@ def _strategy_insights_from_tags(
                     ),
                     "evidence_tag": best_tag,
                     "evidence_count": best["trade_count"],
+                    "evidence_href": f"/journal?tag={best_tag}",
                 }
             )
         worst_tag, worst = ranked[-1]
@@ -1239,6 +1245,7 @@ def _strategy_insights_from_tags(
                     ),
                     "evidence_tag": worst_tag,
                     "evidence_count": worst["trade_count"],
+                    "evidence_href": f"/journal?tag={worst_tag}",
                 }
             )
 
@@ -1257,6 +1264,7 @@ def _strategy_insights_from_tags(
                     ),
                     "evidence_tag": "untagged",
                     "evidence_count": untagged["trade_count"],
+                    "evidence_href": "/journal?tag=untagged",
                 }
             )
 
@@ -1269,11 +1277,65 @@ def _strategy_insights_from_tags(
                 "title": "Journal ↔ closed-position link rate",
                 "body": (
                     f"{linked_to_position} of {total_entries} entries "
-                    f"({link_share:.0f}%) are linked to a stored closed position."
+                    f"({link_share:.0f}%) are linked to a stored closed position. "
+                    "New entries auto-link the newest matching closed position when possible."
                 ),
                 "evidence_tag": None,
                 "evidence_count": linked_to_position,
+                "evidence_href": "/journal",
             }
         )
 
+    return insights
+
+
+async def _closed_position_concentration_insights(
+    session: AsyncSession,
+    user_id: int,
+    exchange: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Symbol concentration warnings from closed PositionHistory (Phase 4)."""
+    stmt = select(PositionHistory).where(PositionHistory.user_id == user_id)
+    if exchange:
+        stmt = stmt.where(PositionHistory.exchange == exchange.lower().strip())
+    result = await session.execute(stmt)
+    positions = list(result.scalars().all())
+    if len(positions) < 3:
+        return []
+
+    by_symbol: Dict[str, Dict[str, Any]] = {}
+    for pos in positions:
+        sym = (pos.symbol or "UNKNOWN").upper()
+        bucket = by_symbol.setdefault(
+            sym, {"count": 0, "total_pnl": 0.0, "gross_abs": 0.0}
+        )
+        pnl = float(pos.pnl or 0.0)
+        bucket["count"] += 1
+        bucket["total_pnl"] += pnl
+        bucket["gross_abs"] += abs(pnl)
+
+    total_abs = sum(b["gross_abs"] for b in by_symbol.values()) or 0.0
+    total_trades = len(positions)
+    top_sym, top = max(by_symbol.items(), key=lambda kv: kv[1]["gross_abs"])
+    share_abs = (top["gross_abs"] / total_abs * 100) if total_abs > 0 else 0.0
+    share_n = top["count"] / total_trades * 100
+
+    insights: List[Dict[str, Any]] = []
+    if share_abs >= 40 or share_n >= 40:
+        insights.append(
+            {
+                "id": "symbol_pnl_concentration",
+                "severity": "warning",
+                "title": f"Concentration: {top_sym}",
+                "body": (
+                    f"{top['count']} of {total_trades} closed trades "
+                    f"({share_n:.0f}% by count) and {share_abs:.0f}% of |PnL| mass "
+                    f"are in {top_sym} (net ${top['total_pnl']:.2f})."
+                ),
+                "evidence_tag": None,
+                "evidence_count": top["count"],
+                "evidence_symbol": top_sym,
+                "evidence_href": f"/journal?symbol={top_sym}",
+            }
+        )
     return insights

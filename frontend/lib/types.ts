@@ -1303,6 +1303,8 @@ export interface StrategyInsightCard {
   body: string;
   evidence_tag?: string | null;
   evidence_count?: number;
+  evidence_symbol?: string | null;
+  evidence_href?: string | null;
 }
 
 /** Response for `GET /api/v1/analytics/{exchange}/journal-summary`. */
