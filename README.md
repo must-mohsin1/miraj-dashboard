@@ -89,7 +89,7 @@ remains a local Python connection string.
 │   │   ├── webhook_outbox.py   # Durable leased delivery queue + retries
 │   │   └── digest.py           # Daily digest builder + Telegram client
 │   ├── obsidian.py             # Phase 3 — Obsidian vault sync service
-│   ├── scheduler.py            # APScheduler: 4-hour scans + daily digest
+│   ├── scheduler.py            # APScheduler: scans, webhook dispatch/cleanup, digest
 │   ├── routes/
 │   │   ├── auth.py             # /api/v1/auth (register, login)
 │   │   ├── macro.py            # /api/v1/macro
