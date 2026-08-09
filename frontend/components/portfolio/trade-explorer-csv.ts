@@ -87,8 +87,52 @@ export function tradeExplorerItemsToCsv(items: TradeExplorerItem[]): string {
 export function buildTradeExplorerCsvFilename(
   exchange?: string | null,
   now: Date = new Date(),
+  scope: "page" | "filtered" = "page",
 ): string {
   const slug = (exchange || "trades").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, (c) => (c === "T" ? "-" : ""));
-  return `trade-explorer-${slug}-${stamp}.csv`;
+  const scopePart = scope === "filtered" ? "filtered-" : "";
+  return `trade-explorer-${slug}-${scopePart}${stamp}.csv`;
+}
+
+/** Build query string for server full-filtered export (no pagination). */
+export function buildTradeExplorerExportQuery(params: {
+  timezone?: string;
+  period?: string;
+  sort?: string;
+  from?: string;
+  to?: string;
+  symbols?: string;
+  side?: string;
+  leverage_min?: string;
+  leverage_max?: string;
+  duration_min_minutes?: string;
+  duration_max_minutes?: string;
+  close_reason?: string;
+  pnl_min?: string;
+  pnl_max?: string;
+}): string {
+  const search = new URLSearchParams();
+  search.set("timezone", params.timezone || "UTC");
+  search.set("period", params.period || "week");
+  search.set("sort", params.sort || "-close_time");
+  for (const key of [
+    "from",
+    "to",
+    "symbols",
+    "side",
+    "leverage_min",
+    "leverage_max",
+    "duration_min_minutes",
+    "duration_max_minutes",
+    "close_reason",
+    "pnl_min",
+    "pnl_max",
+  ] as const) {
+    const value = params[key];
+    if (typeof value === "string" && value.trim()) {
+      search.set(key, value.trim());
+    }
+  }
+  return search.toString();
 }

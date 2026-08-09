@@ -1064,6 +1064,156 @@ def _symbol_key(symbol: Optional[str]) -> str:
     return "".join(ch for ch in str(symbol).upper() if ch.isalnum())
 
 
+TRADE_EXPLORER_EXPORT_MAX_ROWS = 10_000
+
+TRADE_EXPLORER_CSV_HEADERS = (
+    "id",
+    "symbol",
+    "side",
+    "size",
+    "size_unit",
+    "contract_size",
+    "entry_price",
+    "exit_price",
+    "pnl",
+    "pnl_percent",
+    "currency_unit",
+    "pnl_basis",
+    "fee_status",
+    "leverage",
+    "open_time",
+    "close_time",
+    "duration_minutes",
+    "close_reason",
+    "unavailable_reasons",
+)
+
+
+async def export_trade_explorer_csv(
+    session: AsyncSession,
+    user_id: int,
+    exchange: str,
+    *,
+    filters: Optional[Dict[str, Any]] = None,
+    sort: str = "-close_time",
+    timezone_name: str = "UTC",
+    period: str = "week",
+    max_rows: int = TRADE_EXPLORER_EXPORT_MAX_ROWS,
+) -> Dict[str, Any]:
+    """Export all filtered closed positions as CSV (cache-only).
+
+    Applies the same Phase 1 filter contract as Trade Explorer, then sorts and
+    serialises every matching row up to ``max_rows`` (default 10_000).
+
+    Returns::
+
+        {
+          "csv": "<UTF-8 BOM csv string>",
+          "row_count": int,           # rows written (excluding header)
+          "total_matched": int,       # full filter match count before cap
+          "truncated": bool,
+          "max_rows": int,
+          "sort": str,
+          "filters_applied": {...},
+          "filename_hint": "trade-explorer-mexc-....csv",
+        }
+    """
+    if max_rows < 1:
+        raise ValueError("max_rows must be >= 1")
+    if max_rows > TRADE_EXPLORER_EXPORT_MAX_ROWS:
+        raise ValueError(f"max_rows must be <= {TRADE_EXPLORER_EXPORT_MAX_ROWS}")
+
+    tz = _load_timezone(timezone_name)
+    filters = dict(filters or {})
+    if period not in {"day", "week", "month"}:
+        raise ValueError(f"Unsupported period: {period}")
+
+    result = await session.execute(
+        select(PositionHistory)
+        .where(PositionHistory.user_id == user_id, PositionHistory.exchange == exchange)
+        .order_by(PositionHistory.close_time.asc().nullslast(), PositionHistory.id.asc())
+    )
+    stored_positions: List[PositionHistory] = list(result.scalars().all())
+    filtered_positions, _excluded = _filter_closed_positions(stored_positions, filters)
+    filters_applied = _filters_applied(filters, timezone_name, period)
+    # timezone load validates IANA; period is validated above
+    _ = tz
+
+    total_matched = len(filtered_positions)
+    ordered = _sort_positions(filtered_positions, sort)
+    truncated = total_matched > max_rows
+    export_rows = ordered[:max_rows]
+    items = [_explorer_item(position) for position in export_rows]
+    csv_body = _trade_explorer_items_to_csv(items)
+
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
+    filename = f"trade-explorer-{exchange.lower()}-filtered-{stamp}.csv"
+
+    return {
+        "csv": csv_body,
+        "row_count": len(items),
+        "total_matched": total_matched,
+        "truncated": truncated,
+        "max_rows": max_rows,
+        "sort": sort,
+        "filters_applied": filters_applied,
+        "filename_hint": filename,
+    }
+
+
+def _trade_explorer_items_to_csv(items: List[Dict[str, Any]]) -> str:
+    """Build Excel-friendly UTF-8 BOM CSV from explorer item dicts."""
+    lines = [",".join(TRADE_EXPLORER_CSV_HEADERS)]
+    for item in items:
+        reasons = item.get("unavailable_reasons")
+        if isinstance(reasons, dict):
+            reason_cell = "|".join(k for k, v in reasons.items() if v)
+        elif isinstance(reasons, list):
+            reason_cell = "|".join(str(r) for r in reasons if r)
+        else:
+            reason_cell = ""
+        row = [
+            item.get("id"),
+            item.get("symbol"),
+            item.get("side"),
+            item.get("size"),
+            item.get("size_unit") or "contracts",
+            item.get("contract_size"),
+            item.get("entry_price"),
+            item.get("exit_price"),
+            item.get("pnl"),
+            item.get("pnl_percent"),
+            item.get("currency_unit") or CURRENCY_UNIT,
+            item.get("pnl_basis") or PNL_BASIS,
+            item.get("fee_status") or FEE_STATUS,
+            item.get("leverage"),
+            item.get("open_time"),
+            item.get("close_time"),
+            item.get("duration_minutes"),
+            item.get("close_reason"),
+            reason_cell,
+        ]
+        lines.append(",".join(_csv_escape(cell) for cell in row))
+    return "\ufeff" + "\n".join(lines) + "\n"
+
+
+def _csv_escape(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        text = "true" if value else "false"
+    elif isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            text = ""
+        else:
+            text = str(value)
+    else:
+        text = str(value)
+    if any(ch in text for ch in (",", '"', "\n", "\r")):
+        return '"' + text.replace('"', '""') + '"'
+    return text
+
+
 async def get_trade_explorer_detail(
     session: AsyncSession,
     user_id: int,
