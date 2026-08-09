@@ -1,6 +1,6 @@
 """APScheduler integration — periodic background jobs.
 
-Three recurring jobs:
+Four recurring jobs:
   1. **Watchlist scan** (every 4 h) — fetches every user's watchlist, runs the
      full analysis pipeline for each unique pair, writes results to ``analyses``,
      then invokes the alert manager.
@@ -9,6 +9,8 @@ Three recurring jobs:
      ``exchange_keys``) and refreshes their cached balances/positions/trades by
      calling the exchange service directly (no HTTP auth overhead). Keeps PnL
      current without the user clicking Refresh.
+  4. **Signal webhook outbox** (every 1 m) — claims committed signed-webhook
+     deliveries and performs network I/O outside scan transactions.
 """
 
 from __future__ import annotations
@@ -72,6 +74,9 @@ async def run_scheduled_scan() -> None:
         session.add(scan_run)
         await session.flush()
         scan_run_id = scan_run.id
+        # Persist the run marker before slow market-data, vault, or alert I/O so
+        # SQLite's single writer lock is not held for the duration of the job.
+        await session.commit()
 
         try:
             # ── Fetch all watchlist pairs ────────────────────────────
@@ -116,7 +121,9 @@ async def run_scheduled_scan() -> None:
                     success_count += 1
                 except Exception as exc:
                     logger.error(
-                        "Scheduled scan failed for pair %s: %s", pair, exc,
+                        "Scheduled scan failed for pair %s: %s",
+                        pair,
+                        exc,
                     )
                     errors.append(f"{pair}: {exc}")
 
@@ -133,11 +140,12 @@ async def run_scheduled_scan() -> None:
                 # compare QQE flips, structure changes, and verdict
                 # transitions across scheduled scans too.  Serialised once
                 # per pair and reused for every user who watches it.
-                score_val: float | None = (
-                    scan_result.get("overall_score") or scan_result.get("confluence_score")
-                )
+                score_val: float | None = scan_result.get(
+                    "overall_score"
+                ) or scan_result.get("confluence_score")
                 result_json = json.dumps(
-                    build_persistable_result(scan_result), default=str,
+                    build_persistable_result(scan_result),
+                    default=str,
                 )
 
                 for user_id in users:
@@ -153,18 +161,28 @@ async def run_scheduled_scan() -> None:
 
                     # ── Obsidian vault sync (best-effort) ─────────────
                     try:
-                        vault_path = await get_vault_path(session, user_id)
+                        with session.no_autoflush:
+                            vault_path = await get_vault_path(session, user_id)
+                            enabled = (
+                                await is_sync_enabled(session, user_id, pair)
+                                if vault_path
+                                else False
+                            )
                         if vault_path:
-                            enabled = await is_sync_enabled(session, user_id, pair)
                             if enabled:
                                 await asyncio.to_thread(
                                     sync_scan_result,
-                                    user_id, pair, scan_result, vault_path,
+                                    user_id,
+                                    pair,
+                                    scan_result,
+                                    vault_path,
                                 )
                     except Exception as sync_exc:
                         logger.warning(
                             "Obsidian sync failed for %s (user %d): %s",
-                            pair, user_id, sync_exc,
+                            pair,
+                            user_id,
+                            sync_exc,
                         )
 
                     # Add to per-user results for alert manager
@@ -175,13 +193,16 @@ async def run_scheduled_scan() -> None:
                 try:
                     from backend.alerts.manager import process_scan_results
 
-                    alert_outcomes = await process_scan_results(session, results_by_user)
+                    alert_outcomes = await process_scan_results(
+                        session, results_by_user
+                    )
                     sent_count = sum(
                         1 for o in alert_outcomes if o and o.get("status") == "sent"
                     )
                     logger.info(
                         "Alert manager: %d alerts sent out of %d evaluated",
-                        sent_count, len(alert_outcomes),
+                        sent_count,
+                        len(alert_outcomes),
                     )
                 except Exception as exc:
                     logger.exception("Alert manager failed: %s", exc)
@@ -215,7 +236,9 @@ async def run_scheduled_scan() -> None:
             scan_run.error_message = str(exc)
             scan_run.ended_at = datetime.now(timezone.utc)
             await session.commit()
-            logger.exception("Scheduled scan: unexpected failure (scan_run=%d)", scan_run_id)
+            logger.exception(
+                "Scheduled scan: unexpected failure (scan_run=%d)", scan_run_id
+            )
 
 
 # ── Price alert check job ──────────────────────────────────────────────────
@@ -233,14 +256,40 @@ async def _check_price_alerts_job() -> None:
     async with factory() as session:
         try:
             from backend.services.price_alert_service import check_price_alerts
+
             outcomes = await check_price_alerts(session)
             triggered = [o for o in outcomes if o.get("status") == "triggered"]
             logger.info(
                 "Price alert check: %d triggered out of %d checked",
-                len(triggered), len(outcomes),
+                len(triggered),
+                len(outcomes),
             )
         except Exception as exc:
             logger.exception("Price alert check failed: %s", exc)
+
+
+async def dispatch_signal_webhooks_job() -> None:
+    """Deliver committed signed-webhook outbox rows with leases and retries."""
+    try:
+        from backend.alerts.webhook_outbox import dispatch_pending_signal_webhooks
+
+        delivered = await dispatch_pending_signal_webhooks(get_session_factory())
+        if delivered:
+            logger.info("Signal webhook outbox processed %d row(s)", delivered)
+    except Exception as exc:
+        logger.exception("Signal webhook outbox dispatch failed: %s", exc)
+
+
+async def cleanup_signal_webhooks_job() -> None:
+    """Remove terminal signed-webhook payloads after their retention window."""
+    try:
+        from backend.alerts.webhook_outbox import cleanup_terminal_signal_webhooks
+
+        deleted = await cleanup_terminal_signal_webhooks(get_session_factory())
+        if deleted:
+            logger.info("Signal webhook outbox removed %d expired row(s)", deleted)
+    except Exception as exc:
+        logger.exception("Signal webhook outbox cleanup failed: %s", exc)
 
 
 # ── Portfolio auto-refresh job ──────────────────────────────────────────────
@@ -346,26 +395,31 @@ async def refresh_all_portfolios_job() -> None:
                 skip_count += 1
                 logger.warning(
                     "Portfolio auto-refresh: rate-limited for %s — skipping: %s",
-                    label, exc,
+                    label,
+                    exc,
                 )
             except ExchangeError as exc:
                 await session.rollback()
                 fail_count += 1
                 logger.warning(
                     "Portfolio auto-refresh: exchange error for %s — skipping: %s",
-                    label, exc,
+                    label,
+                    exc,
                 )
             except Exception as exc:
                 await session.rollback()
                 fail_count += 1
                 logger.exception(
                     "Portfolio auto-refresh: unexpected error for %s: %s",
-                    label, exc,
+                    label,
+                    exc,
                 )
 
         logger.info(
             "Portfolio auto-refresh: cycle complete — %d ok, %d skipped, %d failed",
-            success_count, skip_count, fail_count,
+            success_count,
+            skip_count,
+            fail_count,
         )
 
 
@@ -430,7 +484,8 @@ async def check_advanced_alerts_job() -> None:
                 return
 
             logger.info(
-                "Advanced alert check: %d active advanced alerts", len(alerts),
+                "Advanced alert check: %d active advanced alerts",
+                len(alerts),
             )
 
             # Group by symbol to avoid redundant candle fetches.
@@ -467,7 +522,8 @@ async def check_advanced_alerts_job() -> None:
                 except Exception as exc:
                     logger.warning(
                         "Advanced alert check: failed to fetch candles for %s: %s",
-                        symbol, exc,
+                        symbol,
+                        exc,
                     )
                     continue
 
@@ -506,7 +562,10 @@ async def check_advanced_alerts_job() -> None:
                     matching_signals = signal_by_type[alert.alert_type]
                     for sig in matching_signals:
                         await _trigger_advanced_alert(
-                            session, alert, sig, candle_dicts[-1]["close"],
+                            session,
+                            alert,
+                            sig,
+                            candle_dicts[-1]["close"],
                         )
 
         except Exception as exc:
@@ -562,7 +621,10 @@ async def _trigger_advanced_alert(
     await _trigger_alert(session, alert, current_price)
     logger.info(
         "Advanced alert triggered: id=%d type=%s symbol=%s — %s",
-        alert.id, alert.alert_type, alert.symbol, signal.get("message", ""),
+        alert.id,
+        alert.alert_type,
+        alert.symbol,
+        signal.get("message", ""),
     )
 
 
@@ -616,7 +678,9 @@ async def check_position_alerts_job() -> None:
 
                 try:
                     positions = await _load_positions(
-                        session, user_id, exchange_slug,
+                        session,
+                        user_id,
+                        exchange_slug,
                     )
                     if not positions:
                         continue
@@ -629,7 +693,8 @@ async def check_position_alerts_job() -> None:
 
                     # ── Collect DANGER alerts for Telegram ───────────
                     danger_alerts = [
-                        item for item in alert_items
+                        item
+                        for item in alert_items
                         if item.get("max_severity") == "DANGER"
                     ]
                     if not danger_alerts:
@@ -683,8 +748,7 @@ async def check_position_alerts_job() -> None:
                             last_sent = _position_alert_dedup.get(dedup_key)
                             if (
                                 last_sent is not None
-                                and (now_ts - last_sent)
-                                < _POSITION_ALERT_DEDUP_SECONDS
+                                and (now_ts - last_sent) < _POSITION_ALERT_DEDUP_SECONDS
                             ):
                                 continue  # dedup: skip within 1 hour
 
@@ -701,21 +765,24 @@ async def check_position_alerts_job() -> None:
                                 logger.info(
                                     "Position alert: sent DANGER alert to user %d "
                                     "for %s (%s)",
-                                    user_id, symbol, alert_type,
+                                    user_id,
+                                    symbol,
+                                    alert_type,
                                 )
 
                 except Exception as exc:
                     logger.warning(
                         "Position alert check: error for user %d / %s: %s",
-                        user_id, exchange_slug, exc,
+                        user_id,
+                        exchange_slug,
+                        exc,
                     )
                     continue
 
             # ── Purge stale dedup entries (older than 2h) ──────────
             stale_cutoff = now_ts - (2 * _POSITION_ALERT_DEDUP_SECONDS)
             stale_keys = [
-                k for k, ts in _position_alert_dedup.items()
-                if ts < stale_cutoff
+                k for k, ts in _position_alert_dedup.items() if ts < stale_cutoff
             ]
             for k in stale_keys:
                 _position_alert_dedup.pop(k, None)
@@ -751,6 +818,24 @@ def setup_scheduler(app) -> AsyncIOScheduler:
         id="check_price_alerts",
         name="Price alert check (every 2m)",
         replace_existing=True,
+    )
+    scheduler.add_job(
+        dispatch_signal_webhooks_job,
+        trigger=CronTrigger(minute="*"),
+        id="dispatch_signal_webhooks",
+        name="Signed signal webhook outbox (every 1m)",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        cleanup_signal_webhooks_job,
+        trigger=CronTrigger(hour="3", minute="17"),
+        id="cleanup_signal_webhooks",
+        name="Signed signal webhook retention cleanup (daily)",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     scheduler.add_job(
         refresh_all_portfolios_job,

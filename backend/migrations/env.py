@@ -46,6 +46,7 @@ from backend.models import (       # noqa: E402, F401
     RealtimeNotification,
     RealtimeSignal,
     ScanRun,
+    SignalWebhookDelivery,
     TradeJournalEntry,
     User,
     WatchlistPair,

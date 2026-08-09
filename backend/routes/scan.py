@@ -223,9 +223,14 @@ async def scan_symbol(
 
     # ── Sync to Obsidian vault (best-effort) ──────────────────────────
     try:
-        vault_path = await get_vault_path(session, current_user.id)
+        with session.no_autoflush:
+            vault_path = await get_vault_path(session, current_user.id)
+            enabled = (
+                await is_sync_enabled(session, current_user.id, symbol)
+                if vault_path
+                else False
+            )
         if vault_path:
-            enabled = await is_sync_enabled(session, current_user.id, symbol)
             if enabled:
                 await asyncio.to_thread(
                     sync_scan_result,
@@ -249,6 +254,8 @@ async def scan_symbol(
             "confluence_score": result.get("confluence_score", 0),
             "overall_score": result.get("overall_score"),
             "trade_plan": result.get("trade_plan", {}),
+            "trade_plan_flat": result.get("trade_plan_flat", {}),
+            "cached_at": result.get("cached_at"),
         }]}
         await process_scan_results(session, results_by_user)
     except Exception as alert_exc:
@@ -471,9 +478,14 @@ async def deep_scan_symbol(
 
     # ── Sync to Obsidian vault (best-effort) ──────────────────────
     try:
-        vault_path = await get_vault_path(session, current_user.id)
+        with session.no_autoflush:
+            vault_path = await get_vault_path(session, current_user.id)
+            enabled = (
+                await is_sync_enabled(session, current_user.id, symbol)
+                if vault_path
+                else False
+            )
         if vault_path:
-            enabled = await is_sync_enabled(session, current_user.id, symbol)
             if enabled:
                 await asyncio.to_thread(
                     sync_scan_result,
@@ -491,6 +503,8 @@ async def deep_scan_symbol(
             "confluence_score": result.get("confluence_score", 0),
             "overall_score": result.get("overall_score"),
             "trade_plan": result.get("trade_plan", {}),
+            "trade_plan_flat": result.get("trade_plan_flat", {}),
+            "cached_at": result.get("cached_at"),
         }]}
         await process_scan_results(session, results_by_user)
     except Exception as alert_exc:
