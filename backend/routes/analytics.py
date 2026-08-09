@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -631,6 +632,77 @@ async def get_trade_explorer(
         ),
     )
     return payload["explorer"]
+
+
+@router.get(
+    "/{exchange}/trade-explorer/export",
+    summary="Trade Explorer CSV export of all filtered closed positions",
+)
+async def export_trade_explorer(
+    exchange: str,
+    timezone_name: str = Query("UTC", alias="timezone"),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to_: Optional[datetime] = Query(None, alias="to"),
+    symbols: Optional[str] = Query(None),
+    side: Optional[str] = Query(None, pattern="^(long|short|buy|sell)$"),
+    leverage_min: Optional[float] = Query(None),
+    leverage_max: Optional[float] = Query(None),
+    duration_min_minutes: Optional[float] = Query(None),
+    duration_max_minutes: Optional[float] = Query(None),
+    close_reason: Optional[str] = Query(None),
+    pnl_min: Optional[float] = Query(None),
+    pnl_max: Optional[float] = Query(None),
+    period: str = Query("week", pattern="^(day|week|month)$"),
+    sort: str = Query("-close_time", pattern="^-?(close_time|pnl|symbol|side|leverage|duration_minutes)$"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> StreamingResponse:
+    """Download all closed positions matching the current Trade Explorer filters.
+
+    Same filter contract as ``GET .../trade-explorer`` (no pagination). Caps at
+    10_000 rows; if truncated the CSV still downloads and
+    ``X-Export-Truncated: true`` is set.
+    """
+    exchange_slug = _require_supported_exchange(exchange)
+    filters = _phase1_closed_position_filters(
+        from_=from_,
+        to_=to_,
+        symbols=symbols,
+        side=side,
+        leverage_min=leverage_min,
+        leverage_max=leverage_max,
+        duration_min_minutes=duration_min_minutes,
+        duration_max_minutes=duration_max_minutes,
+        close_reason=close_reason,
+        pnl_min=pnl_min,
+        pnl_max=pnl_max,
+    )
+    try:
+        payload = await analytics_service.export_trade_explorer_csv(
+            session,
+            cast(int, current_user.id),
+            exchange_slug,
+            filters=filters,
+            sort=sort,
+            timezone_name=timezone_name,
+            period=period,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    filename = payload["filename_hint"]
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Export-Row-Count": str(payload["row_count"]),
+        "X-Export-Total-Matched": str(payload["total_matched"]),
+        "X-Export-Truncated": "true" if payload["truncated"] else "false",
+        "X-Export-Max-Rows": str(payload["max_rows"]),
+    }
+    return StreamingResponse(
+        iter([payload["csv"]]),
+        media_type="text/csv; charset=utf-8",
+        headers=headers,
+    )
 
 
 @router.get(

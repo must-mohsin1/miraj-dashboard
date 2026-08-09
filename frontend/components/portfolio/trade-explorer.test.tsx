@@ -216,6 +216,56 @@ describe("TradeExplorer", () => {
     expect(onSortChange).toHaveBeenCalledWith("-pnl");
   });
 
+  it("exports all filtered rows via server endpoint", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["id,symbol\n1,BTC\n"], { type: "text/csv" });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => blob,
+      headers: {
+        get: (name: string) => {
+          if (name === "Content-Disposition") return 'attachment; filename="trade-explorer-mexc-filtered.csv"';
+          if (name === "X-Export-Truncated") return "false";
+          if (name === "X-Export-Row-Count") return "1";
+          if (name === "X-Export-Total-Matched") return "1";
+          return null;
+        },
+      },
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const createObjectURL = jest.fn(() => "blob:export-all");
+    const revokeObjectURL = jest.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    render(
+      <TradeExplorer
+        data={BASE_RESPONSE}
+        token="test-token"
+        exchange="mexc"
+        exportFilters={{ symbols: "BTC_USDT", side: "long", sort: "-pnl", period: "week", timezone: "UTC" }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Export all filtered Trade Explorer rows as CSV" }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/analytics/mexc/trade-explorer/export?"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
+      }),
+    );
+    const calledUrl = String(fetchMock.mock.calls[0][0]);
+    expect(calledUrl).toContain("symbols=BTC_USDT");
+    expect(calledUrl).toContain("side=long");
+    expect(calledUrl).toContain("sort=-pnl");
+    expect(calledUrl).not.toContain("limit=");
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(clickSpy).toHaveBeenCalled();
+
+    clickSpy.mockRestore();
+  });
+
   it("loads trade detail with orders and scan when drawer opens", async () => {
     const user = userEvent.setup();
     const fetchMock = jest.fn().mockResolvedValue({

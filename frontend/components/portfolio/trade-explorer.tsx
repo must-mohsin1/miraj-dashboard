@@ -20,6 +20,7 @@ import {
 import { type ClosedPositionBasis, type ClosedPositionHistory } from "@/components/portfolio/closed-position-basis-note";
 import {
   buildTradeExplorerCsvFilename,
+  buildTradeExplorerExportQuery,
   tradeExplorerItemsToCsv,
 } from "@/components/portfolio/trade-explorer-csv";
 import {
@@ -127,14 +128,33 @@ export type TradeExplorerDetailResponse = {
   } | null;
 };
 
+export type TradeExplorerExportFilters = {
+  timezone?: string;
+  period?: string;
+  sort?: string;
+  from?: string;
+  to?: string;
+  symbols?: string;
+  side?: string;
+  leverage_min?: string;
+  leverage_max?: string;
+  duration_min_minutes?: string;
+  duration_max_minutes?: string;
+  close_reason?: string;
+  pnl_min?: string;
+  pnl_max?: string;
+};
+
 export interface TradeExplorerProps {
   data: TradeExplorerResponse | null;
   loading?: boolean;
   error?: string | null;
-  /** JWT for lazy-loading trade detail (orders / scan). */
+  /** JWT for lazy-loading trade detail (orders / scan) and full export. */
   token?: string | null;
   /** Exchange slug used for detail fetch (defaults to data.exchange). */
   exchange?: string | null;
+  /** Current closed-position filters for server full CSV export. */
+  exportFilters?: TradeExplorerExportFilters | null;
   onPageChange?: (offset: number) => void;
   onPageSizeChange?: (limit: number) => void;
   /** Called when a sortable column header is activated. Receives sort token e.g. `-pnl`. */
@@ -163,11 +183,14 @@ export function TradeExplorer({
   error = null,
   token = null,
   exchange = null,
+  exportFilters = null,
   onPageChange,
   onPageSizeChange,
   onSortChange,
 }: TradeExplorerProps) {
   const [selected, setSelected] = useState<TradeExplorerItem | null>(null);
+  const [exportingAll, setExportingAll] = useState(false);
+  const [exportAllError, setExportAllError] = useState<string | null>(null);
   const detailExchange = exchange || data?.exchange || null;
 
   if (loading) {
@@ -203,7 +226,7 @@ export function TradeExplorer({
   function handleExportCsv() {
     if (!canExport) return;
     const csv = tradeExplorerItemsToCsv(safeData.items);
-    const filename = buildTradeExplorerCsvFilename(safeData.exchange);
+    const filename = buildTradeExplorerCsvFilename(safeData.exchange, new Date(), "page");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -214,6 +237,52 @@ export function TradeExplorer({
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
+  }
+
+  async function handleExportAllFiltered() {
+    if (!token || !detailExchange || total === 0 || exportingAll) return;
+    setExportingAll(true);
+    setExportAllError(null);
+    try {
+      const query = buildTradeExplorerExportQuery({
+        ...(exportFilters || {}),
+        sort: exportFilters?.sort || safeData.sort || "-close_time",
+      });
+      const res = await fetch(
+        `/api/v1/analytics/${encodeURIComponent(detailExchange)}/trade-explorer/export?${query}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) {
+        throw new Error(`export_${res.status}`);
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = /filename="([^"]+)"/.exec(disposition);
+      const filename =
+        match?.[1] ||
+        buildTradeExplorerCsvFilename(detailExchange, new Date(), "filtered");
+      const truncated = res.headers.get("X-Export-Truncated") === "true";
+      const rowCount = res.headers.get("X-Export-Row-Count");
+      const totalMatched = res.headers.get("X-Export-Total-Matched");
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      if (truncated) {
+        setExportAllError(
+          `Export capped at ${rowCount || "max"} of ${totalMatched || "all"} matching rows.`,
+        );
+      }
+    } catch {
+      setExportAllError("Could not export all filtered rows. Try again.");
+    } finally {
+      setExportingAll(false);
+    }
   }
 
   function handleSortField(field: TradeExplorerSortField) {
@@ -234,7 +303,14 @@ export function TradeExplorer({
             Server-paginated closed positions. Showing <span className="font-mono tabular-nums text-foreground">{formatCount(currentStart)}–{formatCount(currentEnd)}</span> of <span className="font-mono tabular-nums text-foreground">{formatCount(total)}</span>; limit <span className="font-mono tabular-nums text-foreground">{formatCount(limit)}</span>, offset <span className="font-mono tabular-nums text-foreground">{formatCount(offset)}</span>, has_more <span className="font-mono tabular-nums text-foreground">{safeData.has_more ? "true" : "false"}</span>.
           </p>
           <p className="mt-1 text-xs text-muted-foreground">Page size cap: <span className="font-mono tabular-nums text-foreground">200</span> max{limit >= MAX_PAGE_SIZE ? " — cap reached" : ""}. Sort: <span className="font-mono tabular-nums text-foreground">{sort.label} {sort.directionLabel}</span>. {pnlBasis}; values displayed in {currency}.</p>
-          <p className="mt-1 text-xs text-muted-foreground">Click a row for trade detail. CSV export covers this page only (not full history).</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Click a row for trade detail. Page CSV is local; full filtered export uses current filters (cap 10,000 rows).
+          </p>
+          {exportAllError ? (
+            <p className="mt-1 text-xs text-amber-400" role="status">
+              {exportAllError}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <button
@@ -245,6 +321,17 @@ export function TradeExplorer({
             aria-label="Export current Trade Explorer page as CSV"
           >
             Export CSV (this page)
+          </button>
+          <button
+            type="button"
+            className="border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => {
+              void handleExportAllFiltered();
+            }}
+            disabled={!token || !detailExchange || total === 0 || exportingAll}
+            aria-label="Export all filtered Trade Explorer rows as CSV"
+          >
+            {exportingAll ? "Exporting…" : "Export CSV (all filtered)"}
           </button>
           <label className="grid gap-1 text-xs uppercase tracking-[0.12em] text-muted-foreground">
             Page size

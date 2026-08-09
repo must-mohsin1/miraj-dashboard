@@ -1,5 +1,6 @@
 import {
   buildTradeExplorerCsvFilename,
+  buildTradeExplorerExportQuery,
   tradeExplorerItemsToCsv,
   TRADE_EXPLORER_CSV_HEADERS,
 } from "@/components/portfolio/trade-explorer-csv";
@@ -76,5 +77,34 @@ describe("buildTradeExplorerCsvFilename", () => {
       new Date("2026-08-05T12:30:00.000Z"),
     );
     expect(name).toBe("trade-explorer-mexc-2026-08-05-123000.csv");
+  });
+
+  it("marks full filtered exports in the filename", () => {
+    const name = buildTradeExplorerCsvFilename(
+      "mexc",
+      new Date("2026-08-05T12:30:00.000Z"),
+      "filtered",
+    );
+    expect(name).toBe("trade-explorer-mexc-filtered-2026-08-05-123000.csv");
+  });
+});
+
+describe("buildTradeExplorerExportQuery", () => {
+  it("omits empty filter fields and pagination", () => {
+    const q = buildTradeExplorerExportQuery({
+      timezone: "UTC",
+      period: "week",
+      sort: "-pnl",
+      symbols: "BTCUSDT",
+      side: "long",
+      from: "",
+    });
+    const params = new URLSearchParams(q);
+    expect(params.get("sort")).toBe("-pnl");
+    expect(params.get("symbols")).toBe("BTCUSDT");
+    expect(params.get("side")).toBe("long");
+    expect(params.get("limit")).toBeNull();
+    expect(params.get("offset")).toBeNull();
+    expect(params.get("from")).toBeNull();
   });
 });
