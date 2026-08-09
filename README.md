@@ -23,7 +23,8 @@ Runs the full analysis pipeline: macro data → OHLCV → indicators → QQE Mod
 - **Telegram alerts** — Receive real-time trade alerts via Telegram bot when confluence scores exceed per-pair thresholds, with MarkdownV2-formatted messages
 - **Discord alerts** — Rich embedded alert delivery via Discord webhooks with customisable webhook URL validation
 - **Alert manager** — Configurable per-pair thresholds (`alert_threshold`), per-pair mute toggle (`alert_enabled`), cooldown dedup (4h default per symbol), and multi-channel routing
-- **Alert channels** — Manage Telegram (chat_id) and Discord (webhook_url) channels via Settings API; each channel can be individually enabled/disabled
+- **Alert channels** — Manage Telegram, Discord, email, and signed-webhook channels via the Settings API; each channel can be individually enabled/disabled
+- **[Signed signal webhooks](docs/signal-webhooks.md)** — Queue confirmed signals for external automations with HMAC-SHA256 signatures, stable delivery IDs, bounded retries, and public-HTTPS destination checks
 - **Alert history** — Every send attempt (success or failure) is logged in `alert_histories` for audit and dedup
 - **Daily digest** — Scheduled Telegram summary (configurable time, default 20:00 UTC) of all pairs scanned that day, sorted by confluence score with high-confluence and actionable counts
 - **Obsidian vault sync** — Automatic export of analysis reports as markdown files and mplfinance chart PNGs to an Obsidian vault, toggleable per pair
@@ -84,6 +85,8 @@ remains a local Python connection string.
 │   │   ├── manager.py          # Threshold filtering, dedup, channel routing
 │   │   ├── telegram.py         # Telegram Bot API client + message formatter
 │   │   ├── discord.py          # Discord webhook sender + embed builder
+│   │   ├── webhook.py          # HMAC-signed generic signal webhooks
+│   │   ├── webhook_outbox.py   # Durable leased delivery queue + retries
 │   │   └── digest.py           # Daily digest builder + Telegram client
 │   ├── obsidian.py             # Phase 3 — Obsidian vault sync service
 │   ├── scheduler.py            # APScheduler: 4-hour scans + daily digest
@@ -156,7 +159,7 @@ remains a local Python connection string.
 | GET    | /api/v1/settings/pairs            | JWT      | List per-pair alert settings         |
 | PUT    | /api/v1/settings/pairs/{pair}     | JWT      | Update pair alert settings (upsert)  |
 | GET    | /api/v1/settings/channels         | JWT      | List alert channels                  |
-| POST   | /api/v1/settings/channels         | JWT      | Create alert channel (Telegram/Discord)|
+| POST   | /api/v1/settings/channels         | JWT      | Create alert channel (Telegram/Discord/email/webhook)|
 | PUT    | /api/v1/settings/channels/{id}    | JWT      | Update alert channel config          |
 | DELETE | /api/v1/settings/channels/{id}    | JWT      | Delete alert channel                 |
 | GET    | /api/v1/protected                 | JWT      | Verify auth status                   |
