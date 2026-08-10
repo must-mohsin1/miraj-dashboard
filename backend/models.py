@@ -41,14 +41,14 @@ class User(Base):
 
 
 class AlertChannel(Base):
-    """Per-user Telegram / Discord alert channel configuration."""
+    """Per-user Telegram, Discord, email, or signed-webhook configuration."""
 
     __tablename__ = "alert_channels"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    channel_type = Column(String(20), nullable=False)  # "telegram" or "discord"
-    config = Column(Text, nullable=True)                # JSON: {"chat_id": "123"} or {"webhook_url": "https://..."}
+    channel_type = Column(String(20), nullable=False)  # telegram / discord / email / webhook
+    config = Column(Text, nullable=True)                # Channel-specific JSON configuration
     enabled = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
@@ -64,7 +64,7 @@ class AlertHistory(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     pair = Column(String(20), nullable=False, index=True)
-    channel = Column(String(20), nullable=False)   # "telegram" or "discord"
+    channel = Column(String(20), nullable=False)   # telegram / discord / email / webhook
     score = Column(Float, nullable=True)
     direction = Column(String(10), nullable=True)  # LONG / SHORT
     message = Column(Text, nullable=True)
@@ -72,6 +72,53 @@ class AlertHistory(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="alert_histories")
+
+
+class SignalWebhookDelivery(Base):
+    """Committed outbox row for a signed scan-signal webhook."""
+
+    __tablename__ = "signal_webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel_id",
+            "delivery_id",
+            "config_fingerprint",
+            name="uq_signal_webhook_channel_delivery",
+        ),
+        Index(
+            "ix_signal_webhook_deliveries_status_due",
+            "status",
+            "next_attempt_at",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    channel_id = Column(
+        Integer,
+        ForeignKey("alert_channels.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    pair = Column(String(20), nullable=False, index=True)
+    direction = Column(String(10), nullable=False)
+    score = Column(Float, nullable=True)
+    delivery_id = Column(String(36), nullable=False)
+    payload = Column(Text, nullable=False)
+    config_fingerprint = Column(String(64), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime, nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    last_status_code = Column(Integer, nullable=True)
+    last_error = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    sent_at = Column(DateTime, nullable=True)
 
 
 class Analysis(Base):

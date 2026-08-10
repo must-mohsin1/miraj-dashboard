@@ -12,6 +12,9 @@ from backend.models import AlertChannel, RealtimeNotification, RealtimeSignal
 from backend.realtime.lifecycle import SignalEvaluation
 
 
+REALTIME_NOTIFICATION_CHANNEL_TYPES = {"telegram", "discord"}
+
+
 @dataclass(frozen=True)
 class StoredTransition:
     changed: bool
@@ -81,7 +84,11 @@ async def enqueue_transition_notifications(
         return
     channels = (
         await session.execute(
-            select(AlertChannel).where(AlertChannel.user_id == signal.user_id, AlertChannel.enabled == 1)
+            select(AlertChannel).where(
+                AlertChannel.user_id == signal.user_id,
+                AlertChannel.enabled == 1,
+                AlertChannel.channel_type.in_(REALTIME_NOTIFICATION_CHANNEL_TYPES),
+            )
         )
     ).scalars()
     for channel in channels:

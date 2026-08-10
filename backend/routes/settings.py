@@ -5,7 +5,7 @@ Endpoints
 GET    /api/v1/settings/pairs           — list all pair settings for the current user
 PUT    /api/v1/settings/pairs/{pair}    — update pair settings (alert_threshold, alert_enabled, etc.)
 GET    /api/v1/settings/channels        — list all alert channels for the current user
-POST   /api/v1/settings/channels        — create a new alert channel (Telegram / Discord)
+POST   /api/v1/settings/channels        — create a new alert channel (Telegram / Discord / email / webhook)
 PUT    /api/v1/settings/channels/{id}   — update an alert channel config
 DELETE /api/v1/settings/channels/{id}   — delete an alert channel
 GET    /api/v1/settings/email           — get the user's alert email address
@@ -22,10 +22,11 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import get_current_user
+from backend.alerts.webhook import validate_webhook_destination
 from backend.database import get_session
 from backend.models import AlertChannel, PairSetting, User
 from backend.schemas import PairSettingsResponse, PairSettingsUpdateRequest
@@ -33,6 +34,7 @@ from backend.schemas import PairSettingsResponse, PairSettingsUpdateRequest
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
+MAX_WEBHOOK_CHANNELS_PER_USER = 5
 
 
 # ── Helper: parse settings JSON ────────────────────────────────────────────
@@ -49,13 +51,26 @@ def _parse_settings_json(raw: str | None) -> dict[str, Any]:
         return {}
 
 
+def _public_channel_config(
+    channel_type: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Return channel config safe for authenticated API responses."""
+    if channel_type != "webhook":
+        return config
+    public_config = dict(config)
+    has_signing_secret = bool(public_config.pop("signing_secret", None))
+    public_config["has_signing_secret"] = has_signing_secret
+    return public_config
+
+
 # ── Pydantic models for alert channel CRUD ─────────────────────────────────
 
 
 class AlertChannelCreateRequest(BaseModel):
     """Request body for creating a new alert channel."""
 
-    channel_type: str = Field(..., pattern="^(telegram|discord|email)$")
+    channel_type: str = Field(..., pattern="^(telegram|discord|email|webhook)$")
     config: dict[str, Any]
     enabled: bool = True
 
@@ -86,6 +101,22 @@ class AlertChannelListResponse(BaseModel):
 
     total: int
     channels: list[AlertChannelResponse]
+
+
+def _to_alert_channel_response(channel: AlertChannel) -> AlertChannelResponse:
+    """Map a stored channel to its public, secret-safe API representation."""
+    return AlertChannelResponse(
+        id=channel.id,
+        user_id=channel.user_id,
+        channel_type=channel.channel_type,
+        config=_public_channel_config(
+            channel.channel_type,
+            _parse_settings_json(channel.config),
+        ),
+        enabled=bool(channel.enabled),
+        created_at=channel.created_at,
+        updated_at=channel.updated_at,
+    )
 
 
 # ── Pair Settings ──────────────────────────────────────────────────────────
@@ -185,18 +216,7 @@ async def list_alert_channels(
     rows = result.scalars().all()
     return AlertChannelListResponse(
         total=len(rows),
-        channels=[
-            AlertChannelResponse(
-                id=ch.id,
-                user_id=ch.user_id,
-                channel_type=ch.channel_type,
-                config=_parse_settings_json(ch.config),
-                enabled=bool(ch.enabled),
-                created_at=ch.created_at,
-                updated_at=ch.updated_at,
-            )
-            for ch in rows
-        ],
+        channels=[_to_alert_channel_response(ch) for ch in rows],
     )
 
 
@@ -210,9 +230,45 @@ async def create_alert_channel(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> AlertChannelResponse:
-    """Create a new alert channel (Telegram or Discord)."""
+    """Create a new alert channel (Telegram, Discord, email, or webhook)."""
+    user_id = int(current_user.id)
+    if body.channel_type == "webhook":
+        webhook_count = await session.scalar(
+            select(func.count(AlertChannel.id)).where(
+                AlertChannel.user_id == user_id,
+                AlertChannel.channel_type == "webhook",
+            )
+        )
+        if int(webhook_count or 0) >= MAX_WEBHOOK_CHANNELS_PER_USER:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"A user may configure at most "
+                    f"{MAX_WEBHOOK_CHANNELS_PER_USER} webhook channels"
+                ),
+            )
+    await _validate_alert_channel_config(body.channel_type, body.config)
+    if body.channel_type == "webhook":
+        # Recheck while holding SQLite's write reservation. The first count is
+        # a fast fail; this one makes the five-channel security cap race-safe.
+        await session.rollback()
+        await session.execute(text("BEGIN IMMEDIATE"))
+        webhook_count = await session.scalar(
+            select(func.count(AlertChannel.id)).where(
+                AlertChannel.user_id == user_id,
+                AlertChannel.channel_type == "webhook",
+            )
+        )
+        if int(webhook_count or 0) >= MAX_WEBHOOK_CHANNELS_PER_USER:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"A user may configure at most "
+                    f"{MAX_WEBHOOK_CHANNELS_PER_USER} webhook channels"
+                ),
+            )
     channel = AlertChannel(
-        user_id=current_user.id,
+        user_id=user_id,
         channel_type=body.channel_type,
         config=json.dumps(body.config),
         enabled=1 if body.enabled else 0,
@@ -221,15 +277,7 @@ async def create_alert_channel(
     await session.commit()
     await session.refresh(channel)
 
-    return AlertChannelResponse(
-        id=channel.id,
-        user_id=channel.user_id,
-        channel_type=channel.channel_type,
-        config=_parse_settings_json(channel.config),
-        enabled=bool(channel.enabled),
-        created_at=channel.created_at,
-        updated_at=channel.updated_at,
-    )
+    return _to_alert_channel_response(channel)
 
 
 @router.put("/channels/{channel_id}", response_model=AlertChannelResponse)
@@ -254,6 +302,7 @@ async def update_alert_channel(
         )
 
     if body.config is not None:
+        await _validate_alert_channel_config(channel.channel_type, body.config)
         channel.config = json.dumps(body.config)
     if body.enabled is not None:
         channel.enabled = 1 if body.enabled else 0
@@ -262,15 +311,7 @@ async def update_alert_channel(
     await session.commit()
     await session.refresh(channel)
 
-    return AlertChannelResponse(
-        id=channel.id,
-        user_id=channel.user_id,
-        channel_type=channel.channel_type,
-        config=_parse_settings_json(channel.config),
-        enabled=bool(channel.enabled),
-        created_at=channel.created_at,
-        updated_at=channel.updated_at,
-    )
+    return _to_alert_channel_response(channel)
 
 
 @router.delete("/channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -295,6 +336,22 @@ async def delete_alert_channel(
 
     await session.delete(channel)
     await session.commit()
+
+
+async def _validate_alert_channel_config(
+    channel_type: str,
+    config: dict[str, Any],
+) -> None:
+    """Validate security-sensitive channel configuration before persistence."""
+    if channel_type != "webhook":
+        return
+    try:
+        await validate_webhook_destination(config)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
 
 
 # ── Email Alert Settings ────────────────────────────────────────────────────

@@ -65,6 +65,58 @@ def test_stale_transition_is_persisted_but_not_enqueued_for_delivery():
     asyncio.run(scenario())
 
 
+def test_realtime_outbox_excludes_scan_only_webhook_channels():
+    async def scenario():
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            session.add(
+                User(
+                    id=23,
+                    username="webhook-scope",
+                    email="webhook-scope@example.com",
+                    hashed_password="x",
+                )
+            )
+            telegram = AlertChannel(
+                user_id=23,
+                channel_type="telegram",
+                config='{"chat_id":"1"}',
+                enabled=1,
+            )
+            webhook = AlertChannel(
+                user_id=23,
+                channel_type="webhook",
+                config='{"webhook_url":"https://hooks.example.com/miraj","signing_secret":"ssssssssssssssssssssssssssssssss"}',
+                enabled=1,
+            )
+            signal = RealtimeSignal(
+                user_id=23,
+                pair="BTCUSDT",
+                direction="LONG",
+                state="ACTIONABLE",
+                dedup_key="BTCUSDT:LONG:ACTIONABLE:1",
+            )
+            session.add_all([telegram, webhook, signal])
+            await session.flush()
+            evaluation = SignalEvaluation(
+                SignalState.ACTIONABLE,
+                True,
+                "BTCUSDT:LONG:ACTIONABLE",
+                (),
+            )
+
+            await enqueue_transition_notifications(session, signal, evaluation)
+
+            rows = (await session.execute(select(RealtimeNotification))).scalars().all()
+            assert [row.channel_id for row in rows] == [telegram.id]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_actionable_message_includes_confirmation_and_manual_risk_review():
     signal = RealtimeSignal(
         pair="BTCUSDT",

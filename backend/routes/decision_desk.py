@@ -70,6 +70,8 @@ def _channel_is_configured(channel: AlertChannel) -> bool:
         return bool(config.get("chat_id"))
     if channel.channel_type == "discord":
         return bool(config.get("webhook_url"))
+    if channel.channel_type == "webhook":
+        return bool(config.get("webhook_url") and config.get("signing_secret"))
     return False
 
 
