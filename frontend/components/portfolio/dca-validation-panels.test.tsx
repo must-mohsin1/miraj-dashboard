@@ -7,6 +7,7 @@ import { DcaValidationSummary, type DcaValidationResponse } from "./dca-validati
 import { DcaValidationSymbolTable } from "./dca-validation-symbol-table";
 
 const disclaimer = "These are reconstructed and shadow-mode results, not realized trading performance or financial advice.";
+const recentShadowTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
 const validation: DcaValidationResponse = {
   state: "metrics_available",
@@ -106,7 +107,7 @@ const validation: DcaValidationResponse = {
   },
   shadow_history: [
     {
-      timestamp: "2026-07-12T03:00:00Z",
+      timestamp: recentShadowTimestamp,
       exchange: "binance",
       symbol: "ETHUSDT:USDT",
       original_recommendation: "ADD",
