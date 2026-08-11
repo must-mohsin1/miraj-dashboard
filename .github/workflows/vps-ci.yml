@@ -31,7 +31,9 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: true
-          fetch-depth: 1
+          # A frontend design-token regression test diffs against its recorded
+          # baseline commit, so CI needs repository history for that assertion.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install Python dependencies
