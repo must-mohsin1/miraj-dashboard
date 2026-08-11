@@ -25,9 +25,6 @@ jobs:
       JWT_SECRET_KEY: ci-test-key-not-for-production
       MPLBACKEND: Agg
       PYTHONUNBUFFERED: "1"
-      # The runner cleans this directory between jobs. Keeping test databases
-      # here prevents long-lived self-hosted runners from filling /tmp.
-      TMPDIR: ${{ runner.temp }}
 
     steps:
       - name: Check out the pushed commit
@@ -38,6 +35,13 @@ jobs:
           # baseline commit, so CI needs repository history for that assertion.
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Prepare per-job temporary directory
+        run: |
+          # RUNNER_TEMP is cleaned between jobs. Keeping test databases here
+          # prevents a long-lived self-hosted runner from filling /tmp.
+          mkdir -p "$RUNNER_TEMP/job-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/job-tmp" >> "$GITHUB_ENV"
 
       - name: Install Python dependencies
         run: |
