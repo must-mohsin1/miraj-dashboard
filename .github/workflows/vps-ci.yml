@@ -25,6 +25,9 @@ jobs:
       JWT_SECRET_KEY: ci-test-key-not-for-production
       MPLBACKEND: Agg
       PYTHONUNBUFFERED: "1"
+      # The runner cleans this directory between jobs. Keeping test databases
+      # here prevents long-lived self-hosted runners from filling /tmp.
+      TMPDIR: ${{ runner.temp }}
 
     steps:
       - name: Check out the pushed commit
