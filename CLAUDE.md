@@ -42,4 +42,9 @@ In QA mode, flag any code that doesn't match DESIGN.md.
     `gh api repos/must-mohsin1/miraj-dashboard/pulls/N/merge -X PUT -f merge_method=squash`
   - Avoid `--delete-branch` when local `main` is locked to another worktree.
 - **Canary:** `curl -sS -o /dev/null -w "%{http_code}\n" https://ta.munafaplus.pk/` (expect 200). Optional deeper check: portfolio + journal routes.
-- **No GitHub Actions deploy workflow** — production is VPS-only.
+- **CI:** Repository-scoped self-hosted GitHub Actions runner in the isolated
+  `miraj-ci-runner` VPS container. Workflow: `.github/workflows/vps-ci.yml`.
+  It is push-only because the repository is public; never allow fork PR code
+  onto this production-adjacent runner. See `docs/vps-ci.md`.
+- **No GitHub Actions deploy workflow** — deployment remains a separate,
+  manually approved VPS operation.

@@ -1,0 +1,36 @@
+name: miraj-ci
+
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: miraj-ci-runner:2.336.0
+    container_name: miraj-ci-runner
+    init: true
+    restart: unless-stopped
+    read_only: true
+    command: ["./run.sh"]
+    volumes:
+      - runner-data:/runner
+      - runner-home:/home/runner
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 3g
+    cpus: 1.25
+    stop_grace_period: 2m
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /runner/.runner && pgrep -f Runner.Listener >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  runner-data:
+  runner-home:

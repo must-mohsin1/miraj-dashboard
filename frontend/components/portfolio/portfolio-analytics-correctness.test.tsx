@@ -14,6 +14,15 @@ import type {
   PerformanceMetrics as PerformanceMetricsType,
 } from "@/lib/types";
 
+const replace = jest.fn();
+const searchParams = new URLSearchParams();
+
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ replace }),
+  usePathname: () => "/portfolio",
+  useSearchParams: () => searchParams,
+}));
+
 const METRICS: PerformanceMetricsType = {
   win_rate: 66.67,
   profit_factor: 6,
@@ -135,6 +144,7 @@ const CLOSED_ANALYTICS: ClosedPositionAnalyticsResponse = {
 
 afterEach(() => {
   jest.restoreAllMocks();
+  replace.mockClear();
 });
 
 describe("portfolio analytics Phase 0 truth labels", () => {
@@ -193,6 +203,10 @@ describe("portfolio analytics Phase 0 truth labels", () => {
     await user.click(screen.getByRole("tab", { name: "Closed Positions" }));
     expect(await screen.findByText("Closed-position overview")).toBeInTheDocument();
     expect(screen.getAllByText("+$49.23 USDT").length).toBeGreaterThan(0);
+    await waitFor(() => expect(replace).toHaveBeenCalledWith(
+      expect.stringContaining("/portfolio?tab=analytics&analytics_tab=closed-positions"),
+      { scroll: false },
+    ));
 
     const topProvenance = (await screen.findAllByLabelText("Closed-position analytics basis and history note"))[0];
     const filters = screen.getByRole("form", { name: "Closed-position analytics filters" });

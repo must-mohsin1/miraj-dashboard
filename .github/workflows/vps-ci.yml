@@ -1,0 +1,72 @@
+name: VPS CI
+
+# This repository is public. Keep this workflow push-only so code from fork
+# pull requests can never execute on the production-adjacent self-hosted runner.
+"on":
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vps-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python, frontend, and production build
+    runs-on: [self-hosted, linux, x64, miraj-ci]
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      JWT_SECRET_KEY: ci-test-key-not-for-production
+      MPLBACKEND: Agg
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Check out the pushed commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          clean: true
+          # A frontend design-token regression test diffs against its recorded
+          # baseline commit, so CI needs repository history for that assertion.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare per-job temporary directory
+        run: |
+          # RUNNER_TEMP is cleaned between jobs. Keeping test databases here
+          # prevents a long-lived self-hosted runner from filling /tmp.
+          mkdir -p "$RUNNER_TEMP/job-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/job-tmp" >> "$GITHUB_ENV"
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m venv .venv-ci
+          . .venv-ci/bin/activate
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check \
+            -r requirements.txt \
+            -r requirements-dash.txt \
+            pytest \
+            pytest-asyncio
+
+      - name: Run deterministic Python suites
+        run: |
+          . .venv-ci/bin/activate
+          bash scripts/ci_python_tests.sh
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test -- --runInBand
+
+      - name: Build the production frontend
+        working-directory: frontend
+        run: npm run build
