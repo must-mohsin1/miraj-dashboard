@@ -38,16 +38,17 @@ class User(Base):
     position_history = relationship("PositionHistory", back_populates="user", cascade="all, delete-orphan")
     order_history = relationship("OrderHistory", back_populates="user", cascade="all, delete-orphan")
     journal_entries = relationship("TradeJournalEntry", back_populates="user", cascade="all, delete-orphan")
+    monthly_profit_goals = relationship("MonthlyProfitGoal", back_populates="user", cascade="all, delete-orphan")
 
 
 class AlertChannel(Base):
-    """Per-user Telegram, Discord, email, or signed-webhook configuration."""
+    """Per-user Telegram, email, or signed-webhook configuration."""
 
     __tablename__ = "alert_channels"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    channel_type = Column(String(20), nullable=False)  # telegram / discord / email / webhook
+    channel_type = Column(String(20), nullable=False)  # telegram / email / webhook (discord retired)
     config = Column(Text, nullable=True)                # Channel-specific JSON configuration
     enabled = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
@@ -64,7 +65,7 @@ class AlertHistory(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     pair = Column(String(20), nullable=False, index=True)
-    channel = Column(String(20), nullable=False)   # telegram / discord / email / webhook
+    channel = Column(String(20), nullable=False)   # telegram / email / webhook (discord retired)
     score = Column(Float, nullable=True)
     direction = Column(String(10), nullable=True)  # LONG / SHORT
     message = Column(Text, nullable=True)
@@ -646,3 +647,44 @@ class RealtimeNotification(Base):
     last_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     sent_at = Column(DateTime, nullable=True)
+
+
+class MonthlyProfitGoal(Base):
+    """One user/exchange profit plan per calendar month."""
+
+    __tablename__ = "monthly_profit_goals"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "exchange",
+            "period_year",
+            "period_month",
+            name="uq_monthly_profit_goal_period",
+        ),
+        Index("ix_monthly_profit_goals_user_exchange", "user_id", "exchange"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exchange = Column(String(32), nullable=False, default="mexc")
+    period_year = Column(Integer, nullable=False)
+    period_month = Column(Integer, nullable=False)
+    timezone = Column(String(64), nullable=False, default="Asia/Karachi")
+    target_return_pct = Column(Float, nullable=False)
+    base_equity = Column(Float, nullable=True)
+    base_source = Column(String(32), nullable=True)
+    redeem_pct = Column(Float, nullable=False, default=0.0)
+    reinvest_pct = Column(Float, nullable=False, default=100.0)
+    status = Column(String(16), nullable=False, default="open")
+    opened_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+    closing_equity = Column(Float, nullable=True)
+    net_external_flows = Column(Float, nullable=True)
+    net_profit = Column(Float, nullable=True)
+    realized_return_pct = Column(Float, nullable=True)
+    declared_redeem_usd = Column(Float, nullable=True)
+    declared_reinvest_usd = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="monthly_profit_goals")

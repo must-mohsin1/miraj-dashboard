@@ -5,6 +5,7 @@ from backend.routes.charts import router as charts_router
 from backend.routes.dca_validation import router as dca_validation_router
 from backend.routes.decision_desk import router as decision_desk_router
 from backend.routes.desktop import router as desktop_router
+from backend.routes.goal import router as goal_router
 from backend.routes.history import router as history_router
 from backend.routes.journal import router as journal_router
 from backend.routes.macro import router as macro_router
@@ -20,7 +21,7 @@ from backend.routes.watchlist import router as watchlist_router
 
 __all__ = [
     "analytics_router", "auth_router", "charts_router", "dca_validation_router",
-    "decision_desk_router", "desktop_router", "history_router",
+    "decision_desk_router", "desktop_router", "goal_router", "history_router",
     "journal_router", "macro_router", "portfolio_router", "price_alerts_router",
     "results_router", "scan_router", "scan_diff_router", "settings_router", "stream_router",
     "trading_router", "watchlist_router",
