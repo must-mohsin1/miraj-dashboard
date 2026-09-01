@@ -86,7 +86,7 @@ describe("DecisionDesk", () => {
             pair: "BTC-USD",
             direction: "LONG",
             state: "ACTIONABLE",
-            channelType: "discord",
+            channelType: "telegram",
             status: "sent",
             sentAt: "2026-07-20T14:30:00Z",
             lastError: null,
@@ -95,7 +95,7 @@ describe("DecisionDesk", () => {
             pair: "ETH-USD",
             direction: "SHORT",
             state: "WATCH",
-            channelType: "discord",
+            channelType: "telegram",
             status: "failed",
             sentAt: null,
             lastError: "Webhook rejected",
@@ -105,7 +105,7 @@ describe("DecisionDesk", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Notification evidence" })).toBeInTheDocument();
-    expect(screen.getByText("BTC-USD — LONG — discord")).toBeInTheDocument();
+    expect(screen.getByText("BTC-USD — LONG — telegram")).toBeInTheDocument();
     expect(screen.getByText("Sent at: 2026-07-20T14:30:00Z")).toBeInTheDocument();
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("Error: Webhook rejected")).toBeInTheDocument();

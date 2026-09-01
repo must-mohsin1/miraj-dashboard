@@ -8,11 +8,12 @@ from dataclasses import asdict, dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.alerts import RETIRED_ALERT_CHANNEL_TYPES
 from backend.models import AlertChannel, RealtimeNotification, RealtimeSignal
 from backend.realtime.lifecycle import SignalEvaluation
 
 
-REALTIME_NOTIFICATION_CHANNEL_TYPES = {"telegram", "discord"}
+REALTIME_NOTIFICATION_CHANNEL_TYPES = {"telegram"} - RETIRED_ALERT_CHANNEL_TYPES
 
 
 @dataclass(frozen=True)

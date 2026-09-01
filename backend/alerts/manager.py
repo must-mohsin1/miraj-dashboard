@@ -7,7 +7,8 @@ Responsibilities
 2. **Dedup** — skip symbols already alerted within the cooldown period
    (configurable per-channel via ``ALERT_COOLDOWN_HOURS``, default 4h).
 3. **Channel routing** — iterate over the user's enabled ``AlertChannel``
-   rows and deliver via Telegram, Discord, email, or signed webhook.
+   rows and deliver via Telegram, email, or signed webhook. Discord is
+   retired and is never dispatched.
 4. **Webhook queueing** — commit signed webhook work before network delivery.
 5. **History logging** — persist every actual send attempt to ``AlertHistory``.
 
@@ -37,9 +38,9 @@ from backend.models import (
     SignalWebhookDelivery,
     User,
 )
+from backend.alerts import RETIRED_ALERT_CHANNEL_TYPES
 from backend.alerts.email import build_email_body, send_email
 from backend.alerts.telegram import format_alert_message, send_alert
-from backend.alerts.discord import build_embed, send_webhook
 from backend.alerts.webhook import build_signal_event
 from backend.alerts.webhook_outbox import enqueue_signal_webhook
 
@@ -305,15 +306,6 @@ async def _process_single_result(
         target=target,
         rationale=rationale,
     )
-    dc_embed = build_embed(
-        symbol=symbol,
-        score=score,
-        direction=direction,
-        entry=entry,
-        stop_loss=stop_loss,
-        target=target,
-        rationale=rationale,
-    )
 
     # ── Cooldown check (per symbol, per user) ───────────────────────
     cooldown_hours = DEFAULT_COOLDOWN_HOURS
@@ -361,6 +353,14 @@ async def _process_single_result(
         queued = False
         message_log = ""
         try:
+            if ch.channel_type in RETIRED_ALERT_CHANNEL_TYPES:
+                logger.debug(
+                    "Skipping retired %s channel %d for user %d",
+                    ch.channel_type,
+                    ch.id,
+                    user_id,
+                )
+                continue
             if ch.channel_type == "telegram":
                 chat_id = config.get("chat_id")
                 if chat_id:
@@ -369,17 +369,6 @@ async def _process_single_result(
                 else:
                     logger.warning(
                         "Telegram channel %d (user %d) is missing chat_id in config; skipping",
-                        ch.id,
-                        user_id,
-                    )
-            elif ch.channel_type == "discord":
-                webhook_url = config.get("webhook_url")
-                if webhook_url:
-                    success = await send_webhook(str(webhook_url), dc_embed)
-                    message_log = str(dc_embed)
-                else:
-                    logger.warning(
-                        "Discord channel %d (user %d) is missing webhook_url in config; skipping",
                         ch.id,
                         user_id,
                     )

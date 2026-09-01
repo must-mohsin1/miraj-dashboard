@@ -170,17 +170,14 @@ export function AlertPreferencesForm({
         </CardHeader>
         <CardContent>
           <p className="mb-4 text-sm text-slate-400">
-            Telegram can be configured in this dashboard today. Discord and
-            email delivery are coming soon and cannot be configured here.
+            Telegram can be configured in this dashboard today. Discord signal
+            delivery has been removed because it produced stale, unusable
+            alerts. Email delivery is coming soon and cannot be configured here.
           </p>
-          <dl className="mb-4 grid gap-2 rounded-lg border border-slate-800 p-3 text-sm sm:grid-cols-3">
+          <dl className="mb-4 grid gap-2 rounded-lg border border-slate-800 p-3 text-sm sm:grid-cols-2">
             <ChannelDeliveryState
               label="Telegram"
               state={deliveryState(channels, "telegram")}
-            />
-            <ChannelDeliveryState
-              label="Discord"
-              state={deliveryState(channels, "discord")}
             />
             <ChannelDeliveryState
               label="Email"
@@ -377,8 +374,7 @@ function summariseChannel(ch: AlertChannel): string {
     return chatId ? `Chat: ${String(chatId)}` : "Configured";
   }
   if (ch.channel_type === "discord") {
-    const webhook = cfg.webhook_url ?? cfg.id;
-    return webhook ? `Webhook: ${String(webhook).slice(0, 20)}…` : "Configured";
+    return "Retired — Discord signals are no longer delivered";
   }
   if (ch.channel_type === "email") {
     const email = cfg.email ?? cfg.address;

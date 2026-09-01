@@ -4,7 +4,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickChart, type LivePrices } from "@/components/candlestick-chart";
 import { LivePriceBadge } from "@/components/live-price-badge";
 import { IndicatorTogglePanel, DEFAULT_INDICATOR_VISIBILITY, type IndicatorVisibility } from "@/components/indicator-toggle-panel";
-import type { Candle, EmaData, FairValueGap, OrderBlock } from "@/lib/types";
+import { TimeframeSelector } from "@/components/timeframe-selector";
+import { buildEmaOverlay, buildIndicatorData } from "@/lib/chart-indicators";
+import type {
+  Candle,
+  CandlesResponse,
+  EmaData,
+  FairValueGap,
+  MacdData,
+  BollingerBandsData,
+  OrderBlock,
+  Timeframe,
+} from "@/lib/types";
 
 interface LiveCandlestickChartProps {
   symbol: string;
@@ -12,6 +23,9 @@ interface LiveCandlestickChartProps {
   emas?: EmaData | null;
   orderBlocks?: OrderBlock[] | null;
   fvgs?: FairValueGap[] | null;
+  rsi?: number[] | null;
+  macd?: MacdData | null;
+  bb?: BollingerBandsData | null;
   tradeLevels?: {
     entry?: number | null;
     stopLoss?: number | null;
@@ -22,16 +36,23 @@ interface LiveCandlestickChartProps {
 
 export function LiveCandlestickChart({
   symbol,
-  candles,
-  emas = null,
+  candles: scanCandles,
+  emas: scanEmas = null,
   orderBlocks = null,
   fvgs = null,
+  rsi: scanRsi = null,
+  macd: scanMacd = null,
+  bb: scanBb = null,
   tradeLevels = null,
   token: _serverToken,
 }: LiveCandlestickChartProps) {
   const [prices, setPrices] = useState<Record<string, { price: number; timestamp: number }>>({});
   const [isConnected, setIsConnected] = useState(false);
   const [indicators, setIndicators] = useState<IndicatorVisibility>(DEFAULT_INDICATOR_VISIBILITY);
+  const [timeframe, setTimeframe] = useState<Timeframe>("1d");
+  const [tfCandles, setTfCandles] = useState<Candle[] | null>(null);
+  const [tfError, setTfError] = useState<string | null>(null);
+  const [tfLoading, setTfLoading] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
   const symbols = useMemo(() => [symbol], [symbol]);
@@ -106,29 +127,98 @@ export function LiveCandlestickChart({
     };
   }, [symbols]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTimeframe() {
+      setTfLoading(true);
+      setTfError(null);
+      setTfCandles(null);
+      try {
+        const session = await fetch("/api/auth/session").then((r) => r.json());
+        const token = session?.user?.accessToken as string | undefined;
+        const headers: HeadersInit = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const res = await fetch(
+          `/api/v1/charts/${encodeURIComponent(symbol)}/candles?timeframe=${timeframe}&limit=300`,
+          { headers, cache: "no-store" }
+        );
+        if (!res.ok) {
+          throw new Error(`Candle fetch failed (${res.status})`);
+        }
+        const payload = (await res.json()) as CandlesResponse;
+        if (payload.timeframe !== timeframe) {
+          throw new Error("Candle response timeframe mismatch");
+        }
+        if (!cancelled) {
+          setTfCandles(payload.candles ?? []);
+        }
+      } catch {
+        if (!cancelled) {
+          setTfCandles(null);
+          setTfError(`${timeframe} candles unavailable.`);
+        }
+      } finally {
+        if (!cancelled) setTfLoading(false);
+      }
+    }
+    void loadTimeframe();
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, timeframe]);
+
+  const displayCandles = useMemo(() => {
+    if (tfCandles && tfCandles.length > 0) return tfCandles;
+    return timeframe === "1d" ? scanCandles : [];
+  }, [tfCandles, timeframe, scanCandles]);
+  const useScanSeries = timeframe === "1d" && (!tfCandles || tfCandles.length === 0);
+  const displayEmas = useMemo(
+    () => (useScanSeries && scanEmas ? scanEmas : buildEmaOverlay(displayCandles)),
+    [useScanSeries, scanEmas, displayCandles]
+  );
+  const indicatorData = useMemo(
+    () =>
+      buildIndicatorData(
+        displayCandles,
+        useScanSeries ? { rsi: scanRsi, macd: scanMacd, bb: scanBb } : null,
+        { preferScan: useScanSeries }
+      ),
+    [displayCandles, useScanSeries, scanRsi, scanMacd, scanBb]
+  );
+
   const livePrices: LivePrices | null = isConnected && Object.keys(prices).length > 0
     ? prices
     : null;
 
   const liveTick = symbol ? prices[symbol.toUpperCase()] : undefined;
 
+  const handleTimeframeChange = (nextTimeframe: Timeframe) => {
+    if (nextTimeframe === timeframe) return;
+    setTfCandles(null);
+    setTfError(null);
+    setTimeframe(nextTimeframe);
+  };
+
   return (
     <div className="w-full">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium text-slate-300">
-          Price Chart — {symbol}
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8E8778]">
+          Price chart — {symbol}
         </h3>
         <div className="flex items-center gap-2">
+          <TimeframeSelector
+            timeframe={timeframe}
+            onTimeframeChange={handleTimeframeChange}
+          />
           <LivePriceBadge
             symbol={symbol}
             price={liveTick}
             connected={isConnected}
           />
           {isConnected && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-700/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400">
+            <span className="inline-flex items-center gap-1 border border-[#2A2620] bg-[#1D1A16] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#6CA98F]">
               <span className="relative flex h-2 w-2" aria-hidden>
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" style={{ animationDuration: "1.5s" }} />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-[#6CA98F]" />
               </span>
               Live
             </span>
@@ -136,18 +226,39 @@ export function LiveCandlestickChart({
         </div>
       </div>
 
+      {tfError && (
+        <p className="mb-2 text-xs text-[#8E8778]" role="status">
+          {tfError}
+          {timeframe === "1d" && scanCandles.length > 0
+            ? " Showing scan daily candles."
+            : ` ${timeframe} candles unavailable.`}
+        </p>
+      )}
+      {tfLoading && (
+        <p className="mb-2 text-xs text-[#8E8778]" aria-busy="true">
+          Loading {timeframe} candles…
+        </p>
+      )}
+
       <IndicatorTogglePanel visibility={indicators} onChange={setIndicators} />
 
-      <CandlestickChart
-        candles={candles}
-        emas={emas}
-        orderBlocks={orderBlocks}
-        fvgs={fvgs}
-        symbol={symbol}
-        tradeLevels={tradeLevels}
-        livePrices={livePrices}
-        indicators={indicators}
-      />
+      {displayCandles.length === 0 ? (
+        <p className="border border-[#2A2620] bg-[#161411] p-6 text-sm text-[#8E8778]">
+          No candles for this timeframe.
+        </p>
+      ) : (
+        <CandlestickChart
+          candles={displayCandles}
+          emas={displayEmas}
+          orderBlocks={timeframe === "1d" ? orderBlocks : null}
+          fvgs={timeframe === "1d" ? fvgs : null}
+          symbol={symbol}
+          tradeLevels={tradeLevels}
+          livePrices={livePrices}
+          indicators={indicators}
+          indicatorData={indicatorData}
+        />
+      )}
     </div>
   );
 }

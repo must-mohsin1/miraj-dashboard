@@ -1,7 +1,7 @@
 """Signed outbound webhook delivery for confirmed Miraj signals.
 
 Webhook channels intentionally receive only the normalized alert fields that
-the existing Telegram/Discord/email paths expose.  Raw analysis payloads,
+the existing Telegram/email paths expose.  Raw analysis payloads,
 exchange credentials, and broker actions never cross this boundary.
 """
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   createChart,
@@ -17,11 +17,20 @@ import {
   type HistogramData,
   type LineData,
   type IPriceLine,
+  type MouseEventParams,
+  type Time,
 } from "lightweight-charts";
 
 import { useMediaQuery } from "@/hooks/use-media-query";
 import type { Candle, EmaData, OrderBlock, FairValueGap } from "@/lib/types";
-import type { IndicatorVisibility } from "@/components/indicator-toggle-panel";
+import {
+  DEFAULT_INDICATOR_VISIBILITY,
+  type IndicatorVisibility,
+} from "@/components/indicator-toggle-panel";
+import {
+  ChartDrawingToolbar,
+  type ChartDrawingTool,
+} from "@/components/chart-drawing-toolbar";
 
 /**
  * CandlestickChart — Client Component (lightweight-charts v5).
@@ -33,7 +42,7 @@ import type { IndicatorVisibility } from "@/components/indicator-toggle-panel";
  *   - Pane 2: RSI line with 30 / 70 overbought/oversold guides
  *   - Pane 3: MACD histogram + MACD line + signal line
  *
- * The chart is dark-themed (slate-950 canvas) matching the app shell.
+ * The chart uses the INK theme shared by the analysis workspace.
  * Series visibility for the indicator panes is controlled by the
  * ``indicators`` prop (driven by IndicatorTogglePanel + localStorage).
  */
@@ -41,15 +50,17 @@ import type { IndicatorVisibility } from "@/components/indicator-toggle-panel";
 /* ── Theme constants matching the app shell ──────────────────────────────── */
 
 const COLORS = {
-  background: "#0f172a", // slate-950
-  textColor: "#94a3b8", // slate-400
-  grid: "#1e293b", // slate-800
-  border: "#334155", // slate-700
-  bullish: "#22c55e", // green-500
-  bearish: "#ef4444", // red-500
-  volBullish: "rgba(34, 197, 94, 0.45)",
-  volBearish: "rgba(239, 68, 68, 0.45)",
+  background: "#0F0E0C",
+  textColor: "#8E8778",
+  grid: "#2A2620",
+  border: "#2A2620",
+  bullish: "#6CA98F",
+  bearish: "#C96A55",
+  volBullish: "rgba(108, 169, 143, 0.45)",
+  volBearish: "rgba(201, 106, 85, 0.45)",
 };
+
+const DRAWING_COLOR = "#C2A36B";
 
 const EMA_COLORS: Record<string, string> = {
   ema_9: "#60a5fa", // blue-400
@@ -69,17 +80,91 @@ const EMA_LABELS: Record<string, string> = {
 
 const BB_COLORS = {
   upper: "#38bdf8", // sky-400
-  middle: "#94a3b8", // slate-400
+  middle: "#8E8778",
   lower: "#38bdf8",
 };
 
 const RSI_COLOR = "#f59e0b"; // amber-500
-const MACD_LINE_COLOR = "#22c55e"; // green
-const MACD_SIGNAL_COLOR = "#ef4444"; // red
-const MACD_HIST_UP = "rgba(34, 197, 94, 0.6)";
-const MACD_HIST_DOWN = "rgba(239, 68, 68, 0.6)";
+const MACD_LINE_COLOR = "#6CA98F";
+const MACD_SIGNAL_COLOR = "#C96A55";
+const MACD_HIST_UP = "rgba(108, 169, 143, 0.6)";
+const MACD_HIST_DOWN = "rgba(201, 106, 85, 0.6)";
 
 const SUB_PANE_HEIGHT = 150;
+
+type DrawingPoint = { time: Time; value: number };
+type ChartDrawing =
+  | { kind: "horizontal"; price: number }
+  | { kind: "trend"; start: DrawingPoint; end: DrawingPoint }
+  | { kind: "fib"; start: DrawingPoint; end: DrawingPoint };
+
+type DrawingArtifact =
+  | { kind: "priceLine"; line: IPriceLine }
+  | { kind: "series"; series: ISeriesApi<"Line"> };
+
+const FIB_LEVELS = [0, 0.382, 0.5, 0.618, 1] as const;
+
+function timeKey(time: Time): number {
+  if (typeof time === "number") return time;
+  if (typeof time === "string") return Date.parse(time);
+  return Date.UTC(time.year, time.month - 1, time.day) / 1000;
+}
+
+function renderDrawing(
+  chart: IChartApi,
+  candleSeries: ISeriesApi<"Candlestick">,
+  drawing: ChartDrawing
+): DrawingArtifact[] {
+  if (drawing.kind === "horizontal") {
+    return [
+      {
+        kind: "priceLine",
+        line: candleSeries.createPriceLine({
+          price: drawing.price,
+          color: DRAWING_COLOR,
+          lineWidth: 1,
+          lineStyle: LineStyle.Solid,
+          lineVisible: true,
+          axisLabelVisible: true,
+          title: "H Line",
+        }),
+      },
+    ];
+  }
+
+  if (drawing.kind === "trend") {
+    const points = [drawing.start, drawing.end].sort(
+      (a, b) => timeKey(a.time) - timeKey(b.time)
+    );
+    if (timeKey(points[0].time) === timeKey(points[1].time)) return [];
+    const series = chart.addSeries(LineSeries, {
+      color: DRAWING_COLOR,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      title: "Trend",
+    });
+    series.setData(points);
+    return [{ kind: "series", series }];
+  }
+
+  return FIB_LEVELS.map((level) => {
+    const price = drawing.start.value + (drawing.end.value - drawing.start.value) * level;
+    return {
+      kind: "priceLine" as const,
+      line: candleSeries.createPriceLine({
+        price,
+        color: DRAWING_COLOR,
+        lineWidth: level === 0 || level === 1 ? 2 : 1,
+        lineStyle: level === 0 || level === 1 ? LineStyle.Solid : LineStyle.Dashed,
+        lineVisible: true,
+        axisLabelVisible: true,
+        title: `Fib ${Math.round(level * 1000) / 10}%`,
+      }),
+    };
+  });
+}
 
 /* ── Time conversion ─────────────────────────────────────────────────────── */
 
@@ -163,23 +248,70 @@ export function CandlestickChart({
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastCandleRef = useRef<CandlestickData | null>(null);
+  const drawingArtifactsRef = useRef<DrawingArtifact[]>([]);
+  const drawingsRef = useRef<ChartDrawing[]>([]);
+  const pendingDrawingRef = useRef<DrawingPoint | null>(null);
+  const activeToolRef = useRef<ChartDrawingTool>("cursor");
+  const [activeTool, setActiveTool] = useState<ChartDrawingTool>("cursor");
+  const [drawings, setDrawings] = useState<ChartDrawing[]>([]);
 
   const isMobile = useMediaQuery("(max-width: 768px)");
 
   // Resolve indicator visibility defaults
-  const vis = indicators;
+  const vis = indicators ?? DEFAULT_INDICATOR_VISIBILITY;
 
   // Compute total chart height based on visible panes
   const paneCount = [
     true, // main pane always visible
-    vis?.volume ?? true, // volume
-    vis?.rsi ?? false, // RSI
-    vis?.macd ?? false, // MACD
+    vis.volume, // volume
+    vis.rsi, // RSI
+    vis.macd, // MACD
   ].filter(Boolean).length;
 
   const mainPaneHeight = isMobile ? 280 : 420;
   const subPaneCount = paneCount - 1; // exclude main
   const chartHeight = mainPaneHeight + subPaneCount * SUB_PANE_HEIGHT;
+
+  const selectDrawingTool = (tool: ChartDrawingTool) => {
+    pendingDrawingRef.current = null;
+    activeToolRef.current = tool;
+    setActiveTool(tool);
+  };
+
+  const clearDrawings = () => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    if (chart && candleSeries) {
+      for (const artifact of drawingArtifactsRef.current) {
+        try {
+          if (artifact.kind === "priceLine") {
+            candleSeries.removePriceLine(artifact.line);
+          } else {
+            chart.removeSeries(artifact.series);
+          }
+        } catch (error) {
+          console.debug("[chart] drawing removal failed:", error);
+        }
+      }
+    }
+    drawingArtifactsRef.current = [];
+    drawingsRef.current = [];
+    pendingDrawingRef.current = null;
+    activeToolRef.current = "cursor";
+    setDrawings([]);
+    setActiveTool("cursor");
+  };
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || activeToolRef.current === "cursor") return;
+      pendingDrawingRef.current = null;
+      activeToolRef.current = "cursor";
+      setActiveTool("cursor");
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -231,7 +363,7 @@ export function CandlestickChart({
         attributionLogo: false,
         panes: {
           separatorColor: COLORS.border,
-          separatorHoverColor: "rgba(148, 163, 184, 0.2)",
+          separatorHoverColor: "rgba(194, 163, 107, 0.25)",
         },
       },
       grid: {
@@ -244,13 +376,13 @@ export function CandlestickChart({
           color: COLORS.border,
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: "#334155",
+          labelBackgroundColor: COLORS.border,
         },
         horzLine: {
           color: COLORS.border,
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: "#334155",
+          labelBackgroundColor: COLORS.border,
         },
       },
       rightPriceScale: {
@@ -293,13 +425,66 @@ export function CandlestickChart({
     candleSeriesRef.current = candleSeries;
     lastCandleRef.current = { ...candleData[candleData.length - 1] };
 
+    drawingArtifactsRef.current = drawingsRef.current.flatMap((drawing) =>
+      renderDrawing(chart, candleSeries, drawing)
+    );
+
+    const finishDrawing = () => {
+      pendingDrawingRef.current = null;
+      activeToolRef.current = "cursor";
+      setActiveTool("cursor");
+    };
+
+    const commitDrawing = (drawing: ChartDrawing) => {
+      const nextDrawings = [...drawingsRef.current, drawing];
+      drawingsRef.current = nextDrawings;
+      setDrawings(nextDrawings);
+      drawingArtifactsRef.current.push(...renderDrawing(chart, candleSeries, drawing));
+    };
+
+    const handleChartClick = (param: MouseEventParams<Time>) => {
+      const tool = activeToolRef.current;
+      if (
+        tool === "cursor" ||
+        param.paneIndex !== 0 ||
+        param.time == null ||
+        param.point == null
+      ) {
+        return;
+      }
+
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price == null) return;
+      const point: DrawingPoint = { time: param.time, value: Number(price) };
+
+      if (tool === "horizontal") {
+        commitDrawing({ kind: "horizontal", price: point.value });
+        finishDrawing();
+        return;
+      }
+
+      const start = pendingDrawingRef.current;
+      if (!start) {
+        pendingDrawingRef.current = point;
+        return;
+      }
+
+      if (tool === "trend" && timeKey(start.time) === timeKey(point.time)) {
+        return;
+      }
+
+      commitDrawing({ kind: tool, start, end: point });
+      finishDrawing();
+    };
+    chart.subscribeClick(handleChartClick);
+
     const candleTimes = candleData.map((c) => c.time as number);
 
     // ── EMA overlay lines (pane 0) ──────────────────────────────────
     if (vis?.ema && emas) {
       for (const [periodKey, values] of Object.entries(emas)) {
         if (!Array.isArray(values) || values.length === 0) continue;
-        const color = EMA_COLORS[periodKey] ?? "#94a3b8";
+        const color = EMA_COLORS[periodKey] ?? COLORS.textColor;
         const lineData: LineData[] = [];
         const offset = candleTimes.length - values.length;
         for (let i = 0; i < values.length; i++) {
@@ -380,8 +565,8 @@ export function CandlestickChart({
           time: lastTime,
           value: price,
           color: isBuy
-            ? `rgba(34, 197, 94, ${0.15 + 0.5 * (totalVol / maxVol)})`
-            : `rgba(239, 68, 68, ${0.15 + 0.5 * (totalVol / maxVol)})`,
+            ? `rgba(108, 169, 143, ${0.15 + 0.5 * (totalVol / maxVol)})`
+            : `rgba(201, 106, 85, ${0.15 + 0.5 * (totalVol / maxVol)})`,
         });
       }
       // We can't easily draw horizontal bars in lightweight-charts v5
@@ -400,8 +585,8 @@ export function CandlestickChart({
           candleSeries.createPriceLine({
             price,
             color: isBuy
-              ? `rgba(34, 197, 94, ${0.3 + 0.4 * (v / maxVol)})`
-              : `rgba(239, 68, 68, ${0.3 + 0.4 * (v / maxVol)})`,
+              ? `rgba(108, 169, 143, ${0.3 + 0.4 * (v / maxVol)})`
+              : `rgba(201, 106, 85, ${0.3 + 0.4 * (v / maxVol)})`,
             lineWidth: 2,
             lineStyle: LineStyle.Dotted,
             lineVisible: true,
@@ -414,123 +599,126 @@ export function CandlestickChart({
 
     // ── Volume histogram (pane 1) ────────────────────────────────────
     let nextPane = 1;
-    if (vis?.volume && volData.length > 0) {
-      const volSeries = chart.addSeries(
-        HistogramSeries,
-        {
-          priceFormat: { type: "volume" },
-          priceScaleId: "vol",
-        },
-        nextPane
-      );
-      chart.priceScale("vol", nextPane).applyOptions({
-        scaleMargins: { top: 0.7, bottom: 0 },
-      });
-      volSeries.setData(volData);
-      volSeries.priceScale().applyOptions({ visible: false });
-      nextPane++;
+    if (vis.volume && volData.length > 0) {
+      const volumePaneIdx = nextPane++;
+      try {
+        const volSeries = chart.addSeries(
+          HistogramSeries,
+          {
+            priceFormat: { type: "volume" },
+            priceScaleId: "vol",
+          },
+          volumePaneIdx
+        );
+        volSeries.setData(volData);
+        volSeries.priceScale().applyOptions({
+          visible: false,
+          scaleMargins: { top: 0.7, bottom: 0 },
+        });
+      } catch (error) {
+        console.debug("[chart] volume pane setup failed:", error);
+      }
     }
 
     // ── RSI sub-pane ─────────────────────────────────────────────────
-    if (vis?.rsi && indicatorData?.rsi && indicatorData.rsi.length > 0) {
-      const rsiPaneIdx = nextPane;
-      const rsiSeries = chart.addSeries(
-        LineSeries,
-        {
-          color: RSI_COLOR,
-          lineWidth: 2,
-          priceLineVisible: false,
-          lastValueVisible: true,
-          title: "RSI(14)",
-        },
-        rsiPaneIdx
-      );
-      rsiSeries.setData(indicatorData.rsi);
+    if (vis.rsi && indicatorData?.rsi && indicatorData.rsi.length > 0) {
+      const rsiPaneIdx = nextPane++;
+      try {
+        const rsiSeries = chart.addSeries(
+          LineSeries,
+          {
+            color: RSI_COLOR,
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+            title: "RSI(14)",
+          },
+          rsiPaneIdx
+        );
+        rsiSeries.setData(indicatorData.rsi);
 
-      // RSI 30 / 70 horizontal guides
-      rsiSeries.createPriceLine({
-        price: 70,
-        color: "rgba(239, 68, 68, 0.4)",
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        lineVisible: true,
-        axisLabelVisible: true,
-        title: "OB 70",
-      });
-      rsiSeries.createPriceLine({
-        price: 30,
-        color: "rgba(34, 197, 94, 0.4)",
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        lineVisible: true,
-        axisLabelVisible: true,
-        title: "OS 30",
-      });
-      // RSI pane price scale — fix at 0–100
-      rsiSeries.priceScale().applyOptions({
-        scaleMargins: { top: 0.1, bottom: 0.1 },
-        autoScale: false,
-      });
-      nextPane++;
+        // RSI 30 / 70 horizontal guides
+        rsiSeries.createPriceLine({
+          price: 70,
+          color: "rgba(201, 106, 85, 0.4)",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          lineVisible: true,
+          axisLabelVisible: true,
+          title: "OB 70",
+        });
+        rsiSeries.createPriceLine({
+          price: 30,
+          color: "rgba(108, 169, 143, 0.4)",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          lineVisible: true,
+          axisLabelVisible: true,
+          title: "OS 30",
+        });
+        rsiSeries.priceScale().applyOptions({
+          scaleMargins: { top: 0.1, bottom: 0.1 },
+          autoScale: false,
+        });
+      } catch (error) {
+        console.debug("[chart] RSI pane setup failed:", error);
+      }
     }
 
     // ── MACD sub-pane ────────────────────────────────────────────────
-    if (vis?.macd && indicatorData?.macd) {
-      const macdPaneIdx = nextPane;
-      const { macd, signal, histogram } = indicatorData.macd;
+    if (vis.macd && indicatorData?.macd) {
+      const macdPaneIdx = nextPane++;
+      try {
+        const { macd, signal, histogram } = indicatorData.macd;
 
-      // Histogram bars
-      if (histogram.length > 0) {
-        const histData: HistogramData[] = histogram.map((p) => ({
-          time: p.time,
-          value: p.value,
-          color:
-            p.value >= 0
-              ? MACD_HIST_UP
-              : MACD_HIST_DOWN,
-        }));
-        const histSeries = chart.addSeries(
-          HistogramSeries,
-          {
-            priceLineVisible: false,
-            lastValueVisible: false,
-            title: "MACD Hist",
-          },
-          macdPaneIdx
-        );
-        histSeries.setData(histData);
-      }
+        if (histogram.length > 0) {
+          const histData: HistogramData[] = histogram.map((p) => ({
+            time: p.time,
+            value: p.value,
+            color: p.value >= 0 ? MACD_HIST_UP : MACD_HIST_DOWN,
+          }));
+          const histSeries = chart.addSeries(
+            HistogramSeries,
+            {
+              priceLineVisible: false,
+              lastValueVisible: false,
+              title: "MACD Hist",
+            },
+            macdPaneIdx
+          );
+          histSeries.setData(histData);
+        }
 
-      // MACD line
-      if (macd.length > 0) {
-        chart.addSeries(
-          LineSeries,
-          {
-            color: MACD_LINE_COLOR,
-            lineWidth: 2,
-            priceLineVisible: false,
-            lastValueVisible: true,
-            title: "MACD",
-          },
-          macdPaneIdx
-        ).setData(macd);
-      }
+        if (macd.length > 0) {
+          chart.addSeries(
+            LineSeries,
+            {
+              color: MACD_LINE_COLOR,
+              lineWidth: 2,
+              priceLineVisible: false,
+              lastValueVisible: true,
+              title: "MACD",
+            },
+            macdPaneIdx
+          ).setData(macd);
+        }
 
-      // Signal line
-      if (signal.length > 0) {
-        chart.addSeries(
-          LineSeries,
-          {
-            color: MACD_SIGNAL_COLOR,
-            lineWidth: 2,
-            priceLineVisible: false,
-            lastValueVisible: true,
-            title: "Signal",
-          },
-          macdPaneIdx
-        ).setData(signal);
+        if (signal.length > 0) {
+          chart.addSeries(
+            LineSeries,
+            {
+              color: MACD_SIGNAL_COLOR,
+              lineWidth: 2,
+              priceLineVisible: false,
+              lastValueVisible: true,
+              title: "Signal",
+            },
+            macdPaneIdx
+          ).setData(signal);
+        }
+      } catch (error) {
+        console.debug("[chart] MACD pane setup failed:", error);
       }
-      nextPane++;
     }
 
     // ── Order block zones (price lines on candle series) ─────────────
@@ -538,7 +726,9 @@ export function CandlestickChart({
       for (const ob of orderBlocks) {
         if (ob.price_high == null && ob.price_low == null) continue;
         const isBull = (ob.type ?? "bullish").toLowerCase() !== "bearish";
-        const color = isBull ? "rgba(34, 197, 94, 0.5)" : "rgba(239, 68, 68, 0.5)";
+        const color = isBull
+          ? "rgba(108, 169, 143, 0.5)"
+          : "rgba(201, 106, 85, 0.5)";
         if (ob.price_high != null) {
           priceLinesRef.current.push(
             candleSeries.createPriceLine({
@@ -621,7 +811,7 @@ export function CandlestickChart({
         priceLinesRef.current.push(
           candleSeries.createPriceLine({
             price: tradeLevels.stopLoss,
-            color: "#ef4444",
+            color: COLORS.bearish,
             lineWidth: 2,
             lineStyle: LineStyle.Solid,
             lineVisible: true,
@@ -636,7 +826,7 @@ export function CandlestickChart({
           priceLinesRef.current.push(
             candleSeries.createPriceLine({
               price: t,
-              color: "#22c55e",
+              color: COLORS.bullish,
               lineWidth: 1,
               lineStyle: LineStyle.Dotted,
               lineVisible: true,
@@ -663,7 +853,9 @@ export function CandlestickChart({
 
     return () => {
       resizeObserver.disconnect();
+      chart.unsubscribeClick(handleChartClick);
       priceLinesRef.current = [];
+      drawingArtifactsRef.current = [];
       candleSeriesRef.current = null;
       lastCandleRef.current = null;
       chart.remove();
@@ -716,7 +908,7 @@ export function CandlestickChart({
 
   if (!candles || candles.length === 0) {
     return (
-      <div className="flex h-48 w-full items-center justify-center rounded-xl border border-slate-800 bg-slate-900/60 text-sm text-slate-500">
+      <div className="flex h-48 w-full items-center justify-center border border-[#2A2620] bg-[#0F0E0C] text-sm text-[#8E8778]">
         No candle data available for chart rendering.
       </div>
     );
@@ -724,10 +916,19 @@ export function CandlestickChart({
 
   return (
     <div className="w-full">
+      <ChartDrawingToolbar
+        activeTool={activeTool}
+        onToolChange={selectDrawingTool}
+        onClear={clearDrawings}
+        hasDrawings={drawings.length > 0}
+      />
       <div
         ref={containerRef}
-        className="w-full rounded-xl border border-slate-800 bg-slate-950"
-        style={{ minHeight: chartHeight }}
+        className="w-full border border-[#2A2620] bg-[#0F0E0C]"
+        style={{
+          minHeight: chartHeight,
+          cursor: activeTool === "cursor" ? undefined : "crosshair",
+        }}
       />
     </div>
   );

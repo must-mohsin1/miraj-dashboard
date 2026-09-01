@@ -31,6 +31,7 @@ from backend.routes import (
     dca_validation_router,
     decision_desk_router,
     desktop_router,
+    goal_router,
     history_router,
     journal_router,
     macro_router,
@@ -101,13 +102,6 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "TELEGRAM_CHAT_ID is set but TELEGRAM_BOT_TOKEN is not — "
             "alerts will not be delivered. Set TELEGRAM_BOT_TOKEN in .env"
-        )
-
-    _discord_url = _os.environ.get("DISCORD_WEBHOOK_URL", "")
-    if _discord_url and not _discord_url.startswith("https://discord.com/api/webhooks/"):
-        logger.warning(
-            "DISCORD_WEBHOOK_URL does not look like a valid Discord webhook URL "
-            "(must start with https://discord.com/api/webhooks/)"
         )
 
     _vault_path = _os.environ.get("OBSIDIAN_VAULT_PATH", "")
@@ -194,6 +188,7 @@ app.include_router(trading_router)
 app.include_router(dca_validation_router)
 app.include_router(decision_desk_router)
 app.include_router(desktop_router)
+app.include_router(goal_router)
 
 
 # ── Simple health / protected check ─────────────────────────────────────────

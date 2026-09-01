@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.alerts import RETIRED_ALERT_CHANNEL_TYPES
 from backend.auth import get_current_user
 from backend.database import get_session
 from backend.models import (
@@ -66,10 +67,10 @@ def _channel_is_configured(channel: AlertChannel) -> bool:
         return False
     if not isinstance(config, dict):
         return False
+    if channel.channel_type in RETIRED_ALERT_CHANNEL_TYPES:
+        return False
     if channel.channel_type == "telegram":
         return bool(config.get("chat_id"))
-    if channel.channel_type == "discord":
-        return bool(config.get("webhook_url"))
     if channel.channel_type == "webhook":
         return bool(config.get("webhook_url") and config.get("signing_secret"))
     return False
@@ -168,6 +169,7 @@ async def now(
             updated_at=channel.updated_at,
         )
         for channel in channel_result.scalars()
+        if channel.channel_type not in RETIRED_ALERT_CHANNEL_TYPES
     ]
     notification_outbox = [
         DecisionDeskNotificationOutboxItem(
@@ -183,6 +185,7 @@ async def now(
             error=_safe_notification_error(notification.last_error),
         )
         for notification, signal, channel in outbox_result.all()
+        if channel.channel_type not in RETIRED_ALERT_CHANNEL_TYPES
     ]
 
     # A snapshot is written only after the authenticated, read-only portfolio

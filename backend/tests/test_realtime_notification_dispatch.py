@@ -51,7 +51,7 @@ def test_stale_transition_is_persisted_but_not_enqueued_for_delivery():
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
             session.add(User(id=22, username="stale", email="stale@example.com", hashed_password="x"))
-            session.add(AlertChannel(user_id=22, channel_type="discord", config="{}", enabled=1))
+            session.add(AlertChannel(user_id=22, channel_type="telegram", config='{"chat_id":"1"}', enabled=1))
             signal = RealtimeSignal(
                 user_id=22, pair="DOGEUSDT", direction="SHORT", state="STALE", dedup_key="DOGEUSDT:SHORT:STALE:1"
             )
@@ -60,6 +60,75 @@ def test_stale_transition_is_persisted_but_not_enqueued_for_delivery():
             evaluation = SignalEvaluation(SignalState.STALE, False, "DOGEUSDT:SHORT:STALE", ("fresh market data",))
             await enqueue_transition_notifications(session, signal, evaluation)
             assert (await session.execute(select(RealtimeNotification))).scalars().all() == []
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_discord_channels_are_not_enqueued_for_realtime_delivery():
+    async def scenario():
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            session.add(User(id=24, username="discord-retired", email="discord-retired@example.com", hashed_password="x"))
+            telegram = AlertChannel(user_id=24, channel_type="telegram", config='{"chat_id":"1"}', enabled=1)
+            discord = AlertChannel(
+                user_id=24,
+                channel_type="discord",
+                config='{"webhook_url":"https://discord.com/api/webhooks/xxx"}',
+                enabled=1,
+            )
+            signal = RealtimeSignal(
+                user_id=24,
+                pair="BTCUSDT",
+                direction="LONG",
+                state="ACTIONABLE",
+                dedup_key="BTCUSDT:LONG:ACTIONABLE:1",
+            )
+            session.add_all([telegram, discord, signal])
+            await session.flush()
+            evaluation = SignalEvaluation(SignalState.ACTIONABLE, True, "BTCUSDT:LONG:ACTIONABLE", ())
+            await enqueue_transition_notifications(session, signal, evaluation)
+            rows = (await session.execute(select(RealtimeNotification))).scalars().all()
+            assert [row.channel_id for row in rows] == [telegram.id]
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_pending_discord_notifications_are_cancelled():
+    async def scenario():
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            session.add(User(id=25, username="discord-pending", email="discord-pending@example.com", hashed_password="x"))
+            channel = AlertChannel(
+                user_id=25,
+                channel_type="discord",
+                config='{"webhook_url":"https://discord.com/api/webhooks/xxx"}',
+                enabled=1,
+            )
+            signal = RealtimeSignal(
+                user_id=25,
+                pair="ETHUSDT",
+                direction="SHORT",
+                state="ACTIONABLE",
+                dedup_key="ETHUSDT:SHORT:ACTIONABLE:1",
+            )
+            session.add_all([channel, signal])
+            await session.flush()
+            session.add(RealtimeNotification(signal_id=signal.id, channel_id=channel.id, dedup_key=signal.dedup_key))
+            await session.commit()
+
+        await dispatch_pending_notifications(factory)
+        async with factory() as session:
+            row = (await session.execute(select(RealtimeNotification))).scalar_one()
+            assert row.status == "cancelled"
+            assert row.last_error == "Discord signal delivery has been retired"
         await engine.dispose()
 
     asyncio.run(scenario())

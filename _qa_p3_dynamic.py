@@ -91,25 +91,6 @@ def a2_telegram_minimal():
     assert "SHORT" in msg
 
 
-def a3_discord_full():
-    """Discord embed has correct title, colour, fields."""
-    from backend.alerts.discord import build_embed
-    embed = build_embed(symbol="BTC-USD", score=85.5, direction="LONG",
-                         entry=65000.0, stop_loss=64000.0, target=68000.0, rationale="Test")
-    assert embed["title"] == "Trade Alert: BTC-USD"
-    assert embed["color"] == 0x00FF00  # GREEN for LONG
-    assert "timestamp" in embed
-    fields = {f["name"]: f["value"] for f in embed["fields"]}
-    assert "\U0001f3f7\ufe0f Symbol" in fields
-
-
-def a4_discord_short_red():
-    """SHORT direction produces RED colour."""
-    from backend.alerts.discord import build_embed
-    embed = build_embed(symbol="ETH-USD", score=30.0, direction="SHORT")
-    assert embed["color"] == 0xFF0000  # RED for SHORT
-
-
 def a5_digest_empty():
     """Empty digest = 'No scans run today'."""
     from backend.alerts.digest import build_digest_message
@@ -261,8 +242,6 @@ def run_sync_tests():
     tests = [
         ("Telegram format - full", a1_telegram_full),
         ("Telegram format - minimal", a2_telegram_minimal),
-        ("Discord embed - full", a3_discord_full),
-        ("Discord embed - SHORT=red", a4_discord_short_red),
         ("Digest - empty day", a5_digest_empty),
         ("Digest - with data", a6_digest_with_data),
         ("Digest - summary counts", a7_digest_summary),
@@ -406,18 +385,18 @@ async def run_async_tests():
         u, t = await _make_user(s)
         s.add(AlertChannel(user_id=u.id, channel_type="telegram",
                            config=json.dumps({"chat_id": "12345"}), enabled=1))
-        s.add(AlertChannel(user_id=u.id, channel_type="discord",
-                           config=json.dumps({"webhook_url": "https://discord.com/api/webhooks/t"}), enabled=1))
+        s.add(AlertChannel(user_id=u.id, channel_type="email",
+                           config=json.dumps({"email_to": "user@example.com"}), enabled=1))
         await s.flush()
         r = _sr("BTC-USD", 85.0); r["trade_plan"]["entry"] = 100.0
         with (
             patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mt,
-            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as md,
+            patch("backend.alerts.manager.send_email", return_value=True) as me,
         ):
             os_ = await process_scan_results(s, {u.id: [r]})
-        mt.assert_awaited_once(); md.assert_awaited_once()
-        assert set(os_[0]["channels_sent"]) == {"telegram", "discord"}
-    p("Multi-channel routing (Telegram + Discord)")
+        mt.assert_awaited_once(); me.assert_called_once()
+        assert set(os_[0]["channels_sent"]) == {"telegram", "email"}
+    p("Multi-channel routing (Telegram + email)")
 
     # ── b6: disabled channel ──
     _init_db_async(); factory = get_session_factory()

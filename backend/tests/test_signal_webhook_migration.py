@@ -29,8 +29,13 @@ def test_signal_webhook_outbox_migration_round_trip(tmp_path, monkeypatch):
         foreign_keys = list(
             connection.execute("PRAGMA foreign_key_list(signal_webhook_deliveries)")
         )
+        goal_table = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='monthly_profit_goals'"
+        ).fetchone()
 
-    assert version == "20260809_signal_webhook_outbox"
+    assert version == "20260831_monthly_profit_goals"
+    assert goal_table is not None
     assert {
         "delivery_id",
         "payload",

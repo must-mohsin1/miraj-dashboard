@@ -2,7 +2,7 @@
 
 Miraj can deliver an already-confirmed trade alert to a user-controlled HTTPS
 endpoint. Webhooks are another alert channel: they use the same per-pair enable,
-threshold, notification-channel, and cooldown rules as Telegram, Discord, and
+threshold, notification-channel, and cooldown rules as Telegram and
 email. A high score alone is not enough; the scan's trade plan must contain the
 literal `"trade_decision": true` confirmation.
 

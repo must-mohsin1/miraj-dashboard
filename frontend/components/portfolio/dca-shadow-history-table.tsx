@@ -37,7 +37,7 @@ export function DcaShadowHistoryTable({ history }: DcaShadowHistoryTableProps) {
   const symbols = useMemo(() => Array.from(new Set(history.map((item) => item.symbol))).sort(), [history]);
   const [symbol, setSymbol] = useState("all");
   const [outcome, setOutcome] = useState<"all" | DcaShadowOutcome>("all");
-  const [dateRange, setDateRange] = useState("30d");
+  const [dateRange, setDateRange] = useState("all");
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
   const filtered = useMemo(
@@ -79,6 +79,7 @@ export function DcaShadowHistoryTable({ history }: DcaShadowHistoryTableProps) {
           <label className="text-xs font-medium text-slate-400">
             Date range
             <select value={dateRange} onChange={(event) => setDateRange(event.target.value)} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100">
+              <option value="all">All time</option>
               <option value="24h">Last 24 hours</option>
               <option value="7d">Last 7 days</option>
               <option value="30d">Last 30 days</option>
@@ -216,7 +217,7 @@ function matchesOutcome(item: DcaShadowHistoryItem, outcome: "all" | DcaShadowOu
 }
 
 function matchesDateRange(item: DcaShadowHistoryItem, dateRange: string) {
-  if (dateRange === "custom") return true;
+  if (dateRange === "all" || dateRange === "custom") return true;
   if (!item.timestamp) return false;
   const timestamp = new Date(item.timestamp).getTime();
   if (Number.isNaN(timestamp)) return false;
