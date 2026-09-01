@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useCallback } from "react";
 
 /**
  * IndicatorTogglePanel — checkbox toggles for chart overlay visibility.
@@ -30,9 +30,9 @@ export interface IndicatorVisibility {
 
 export const DEFAULT_INDICATOR_VISIBILITY: IndicatorVisibility = {
   ema: true,
-  bollinger: false,
-  rsi: false,
-  macd: false,
+  bollinger: true,
+  rsi: true,
+  macd: true,
   volume: true,
   orderBlocks: true,
   fairValueGaps: true,
@@ -56,9 +56,9 @@ const TOGGLE_ITEMS: { key: keyof IndicatorVisibility; label: string; color: stri
   { key: "ema", label: "EMA (20/50/200)", color: "#a78bfa" },
   { key: "bollinger", label: "Bollinger Bands", color: "#38bdf8" },
   { key: "rsi", label: "RSI", color: "#f59e0b" },
-  { key: "macd", label: "MACD", color: "#22c55e" },
-  { key: "volume", label: "Volume", color: "#94a3b8" },
-  { key: "orderBlocks", label: "Order Blocks", color: "#ef4444" },
+  { key: "macd", label: "MACD", color: "#6CA98F" },
+  { key: "volume", label: "Volume", color: "#8E8778" },
+  { key: "orderBlocks", label: "Order Blocks", color: "#C96A55" },
   { key: "fairValueGaps", label: "Fair Value Gaps", color: "#facc15" },
 ];
 
@@ -76,10 +76,7 @@ export function IndicatorTogglePanel({
   onChange,
   compact = false,
 }: IndicatorTogglePanelProps) {
-  const [mounted, setMounted] = useState(false);
-
   useEffect(() => {
-    setMounted(true);
     const stored = loadFromStorage();
     onChange(stored);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -98,19 +95,14 @@ export function IndicatorTogglePanel({
     [visibility, onChange]
   );
 
-  // Render nothing on the server; we'll hydrate on mount.
-  if (!mounted && typeof window !== "undefined") {
-    return null;
-  }
-
   return (
     <div
       className={`${
-        compact ? "" : "rounded-lg border border-slate-800 bg-slate-900/60 p-3"
+        compact ? "" : "border border-[#2A2620] bg-[#161411] p-3"
       }`}
     >
       {!compact && (
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#8E8778]">
           Indicators
         </h4>
       )}
@@ -120,16 +112,16 @@ export function IndicatorTogglePanel({
         } gap-x-3 gap-y-1.5`}
       >
         {TOGGLE_ITEMS.map((item) => {
-          const checked = mounted ? visibility[item.key] : false;
+          const checked = visibility[item.key];
           return (
             <label
               key={item.key}
-              className="flex cursor-pointer items-center gap-2 text-xs text-slate-300 select-none"
+              className="flex cursor-pointer items-center gap-2 text-xs text-[#D8D1C4] select-none"
             >
               <span
                 className="relative flex h-4 w-7 items-center rounded-full transition-colors"
                 style={{
-                  backgroundColor: checked ? item.color : "#334155",
+                  backgroundColor: checked ? item.color : "#2A2620",
                 }}
                 onClick={(e) => {
                   e.preventDefault();

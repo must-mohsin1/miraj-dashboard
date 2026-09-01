@@ -4,7 +4,6 @@ import { Suspense } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
-  BarChart3,
   ChevronRight,
   Clock,
   RefreshCw,
@@ -13,10 +12,10 @@ import {
 import { getAccessToken } from "@/lib/auth";
 import { serverPost, ApiError } from "@/lib/api";
 import type { ScanResult, TradePlanFlat } from "@/lib/types";
-import { Badge } from "@/components/ui/badge";
-import { ScoreGauge } from "@/components/score-gauge";
 import { TradePlan } from "@/components/trade-plan";
 import { VerdictCard } from "@/components/verdict-card";
+import { SetupBoard } from "@/components/setup-board";
+import { TfConfluenceMatrix } from "@/components/tf-confluence-matrix";
 import { LiveCandlestickChart } from "@/components/live-candlestick-chart";
 import { TradingGlossary } from "@/components/trading-glossary";
 import { KillZoneClock } from "@/components/kill-zone-clock";
@@ -25,10 +24,6 @@ import { StructurePanel } from "@/components/structure-panel";
 import { PatternsPanel } from "@/components/patterns-panel";
 import { BmsbStatus } from "@/components/bmsb-status";
 import { SignalChangesPanel } from "@/components/signal-changes-panel";
-import { MetricTrends } from "@/components/metric-trends";
-import { ScoreProgressionChart } from "@/components/score-progression-chart";
-import { MacroStrip } from "@/components/macro-strip";
-import { DeepScanPanel } from "@/components/deep-scan-panel";
 import { DcaStrategyPanel } from "@/components/dca-strategy-panel";
 import { ChartSkeleton } from "@/components/skeletons";
 
@@ -38,10 +33,10 @@ import { ChartSkeleton } from "@/components/skeletons";
  * Fetches a full scan result for `params.symbol` by calling
  * `POST /api/v1/scan/{symbol}` (path parameter, no request body) and renders:
  *
- *   - a circular score gauge (0–100) with a direction badge
- *   - the trade plan card (entry / ATR stop / T1–T3 with R:R ratios)
- *   - the candlestick chart (candles + volume + EMAs + OB/FVG zones)
- *   - the score breakdown (regime / location / confirmation / volume / risk)
+ *   - the verdict (NO TRADE stays NO TRADE)
+ *   - long/short candidate cards with levels and indicator facts
+ *   - the trade plan only when READY
+ *   - the candlestick chart (timeframes, indicators, drawing tools)
  *
  * If the backend is unreachable or the symbol is invalid, the page renders an
  * error card with a back-link to `/analysis` instead of throwing a 500.
@@ -63,52 +58,12 @@ function directionMeta(direction: string | undefined | null) {
   const d = (direction ?? "NEUTRAL").toUpperCase();
   switch (d) {
     case "LONG":
-      return { label: "LONG", className: "bg-emerald-500/10 text-emerald-400 border-emerald-700/50", arrow: "▲" };
+      return { label: "LONG", className: "border-[#6CA98F]/50 text-[#6CA98F]", arrow: "▲" };
     case "SHORT":
-      return { label: "SHORT", className: "bg-red-500/10 text-red-400 border-red-700/50", arrow: "▼" };
+      return { label: "SHORT", className: "border-[#C96A55]/50 text-[#C96A55]", arrow: "▼" };
     default:
-      return { label: "NEUTRAL", className: "bg-slate-500/10 text-slate-400 border-slate-700/50", arrow: "■" };
+      return { label: "NEUTRAL", className: "border-[#2A2620] text-[#8E8778]", arrow: "■" };
   }
-}
-
-/** Render a single category sub-score bar. */
-function CategoryBar({
-  label,
-  value,
-  max = 6,
-  color,
-}: {
-  label: string;
-  value: number | null | undefined;
-  max?: number;
-  color: string;
-}) {
-  const v = value ?? 0;
-  const pct = Math.max(0, Math.min(100, (v / max) * 100));
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between text-xs">
-        <span className="capitalize text-slate-400">{label}</span>
-        <span className="font-medium text-slate-300">
-          {value != null ? `${v.toFixed(1)} / ${max}` : "—"}
-        </span>
-      </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${pct}%`, backgroundColor: color }}
-        />
-      </div>
-    </div>
-  );
-}
-
-/** Pick a colour for a category bar based on its fraction of max. */
-function barColor(fraction: number): string {
-  if (fraction < 0.34) return "#ef4444"; // red
-  if (fraction < 0.5) return "#f97316"; // orange
-  if (fraction < 0.67) return "#eab308"; // yellow
-  return "#22c55e"; // green
 }
 
 interface PageProps {
@@ -151,48 +106,31 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
     }
   }
 
-  // ── Error state ─────────────────────────────────────────────────────
   if (error) {
     return (
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
         <header className="flex flex-col gap-1">
           <Link
             href="/analysis"
-            className="inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200"
+            className="inline-flex items-center gap-1.5 text-sm text-[#8E8778] hover:text-[#EDE7DB]"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to Analysis
           </Link>
-          <div className="flex items-center gap-2">
-            <BarChart3 className="h-5 w-5 text-emerald-400" />
-            <h1 className="text-2xl font-bold tracking-tight text-slate-100">
-              {symbol}
-            </h1>
-          </div>
+          <h1 className="font-verdict text-4xl text-[#EDE7DB]">{symbol}</h1>
         </header>
-
-        <div className="rounded-xl border border-red-800/50 bg-red-500/5 p-8 text-center">
-          <AlertTriangle className="mx-auto mb-3 h-10 w-10 text-red-400" />
-          <h2 className="text-lg font-semibold text-slate-100">
-            Analysis failed
-          </h2>
-          <p className="mx-auto mt-2 max-w-md text-sm text-slate-400">
-            {error}
-          </p>
-          {errorStatus && (
-            <p className="mt-2 text-xs text-slate-500">
-              HTTP {errorStatus}
-            </p>
-          )}
-          {symbol && (
-            <Link
-              href={`/analysis/${encodeURIComponent(symbol)}`}
-              className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-slate-100 hover:bg-slate-700"
-            >
-              <RefreshCw className="h-4 w-4" />
-              Retry analysis
-            </Link>
-          )}
+        <div className="border border-[#2A2620] bg-[#161411] p-6">
+          <AlertTriangle className="mb-3 h-6 w-6 text-[#C96A55]" />
+          <h2 className="text-lg text-[#EDE7DB]">Analysis failed.</h2>
+          <p className="mt-2 max-w-md text-sm text-[#8E8778]">{error}</p>
+          {errorStatus && <p className="mt-2 font-mono text-xs text-[#8E8778]">HTTP {errorStatus}</p>}
+          <Link
+            href={`/analysis/${encodeURIComponent(symbol)}`}
+            className="mt-4 inline-flex items-center gap-1.5 border border-[#2A2620] px-4 py-2 text-sm text-[#EDE7DB]"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Retry analysis
+          </Link>
         </div>
       </div>
     );
@@ -202,24 +140,18 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  // ── Extract data for the chart and trade plan ───────────────────────
-  const overall = result.overall_score ?? result.confluence_score;
   const flat = result.trade_plan_flat;
-  // Bias from the typed verdict is authoritative; flat direction is the fallback
-  // for old cached results that predate the verdict contract.
   const direction = result.verdict?.bias ?? flat?.direction;
   const candles = result.candles ?? [];
   const dirMeta = directionMeta(direction);
   const cachedAt = formatRelative(result.cached_at);
-
-  // Extract trade levels for the chart overlay
+  const ready =
+    result.verdict?.state === "READY_LONG" || result.verdict?.state === "READY_SHORT";
   const tradeTargets = flat
     ? [flat.target_1, flat.target_2, flat.target_3].filter(
         (t): t is number => t != null && !Number.isNaN(t)
       )
     : [];
-
-  // Category scores from `scores` (regime, location, confirmation, volume_retest, risk)
   const scores = result.scores ?? {};
   const categoryMax: Record<string, number> = {
     regime: 6,
@@ -230,98 +162,91 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-      {/* ── Macro context strip (BTC.D, USDT.D, F&G, DXY, L/S) ── */}
-      {/* <MacroStrip /> */}
-
-      {/* Header */}
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
       <header className="flex flex-col gap-3">
         <Link
           href="/analysis"
-          className="inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200"
+          className="inline-flex items-center gap-1.5 text-sm text-[#8E8778] hover:text-[#EDE7DB]"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Analysis
         </Link>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-col gap-1.5">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8E8778]">
               Analysis
             </p>
-            <div className="flex items-baseline gap-3">
-              <h1 className="font-verdict text-4xl text-slate-100 sm:text-5xl">
-                {result.symbol}
-              </h1>
-              <span
-                className={`inline-flex items-center gap-1 border px-2.5 py-0.5 text-xs font-semibold ${dirMeta.className}`}
-              >
+            <div className="mt-1 flex items-baseline gap-3">
+              <h1 className="font-verdict text-4xl text-[#EDE7DB] sm:text-5xl">{result.symbol}</h1>
+              <span className={`inline-flex items-center gap-1 border px-2.5 py-0.5 text-xs font-semibold ${dirMeta.className}`}>
                 <span>{dirMeta.arrow}</span>
                 {dirMeta.label}
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 text-xs text-[#8E8778]">
             {cachedAt && (
-              <Badge
-                variant="outline"
-                className="border-slate-700 bg-slate-900/60 text-slate-300"
-              >
+              <span className="inline-flex items-center gap-1 border border-[#2A2620] px-2 py-1">
                 <Clock className="h-3 w-3" />
                 {cachedAt}
-              </Badge>
+              </span>
             )}
             {result.stale && (
-              <Badge
-                variant="outline"
-                className="border-amber-700/50 bg-amber-500/10 text-amber-400"
-              >
+              <span className="inline-flex items-center gap-1 border border-[#D19A4A]/40 px-2 py-1 text-[#D19A4A]">
                 <AlertTriangle className="h-3 w-3" />
-                Cached (stale)
-              </Badge>
+                Cached
+              </span>
             )}
           </div>
         </div>
         <hr className="rule-brass border-0" />
       </header>
 
-      {/* ── Metric Trends (compact trend arrows on key metrics) ── */}
-      {/* <MetricTrends
-        symbol={result.symbol}
-        token={token}
-        currentScore={result.confluence_score}
-        currentQqe={result.qqe_signals ?? null}
-        currentStructure={result.structure ?? null}
-        currentDirection={direction ?? null}
-      /> */}
-
-      {/* ── Deep Scan button + panel ── */}
-      {/* <DeepScanPanel symbol={result.symbol} /> */}
-
-      {/* ── Verdict (decision first: state, bias, blockers, gates) ── */}
       <VerdictCard verdict={result.verdict} />
 
-      {/* Top row: Score gauge + Trade plan */}
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Score gauge */}
-        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-          <h3 className="mb-4 text-sm font-medium text-slate-300">
-            Confluence Score
-          </h3>
-          <div className="flex items-center justify-center">
-            <ScoreGauge score={overall} size={200} label="Score" />
-          </div>
-          <div className="mt-4 text-center text-xs text-slate-500">
-            Raw: {result.confluence_score?.toFixed(1)} / 30
-          </div>
-        </div>
+      <SetupBoard
+        orderBlocks={result.order_blocks}
+        price={candles.length > 0 ? candles[candles.length - 1].close : null}
+        verdict={result.verdict}
+        rsi={result.rsi}
+        macd={result.macd}
+        qqe={result.qqe_signals}
+        structure={result.structure}
+      />
+      <TfConfluenceMatrix structure={result.structure} qqe={result.qqe_signals} />
 
-        {/* Trade plan */}
-        <div className="lg:col-span-2">
-          <TradePlan tradePlan={flat as TradePlanFlat | null} />
-        </div>
+      {ready && flat?.entry != null && (
+        <TradePlan tradePlan={flat as TradePlanFlat} />
+      )}
+
+      <KillZoneClock />
+
+      <section className="border border-[#2A2620] bg-[#161411] p-4">
+        <Suspense fallback={<ChartSkeleton />}>
+          <LiveCandlestickChart
+            candles={candles}
+            emas={result.emas ?? null}
+            orderBlocks={result.order_blocks ?? null}
+            fvgs={result.fvgs ?? null}
+            rsi={result.rsi ?? null}
+            macd={result.macd ?? null}
+            bb={result.bb ?? null}
+            symbol={result.symbol}
+            token={token}
+            tradeLevels={
+              ready
+                ? {
+                    entry: flat?.entry ?? null,
+                    stopLoss: flat?.stop_loss ?? null,
+                    targets: tradeTargets,
+                  }
+                : null
+            }
+          />
+        </Suspense>
+        <TradingGlossary />
       </section>
 
-      {/* ── DCA Strategy Panel (hidden trade_plan data exposed) ── */}
       <DcaStrategyPanel
         tradePlan={result.trade_plan}
         confluenceScore={result.confluence_score}
@@ -331,30 +256,6 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
         direction={direction ?? null}
       />
 
-      {/* ICT kill-zone clock (live, above the chart) */}
-      <KillZoneClock />
-
-      {/* Candlestick chart (with live price streaming) */}
-      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <Suspense fallback={<ChartSkeleton />}>
-          <LiveCandlestickChart
-            candles={candles}
-            emas={result.emas ?? null}
-            orderBlocks={result.order_blocks ?? null}
-            fvgs={result.fvgs ?? null}
-            symbol={result.symbol}
-            token={token}
-            tradeLevels={{
-              entry: flat?.entry ?? null,
-              stopLoss: flat?.stop_loss ?? null,
-              targets: tradeTargets,
-            }}
-          />
-        </Suspense>
-        <TradingGlossary />
-      </section>
-
-      {/* QQE Signals + Structure + Patterns + BMSB */}
       <div className="grid gap-4 md:grid-cols-2">
         <QqeSignalPanel signals={result.qqe_signals} />
         <StructurePanel structure={result.structure} />
@@ -364,43 +265,37 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
         <BmsbStatus bmsb={result.bmsb} />
       </div>
 
-      {/* Score breakdown */}
-      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-        <h3 className="mb-4 text-sm font-medium text-slate-300">
-          Score Breakdown
+      <section className="border border-[#2A2620] bg-[#161411] p-4">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8E8778]">
+          Score breakdown
         </h3>
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {(["regime", "location", "confirmation", "volume_retest", "risk"] as const).map(
-            (cat) => {
-              const val = scores[cat];
-              const max = categoryMax[cat] ?? 6;
-              const frac = val != null ? val / max : 0;
-              const label = cat === "volume_retest" ? "Volume / Retest" : cat;
-              return (
-                <CategoryBar
-                  key={cat}
-                  label={label}
-                  value={val}
-                  max={max}
-                  color={barColor(frac)}
-                />
-              );
-            }
-          )}
-        </div>
+        <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {(["regime", "location", "confirmation", "volume_retest", "risk"] as const).map((cat) => {
+            const val = scores[cat];
+            const max = categoryMax[cat] ?? 6;
+            const label = cat === "volume_retest" ? "Volume / retest" : cat;
+            return (
+              <div key={cat} className="flex items-baseline justify-between border-t border-[#2A2620] pt-2">
+                <dt className="text-xs capitalize text-[#8E8778]">{label}</dt>
+                <dd className="font-mono text-sm text-[#EDE7DB]">
+                  {val != null ? `${val.toFixed(1)} / ${max}` : "—"}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
       </section>
 
-      {/* ── Signal Changes (last 5 between the two most recent scans) ── */}
-      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-sm font-medium text-slate-300">
-            Signal Changes
+      <section className="border border-[#2A2620] bg-[#161411] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8E8778]">
+            Signal changes
           </h3>
           <Link
             href={`/analysis/${encodeURIComponent(result.symbol)}/changes`}
-            className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300"
+            className="inline-flex items-center gap-1 text-xs text-[#C2A36B]"
           >
-            View Full History
+            Full history
             <ChevronRight className="h-3 w-3" />
           </Link>
         </div>
@@ -410,18 +305,6 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
           limit={5}
           variant="compact"
         />
-      </section>
-
-      {/* ── Score Progression Chart ── */}
-      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-        <h3 className="mb-4 text-sm font-medium text-slate-300">
-          Score Progression
-        </h3>
-        <ScoreProgressionChart symbol={result.symbol} token={token} />
-        <p className="mt-3 text-xs text-slate-500">
-          Confluence score (0–30) across recent scans. Green zone ≥ 20
-          indicates a valid trade setup; red zone &lt; 10 indicates no trade.
-        </p>
       </section>
     </div>
   );

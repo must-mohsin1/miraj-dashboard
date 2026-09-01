@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useCallback } from "react";
 
 import type { Timeframe } from "@/lib/types";
 
@@ -42,20 +42,13 @@ interface TimeframeSelectorProps {
   timeframe: Timeframe;
   /** Called when the user picks a new timeframe. */
   onTimeframeChange: (tf: Timeframe) => void;
-  /** Optional: disable the selector while data is loading. */
-  disabled?: boolean;
 }
 
 export function TimeframeSelector({
   timeframe,
   onTimeframeChange,
-  disabled = false,
 }: TimeframeSelectorProps) {
-  // Hydrate from localStorage on mount
-  const [mounted, setMounted] = useState(false);
-
   useEffect(() => {
-    setMounted(true);
     const stored = loadStoredTf();
     if (stored !== timeframe) {
       onTimeframeChange(stored);
@@ -65,7 +58,6 @@ export function TimeframeSelector({
 
   const handleClick = useCallback(
     (tf: Timeframe) => {
-      if (disabled) return;
       try {
         window.localStorage.setItem(STORAGE_KEY, tf);
       } catch {
@@ -73,29 +65,28 @@ export function TimeframeSelector({
       }
       onTimeframeChange(tf);
     },
-    [disabled, onTimeframeChange]
+    [onTimeframeChange]
   );
 
   return (
     <div
-      className="inline-flex items-center gap-0.5 rounded-lg border border-slate-800 bg-slate-900/60 p-0.5"
+      className="inline-flex items-center border border-[#2A2620] bg-[#161411] p-0.5"
       role="group"
       aria-label="Chart timeframe"
     >
       {TIMEFRAMES.map((tf) => {
-        const active = mounted && timeframe === tf.value;
+        const active = timeframe === tf.value;
         return (
           <button
             key={tf.value}
             type="button"
-            disabled={disabled}
             onClick={() => handleClick(tf.value)}
             aria-pressed={active}
-            className={`rounded-md px-2.5 py-1 text-xs font-semibold transition-colors ${
+            className={`border px-2.5 py-1 text-xs font-semibold transition-colors ${
               active
-                ? "bg-slate-700 text-slate-100 shadow-sm"
-                : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-            } ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+                ? "border-[#C2A36B] bg-[#C2A36B] text-[#0F0E0C]"
+                : "cursor-pointer border-transparent text-[#8E8778] hover:border-[#2A2620] hover:text-[#D8D1C4]"
+            }`}
           >
             {tf.label}
           </button>
