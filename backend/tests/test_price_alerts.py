@@ -9,7 +9,7 @@ Tests cover:
 - PriceAlert CRUD via API (create, list, get, cancel, delete)
 - Price alert service: create, cancel, list, get, delete
 - Trigger logic: above/below direction, price checks
-- Message formatting for Telegram and Discord
+- Message formatting for Telegram
 """
 
 from __future__ import annotations
@@ -38,7 +38,6 @@ from backend.database import Base, get_session, set_db_path
 from backend.main import app
 from backend.models import AlertChannel, PriceAlert, User
 from backend.services.price_alert_service import (
-    _build_price_alert_embed,
     _format_price_alert_message,
     cancel_price_alert,
     check_price_alerts,
@@ -448,47 +447,7 @@ class TestPriceAlertMessaging:
         assert "BELOW" in msg
         assert "Price Alert" in msg
 
-    def test_discord_embed_includes_all_fields(self):
-        """Discord embed has the right shape and content."""
-        from backend.models import PriceAlert
 
-        alert = PriceAlert(
-            id=1, user_id=1, symbol="BTC-USD", alert_type="price",
-            direction="above", price_level=70000.0, message="Test note",
-        )
-        embed = _build_price_alert_embed(alert, 71000.0, "above", "↗")
-        assert embed["title"] == "🔔 Price Alert: BTC-USD"
-        assert embed["color"] == 0x00FF00  # GREEN for above
-        fields = {f["name"]: f["value"] for f in embed["fields"]}
-        assert "BTC-USD" in fields["🏷️ Symbol"]
-        assert "70000.0" == fields["📊 Level"]
-        assert "71000.0" == fields["💵 Current Price"]
-        assert "ABOVE" == fields["📐 Direction"]
-        assert "Test note" == fields["💬 Note"]
-
-    def test_discord_embed_below_red(self):
-        """Direction='below' uses RED embed color."""
-        from backend.models import PriceAlert
-
-        alert = PriceAlert(
-            id=2, user_id=1, symbol="ETH-USD", alert_type="stop",
-            direction="below", price_level=2500.0, message=None,
-        )
-        embed = _build_price_alert_embed(alert, 2400.0, "below", "↘")
-        assert embed["color"] == 0xFF0000  # RED for below
-        assert "BELOW" in embed["fields"][3]["value"]
-
-    def test_discord_embed_no_message(self):
-        """Discord embed omits Note field when no message."""
-        from backend.models import PriceAlert
-
-        alert = PriceAlert(
-            id=3, user_id=1, symbol="SOL-USD", alert_type="price",
-            direction="above", price_level=150.0, message=None,
-        )
-        embed = _build_price_alert_embed(alert, 160.0, "above", "↗")
-        field_names = [f["name"] for f in embed["fields"]]
-        assert "💬 Note" not in field_names
 
 
 # ── API integration tests ──────────────────────────────────────────────────

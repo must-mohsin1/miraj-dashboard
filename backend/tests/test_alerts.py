@@ -7,7 +7,6 @@ Run with::
 
 Tests cover:
 - Telegram message formatting
-- Discord embed building
 - Alert manager: threshold filtering, dedup (cooldown), channel routing, history logging
 """
 
@@ -32,7 +31,6 @@ if PROJECT_ROOT not in sys.path:
 if "JWT_SECRET_KEY" not in os.environ:
     os.environ["JWT_SECRET_KEY"] = "test-key-not-for-production"
 
-from backend.alerts.discord import build_embed, send_webhook
 from backend.alerts.email import build_email_body, send_email
 from backend.alerts.manager import (
     DEFAULT_COOLDOWN_HOURS,
@@ -147,49 +145,6 @@ class TestTelegramFormat:
         assert "\u2b50" in msg
         # Chart
         assert "\U0001f4ca" in msg
-
-
-# ── Discord embed tests ──────────────────────────────────────────────────────
-
-
-class TestDiscordEmbed:
-    """Verify build_embed output shape and content."""
-
-    def test_full_embed(self):
-        embed = build_embed(
-            symbol="BTC-USD",
-            score=85.5,
-            direction="LONG",
-            entry=65000.0,
-            stop_loss=64000.0,
-            target=68000.0,
-            rationale="Test rationale",
-        )
-        assert embed["title"] == "Trade Alert: BTC-USD"
-        assert embed["color"] == 0x00FF00  # GREEN for LONG
-        assert "timestamp" in embed
-        fields = {f["name"]: f["value"] for f in embed["fields"]}
-        assert fields["\U0001f3f7\ufe0f Symbol"] == "BTC-USD"
-        assert fields["\u2b50 Score"] == "85.5/100"
-        assert fields["\U0001f4ca Direction"] == "LONG"
-        assert fields["\U0001f4c5 Entry"] == "65000.0"
-        assert fields["\U0001f6ab Stop Loss"] == "64000.0"
-        assert fields["\U0001f3af Target"] == "68000.0"
-        assert fields["\U0001f4ac Rationale"] == "Test rationale"
-
-    def test_short_direction_red(self):
-        """SHORT direction should produce RED embed color."""
-        embed = build_embed(symbol="ETH-USD", score=30.0, direction="SHORT")
-        assert embed["color"] == 0xFF0000  # RED
-
-    def test_minimal_embed(self):
-        """Only required fields present."""
-        embed = build_embed(symbol="SOL-USD", score=70.0, direction="LONG")
-        fields = {f["name"]: f["value"] for f in embed["fields"]}
-        assert "\U0001f4c5 Entry" not in fields
-        assert "\U0001f6ab Stop Loss" not in fields
-        assert "\U0001f3af Target" not in fields
-        assert "\U0001f4ac Rationale" not in fields
 
 
 # ── Alert manager tests ──────────────────────────────────────────────────────
@@ -352,22 +307,35 @@ class TestAlertManager:
     # ── Channel routing ──────────────────────────────────────────────
 
     async def test_multiple_channels(self, session, user):
-        """Alert should be sent to all enabled channels."""
+        """Alert should be sent to all enabled channels except retired Discord."""
         await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
-        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+        await self._add_channel(session, user.id, "email", {"email_to": "user@example.com"})
 
         results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
 
         with (
             patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg,
-            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as mock_dc,
+            patch("backend.alerts.manager.send_email", return_value=True) as mock_email,
         ):
             outcomes = await process_scan_results(session, results_by_user)
 
         mock_tg.assert_awaited_once()
-        mock_dc.assert_awaited_once()
+        mock_email.assert_called_once()
         assert len(outcomes) == 1
-        assert outcomes[0]["channels_sent"] == ["telegram", "discord"]
+        assert outcomes[0]["channels_sent"] == ["telegram", "email"]
+
+    async def test_discord_channel_is_skipped(self, session, user):
+        """Existing Discord channels must not receive trade alerts."""
+        await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
+        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+
+        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
+
+        with patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg:
+            outcomes = await process_scan_results(session, results_by_user)
+
+        mock_tg.assert_awaited_once()
+        assert outcomes[0]["channels_sent"] == ["telegram"]
 
     async def test_disabled_channel_skipped(self, session, user):
         """A disabled channel should not receive alerts."""
@@ -406,20 +374,6 @@ class TestAlertManager:
 
         mock_send.assert_not_called()
         assert "chat_id" in caplog.text or "missing" in caplog.text
-
-    async def test_discord_missing_webhook_url_logs_warning(self, session, user, caplog):
-        """Discord channel without webhook_url should log a warning, not silently skip."""
-        import logging
-
-        caplog.set_level(logging.WARNING)
-        await self._add_channel(session, user.id, "discord", {})
-
-        results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
-        with patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock) as mock_send:
-            await process_scan_results(session, results_by_user)
-
-        mock_send.assert_not_called()
-        assert "webhook_url" in caplog.text or "missing" in caplog.text
 
     # ── History logging ──────────────────────────────────────────────
 
@@ -556,7 +510,7 @@ class TestPerPairChannels:
     async def test_notification_channels_filters_telegram_only(self, session, user):
         """Setting notification_channels=['telegram'] should only deliver to telegram."""
         await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
-        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+        await self._add_channel(session, user.id, "email", {"email_to": "user@example.com"})
 
         ps = PairSetting(
             user_id=user.id,
@@ -569,17 +523,17 @@ class TestPerPairChannels:
         results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
         with (
             patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg,
-            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock) as mock_dc,
+            patch("backend.alerts.manager.send_email") as mock_email,
         ):
             outcomes = await process_scan_results(session, results_by_user)
 
         mock_tg.assert_awaited_once()
-        mock_dc.assert_not_called()
+        mock_email.assert_not_called()
         assert len(outcomes) == 1
         assert outcomes[0]["channels_sent"] == ["telegram"]
 
-    async def test_notification_channels_filters_discord_only(self, session, user):
-        """Setting notification_channels=['discord'] should only deliver to discord."""
+    async def test_notification_channels_discord_only_is_skipped(self, session, user):
+        """A discord-only override must not send; Discord delivery is retired."""
         await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
         await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
 
@@ -592,21 +546,17 @@ class TestPerPairChannels:
         await session.flush()
 
         results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
-        with (
-            patch("backend.alerts.manager.send_alert", new_callable=AsyncMock) as mock_tg,
-            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as mock_dc,
-        ):
+        with patch("backend.alerts.manager.send_alert", new_callable=AsyncMock) as mock_tg:
             outcomes = await process_scan_results(session, results_by_user)
 
         mock_tg.assert_not_called()
-        mock_dc.assert_awaited_once()
         assert len(outcomes) == 1
-        assert outcomes[0]["channels_sent"] == ["discord"]
+        assert outcomes[0]["channels_sent"] == []
 
     async def test_no_notification_channels_sends_to_all(self, session, user):
-        """Without notification_channels, all enabled channels receive the alert."""
+        """Without notification_channels, all enabled live channels receive the alert."""
         await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
-        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+        await self._add_channel(session, user.id, "email", {"email_to": "user@example.com"})
 
         # No notification_channels in pair settings
         ps = PairSetting(
@@ -620,13 +570,13 @@ class TestPerPairChannels:
         results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
         with (
             patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg,
-            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as mock_dc,
+            patch("backend.alerts.manager.send_email", return_value=True) as mock_email,
         ):
             outcomes = await process_scan_results(session, results_by_user)
 
         mock_tg.assert_awaited_once()
-        mock_dc.assert_awaited_once()
-        assert outcomes[0]["channels_sent"] == ["telegram", "discord"]
+        mock_email.assert_called_once()
+        assert outcomes[0]["channels_sent"] == ["telegram", "email"]
 
     async def test_empty_notification_channels_falls_back(self, session, user):
         """An empty list for notification_channels should fall back to all channels."""
@@ -651,16 +601,16 @@ class TestPerPairChannels:
     async def test_notification_channels_per_pair_isolation(self, session, user):
         """Each pair's notification_channels should only affect its own alerts."""
         await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
-        await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
+        await self._add_channel(session, user.id, "email", {"email_to": "user@example.com"})
 
-        # BTC → only telegram, ETH → only discord
+        # BTC → only telegram, ETH → only email
         session.add(PairSetting(
             user_id=user.id, pair="BTC-USD",
             settings=json.dumps({"alert_threshold": 50.0, "notification_channels": ["telegram"]}),
         ))
         session.add(PairSetting(
             user_id=user.id, pair="ETH-USD",
-            settings=json.dumps({"alert_threshold": 50.0, "notification_channels": ["discord"]}),
+            settings=json.dumps({"alert_threshold": 50.0, "notification_channels": ["email"]}),
         ))
         await session.flush()
 
@@ -672,12 +622,12 @@ class TestPerPairChannels:
         }
         with (
             patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg,
-            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as mock_dc,
+            patch("backend.alerts.manager.send_email", return_value=True) as mock_email,
         ):
             outcomes = await process_scan_results(session, results_by_user)
 
         assert mock_tg.await_count == 1  # only BTC
-        assert mock_dc.await_count == 1  # only ETH
+        mock_email.assert_called_once()  # only ETH
         assert len(outcomes) == 2
 
 
@@ -876,8 +826,8 @@ class TestEmailChannelRouting:
         assert len(outcomes) == 1
         assert outcomes[0]["channels_sent"] == []
 
-    async def test_email_with_telegram_and_discord(self, session, user):
-        """All three channel types (telegram, discord, email) should work together."""
+    async def test_email_with_telegram(self, session, user):
+        """Telegram and email should work together while Discord stays retired."""
         await self._add_channel(session, user.id, "telegram", {"chat_id": "12345"})
         await self._add_channel(session, user.id, "discord", {"webhook_url": "https://discord.com/api/webhooks/xxx"})
         await self._add_channel(session, user.id, "email", {"email_to": "user@example.com"})
@@ -885,16 +835,14 @@ class TestEmailChannelRouting:
         results_by_user = {user.id: [self._scan_result("BTC-USD", 80.0)]}
         with (
             patch("backend.alerts.manager.send_alert", new_callable=AsyncMock, return_value=True) as mock_tg,
-            patch("backend.alerts.manager.send_webhook", new_callable=AsyncMock, return_value=True) as mock_dc,
             patch("backend.alerts.manager.send_email", return_value=True) as mock_email,
         ):
             outcomes = await process_scan_results(session, results_by_user)
 
         mock_tg.assert_awaited_once()
-        mock_dc.assert_awaited_once()
         mock_email.assert_called_once()
         assert len(outcomes) == 1
-        assert outcomes[0]["channels_sent"] == ["telegram", "discord", "email"]
+        assert outcomes[0]["channels_sent"] == ["telegram", "email"]
 
     async def test_notification_channels_with_email(self, session, user):
         """Per-pair notification_channels should work with email channels."""
@@ -922,73 +870,4 @@ class TestEmailChannelRouting:
         assert outcomes[0]["channels_sent"] == ["email"]
 
 
-# ── Discord webhook send tests ──────────────────────────────────────────────
 
-
-class TestDiscordSend:
-    """Test send_webhook with mocked httpx."""
-
-    # ── URL validation ──────────────────────────────────────────
-
-    async def test_invalid_url_returns_false(self):
-        """A non-Discord webhook URL should be rejected before making HTTP calls."""
-        embed = build_embed(symbol="BTC-USD", score=80.0, direction="LONG")
-        # No mock needed — validation happens before httpx is touched
-        result = await send_webhook("https://evil.example.com/hook", embed)
-        assert result is False
-
-    async def test_valid_url_accepted(self):
-        """A valid Discord webhook URL should proceed to HTTP (and be caught by mock)."""
-        embed = build_embed(symbol="BTC-USD", score=80.0, direction="LONG")
-        with patch("backend.alerts.discord.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_response = AsyncMock()
-            mock_response.is_success = True
-            mock_client.post.return_value = mock_response
-            result = await send_webhook(
-                "https://discord.com/api/webhooks/123/abc", embed
-            )
-        assert result is True
-
-    async def test_success(self):
-        embed = build_embed(symbol="BTC-USD", score=80.0, direction="LONG")
-
-        with patch("backend.alerts.discord.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_response = AsyncMock()
-            mock_response.is_success = True
-            mock_client.post.return_value = mock_response
-
-            result = await send_webhook("https://discord.com/api/webhooks/test", embed)
-
-        assert result is True
-
-    async def test_failure(self):
-        embed = build_embed(symbol="BTC-USD", score=80.0, direction="LONG")
-
-        with patch("backend.alerts.discord.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_response = AsyncMock()
-            mock_response.is_success = False
-            mock_response.status_code = 400
-            mock_client.post.return_value = mock_response
-
-            result = await send_webhook("https://discord.com/api/webhooks/test", embed)
-
-        assert result is False
-
-    async def test_timeout(self):
-        embed = build_embed(symbol="BTC-USD", score=80.0, direction="LONG")
-
-        with patch("backend.alerts.discord.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            from httpx import TimeoutException
-            mock_client.post.side_effect = TimeoutException("Timeout")
-
-            result = await send_webhook("https://discord.com/api/webhooks/test", embed)
-
-        assert result is False

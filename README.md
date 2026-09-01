@@ -21,9 +21,8 @@ Runs the full analysis pipeline: macro data → OHLCV → indicators → QQE Mod
 
 ### Phase 3 — Alerts & Sync
 - **Telegram alerts** — Receive real-time trade alerts via Telegram bot when confluence scores exceed per-pair thresholds, with MarkdownV2-formatted messages
-- **Discord alerts** — Rich embedded alert delivery via Discord webhooks with customisable webhook URL validation
 - **Alert manager** — Configurable per-pair thresholds (`alert_threshold`), per-pair mute toggle (`alert_enabled`), cooldown dedup (4h default per symbol), and multi-channel routing
-- **Alert channels** — Manage Telegram, Discord, email, and signed-webhook channels via the Settings API; each channel can be individually enabled/disabled
+- **Alert channels** — Manage Telegram, email, and signed-webhook channels via the Settings API; each channel can be individually enabled/disabled. Discord signal delivery has been retired.
 - **[Signed signal webhooks](docs/signal-webhooks.md)** — Queue confirmed signals for external automations with HMAC-SHA256 signatures, stable delivery IDs, bounded retries, and public-HTTPS destination checks
 - **Alert history** — Every send attempt (success or failure) is logged in `alert_histories` for audit and dedup
 - **Daily digest** — Scheduled Telegram summary (configurable time, default 20:00 UTC) of all pairs scanned that day, sorted by confluence score with high-confluence and actionable counts
@@ -84,7 +83,6 @@ remains a local Python connection string.
 │   │   ├── __init__.py         # AlertManager public API
 │   │   ├── manager.py          # Threshold filtering, dedup, channel routing
 │   │   ├── telegram.py         # Telegram Bot API client + message formatter
-│   │   ├── discord.py          # Discord webhook sender + embed builder
 │   │   ├── webhook.py          # HMAC-signed generic signal webhooks
 │   │   ├── webhook_outbox.py   # Durable leased delivery queue + retries
 │   │   └── digest.py           # Daily digest builder + Telegram client
@@ -159,7 +157,7 @@ remains a local Python connection string.
 | GET    | /api/v1/settings/pairs            | JWT      | List per-pair alert settings         |
 | PUT    | /api/v1/settings/pairs/{pair}     | JWT      | Update pair alert settings (upsert)  |
 | GET    | /api/v1/settings/channels         | JWT      | List alert channels                  |
-| POST   | /api/v1/settings/channels         | JWT      | Create alert channel (Telegram/Discord/email/webhook)|
+| POST   | /api/v1/settings/channels         | JWT      | Create alert channel (Telegram/email/webhook)|
 | PUT    | /api/v1/settings/channels/{id}    | JWT      | Update alert channel config          |
 | DELETE | /api/v1/settings/channels/{id}    | JWT      | Delete alert channel                 |
 | GET    | /api/v1/protected                 | JWT      | Verify auth status                   |
@@ -174,7 +172,6 @@ remains a local Python connection string.
 | `JWT_SECRET_KEY`      | **Yes**  | —       | JWT signing secret (generate!)            |
 | `JWT_EXPIRE_MINUTES`  | No       | 60      | Token expiry in minutes                   |
 | `TELEGRAM_BOT_TOKEN`  | No       | —       | Telegram bot token (alerts + digest)      |
-| `DISCORD_WEBHOOK_URL` | No       | —       | Default Discord webhook URL               |
 | `OBSIDIAN_VAULT_PATH` | No       | —       | Path to Obsidian vault for sync           |
 | `DIGEST_HOUR`         | No       | 20      | Daily digest hour (UTC, 0-23)             |
 | `DIGEST_MINUTE`       | No       | 0       | Daily digest minute (UTC, 0-59)           |

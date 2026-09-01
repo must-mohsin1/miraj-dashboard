@@ -240,6 +240,20 @@ async def test_settings_schema_rejects_unknown_channel_type(client: AsyncClient)
     assert response.status_code == 422
 
 
+async def test_settings_schema_rejects_retired_discord_channel_type(client: AsyncClient):
+    _, token = await _create_user_and_token()
+    response = await client.post(
+        "/api/v1/settings/channels",
+        json={
+            "channel_type": "discord",
+            "config": {"webhook_url": "https://discord.com/api/webhooks/xxx"},
+        },
+        headers=_headers(token),
+    )
+
+    assert response.status_code == 422
+
+
 async def test_webhook_channel_limit_rejects_before_dns_validation(client: AsyncClient):
     _, token = await _create_user_and_token()
     destination = AsyncMock()

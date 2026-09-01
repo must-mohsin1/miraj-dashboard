@@ -225,10 +225,8 @@ async def test_now_returns_only_safe_current_user_outbox_evidence_and_cached_rec
     payload = response.json()
     assert payload["notification_channels"] == [
         {"channel_type": "telegram", "enabled": True, "configured": True, "updated_at": "2026-07-20T12:00:00"},
-        {"channel_type": "discord", "enabled": False, "configured": True, "updated_at": "2026-07-20T12:00:00"},
     ]
     assert [(item["status"], item["pair"], item["channel_type"]) for item in payload["notification_outbox"]] == [
-        ("cancelled", "BTCUSDT", "discord"),
         ("failed", "BTCUSDT", "telegram"),
         ("sent", "BTCUSDT", "telegram"),
         ("pending", "BTCUSDT", "telegram"),

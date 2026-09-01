@@ -23,6 +23,7 @@ from typing import Any, Optional, cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.alerts import RETIRED_ALERT_CHANNEL_TYPES
 from backend.database import get_session_factory
 from backend.models import AlertChannel, AlertHistory, RealtimeNotification, RealtimeSignal, WatchlistPair
 from backend.realtime.lifecycle import Confirmation, SetupAnalysis, SignalEvaluation, SignalLifecycle, SignalState
@@ -93,9 +94,6 @@ async def send_realtime_alert(
         if channel.channel_type == "telegram" and config.get("chat_id"):
             from backend.alerts.telegram import send_alert
             sent = await send_alert(str(config["chat_id"]), text)
-        elif channel.channel_type == "discord" and config.get("webhook_url"):
-            from backend.alerts.discord import send_webhook
-            sent = await send_webhook(str(config["webhook_url"]), {"description": text})
         else:
             continue
         session.add(
@@ -186,15 +184,16 @@ async def dispatch_pending_notifications(session_factory: Any) -> None:
             if signal_row is None or channel is None or not channel.enabled:
                 notification.status = "cancelled"
                 continue
+            if channel.channel_type in RETIRED_ALERT_CHANNEL_TYPES:
+                notification.status = "cancelled"
+                notification.last_error = "Discord signal delivery has been retired"
+                continue
             text = _format_notification(signal_row)
             try:
                 config = json.loads(channel.config or "{}")
                 if channel.channel_type == "telegram" and config.get("chat_id"):
                     from backend.alerts.telegram import send_alert
                     sent = await send_alert(str(config["chat_id"]), text)
-                elif channel.channel_type == "discord" and config.get("webhook_url"):
-                    from backend.alerts.discord import send_webhook
-                    sent = await send_webhook(str(config["webhook_url"]), {"description": text})
                 else:
                     notification.status = "cancelled"
                     continue

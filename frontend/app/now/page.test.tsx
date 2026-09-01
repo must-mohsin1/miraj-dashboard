@@ -49,7 +49,7 @@ describe("Decision Desk Now page", () => {
           pair: "BTC_USDT",
           direction: "LONG",
           signal_state: "ACTIONABLE",
-          channel_type: "discord",
+          channel_type: "telegram",
           status: "sent",
           attempts: 1,
           created_at: "2026-07-20T14:29:00Z",

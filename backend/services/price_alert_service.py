@@ -5,7 +5,7 @@ Responsibilities
 1. **Create** — persist a new PriceAlert row with active status.
 2. **Check** — evaluate all active alerts against current market prices.
 3. **Trigger** — when price hits the alert level, mark as triggered and
-   send notification via the user's enabled alert channels (Telegram/Discord).
+   send notification via the user's enabled alert channels (Telegram/email).
 
 Usage::
 
@@ -16,7 +16,6 @@ Usage::
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -25,9 +24,9 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.alerts import RETIRED_ALERT_CHANNEL_TYPES
 from backend.models import AlertChannel, PriceAlert, User
-from backend.alerts.telegram import format_alert_message as format_tg_message, send_alert
-from backend.alerts.discord import build_embed, send_webhook
+from backend.alerts.telegram import send_alert
 
 logger = logging.getLogger(__name__)
 
@@ -305,9 +304,6 @@ async def _trigger_alert(
     tg_text = _format_price_alert_message(
         alert, current_price, direction_label, direction_arrow,
     )
-    dc_embed = _build_price_alert_embed(
-        alert, current_price, direction_label, direction_arrow,
-    )
 
     for ch in channels:
         try:
@@ -316,14 +312,12 @@ async def _trigger_alert(
             config = {}
 
         success = False
+        if ch.channel_type in RETIRED_ALERT_CHANNEL_TYPES:
+            continue
         if ch.channel_type == "telegram":
             chat_id = config.get("chat_id")
             if chat_id:
                 success = await send_alert(str(chat_id), tg_text)
-        elif ch.channel_type == "discord":
-            webhook_url = config.get("webhook_url")
-            if webhook_url:
-                success = await send_webhook(str(webhook_url), dc_embed)
         elif ch.channel_type == "email":
             email_addr = config.get("email")
             if email_addr:
@@ -386,32 +380,3 @@ def _format_price_alert_message(
     if alert.message:
         lines.append(f"💬 {alert.message}")
     return "\n".join(lines)
-
-
-def _build_price_alert_embed(
-    alert: PriceAlert,
-    current_price: float,
-    direction_label: str,
-    direction_arrow: str,
-) -> dict[str, Any]:
-    """Build a Discord embed for a triggered price alert."""
-    from datetime import datetime as dt_mod
-
-    fields = [
-        {"name": "🏷️ Symbol", "value": alert.symbol, "inline": True},
-        {"name": "📊 Level", "value": f"{alert.price_level}", "inline": True},
-        {"name": "💵 Current Price", "value": f"{current_price}", "inline": True},
-        {"name": "📐 Direction", "value": direction_label.upper(), "inline": True},
-    ]
-    if alert.message:
-        fields.append({"name": "💬 Note", "value": alert.message, "inline": False})
-
-    # Green for above, Red for below
-    color = 0x00FF00 if alert.direction == "above" else 0xFF0000
-
-    return {
-        "title": f"🔔 Price Alert: {alert.symbol}",
-        "color": color,
-        "fields": fields,
-        "timestamp": dt_mod.utcnow().isoformat() + "Z",
-    }

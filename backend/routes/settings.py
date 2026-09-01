@@ -5,7 +5,7 @@ Endpoints
 GET    /api/v1/settings/pairs           — list all pair settings for the current user
 PUT    /api/v1/settings/pairs/{pair}    — update pair settings (alert_threshold, alert_enabled, etc.)
 GET    /api/v1/settings/channels        — list all alert channels for the current user
-POST   /api/v1/settings/channels        — create a new alert channel (Telegram / Discord / email / webhook)
+POST   /api/v1/settings/channels        — create a new alert channel (Telegram / email / webhook)
 PUT    /api/v1/settings/channels/{id}   — update an alert channel config
 DELETE /api/v1/settings/channels/{id}   — delete an alert channel
 GET    /api/v1/settings/email           — get the user's alert email address
@@ -70,7 +70,7 @@ def _public_channel_config(
 class AlertChannelCreateRequest(BaseModel):
     """Request body for creating a new alert channel."""
 
-    channel_type: str = Field(..., pattern="^(telegram|discord|email|webhook)$")
+    channel_type: str = Field(..., pattern="^(telegram|email|webhook)$")
     config: dict[str, Any]
     enabled: bool = True
 
@@ -230,7 +230,7 @@ async def create_alert_channel(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> AlertChannelResponse:
-    """Create a new alert channel (Telegram, Discord, email, or webhook)."""
+    """Create a new alert channel (Telegram, email, or webhook)."""
     user_id = int(current_user.id)
     if body.channel_type == "webhook":
         webhook_count = await session.scalar(
