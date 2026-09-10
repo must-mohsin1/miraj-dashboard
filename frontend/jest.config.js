@@ -10,6 +10,7 @@ const customJestConfig = {
   setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
+    "^lightweight-charts$": "<rootDir>/test-mocks/lightweight-charts.js",
   },
 };
 

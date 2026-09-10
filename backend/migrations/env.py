@@ -34,6 +34,8 @@ from backend.models import (       # noqa: E402, F401
     AlertChannel,
     AlertHistory,
     Analysis,
+    CollectorIngestReplay,
+    CollectorReport,
     ExchangeKey,
     OrderHistory,
     PairSetting,

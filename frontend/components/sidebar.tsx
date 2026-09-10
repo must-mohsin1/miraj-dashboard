@@ -41,7 +41,7 @@ export interface NavItem {
 
 export const navItems: NavItem[] = [
   { href: "/", label: "Home", icon: Home },
-  { href: "/now", label: "Decision Desk", icon: Activity },
+  { href: "/desk", label: "Decision Desk", icon: Activity },
   { href: "/macro", label: "Macro Dashboard", icon: TrendingUp },
   { href: "/scanner", label: "Scanner", icon: Search },
   { href: "/analysis", label: "Analysis", icon: BarChart3 },

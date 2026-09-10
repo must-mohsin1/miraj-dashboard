@@ -41,6 +41,63 @@ class User(Base):
     monthly_profit_goals = relationship("MonthlyProfitGoal", back_populates="user", cascade="all, delete-orphan")
 
 
+class CollectorReport(Base):
+    """Durable, public-only report submitted by an authenticated collector."""
+
+    __tablename__ = "collector_reports"
+    __table_args__ = (
+        UniqueConstraint("report_id", name="uq_collector_reports_report_id"),
+        Index("ix_collector_reports_received_at", "received_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(String(128), nullable=False)
+    symbol = Column(String(40), nullable=False, index=True)
+    generated_at = Column(DateTime, nullable=False)
+    received_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    report = Column(JSON, nullable=False)
+    payload_digest = Column(String(64), nullable=False)
+    status = Column(String(20), nullable=False, default="received")
+    validation_error = Column(String(256), nullable=True)
+
+
+class CollectorIngestReplay(Base):
+    """One-time request nonce registry for signed collector ingestion."""
+
+    __tablename__ = "collector_ingest_replays"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nonce = Column(String(128), nullable=False, unique=True)
+    request_digest = Column(String(64), nullable=False)
+    received_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+
+class CollectorIngestEvent(Base):
+    """Sanitized lifecycle event written after HMAC and nonce authentication."""
+
+    __tablename__ = "collector_ingest_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nonce = Column(String(128), nullable=False, index=True)
+    request_digest = Column(String(64), nullable=False)
+    report_id = Column(String(128), nullable=True)
+    status = Column(String(20), nullable=False)
+    validation_error = Column(String(64), nullable=True)
+    received_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+
+class CollectorIngestFailure(Base):
+    """Sanitized audit record for an authenticated semantic collector rejection."""
+
+    __tablename__ = "collector_ingest_failures"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nonce = Column(String(128), nullable=False, unique=True)
+    request_digest = Column(String(64), nullable=False)
+    validation_error = Column(String(64), nullable=False)
+    received_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+
 class AlertChannel(Base):
     """Per-user Telegram, email, or signed-webhook configuration."""
 

@@ -1,22 +1,19 @@
-import NextAuth from "next-auth";
-export { auth as middleware } from "@/auth";
+import { NextResponse } from "next/server";
 
-/**
- * Protect every route except the auth pages.
- *
- * Auth.js v5's `auth` middleware export handles the session check; the
- * `config.matcher` below ensures it runs on every path *except*
- * `/login`, `/register`, and Next.js internals.
- */
+import { auth } from "@/auth";
+
+export const middleware = auth((request) => {
+  if (request.auth) {
+    return NextResponse.next();
+  }
+
+  const callbackUrl = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+  const loginUrl = new URL("/login", request.nextUrl.origin);
+  loginUrl.searchParams.set("callbackUrl", callbackUrl);
+
+  return NextResponse.redirect(loginUrl);
+});
 
 export const config = {
-  matcher: [
-    /*
-     * Run auth on all paths except:
-     * - /login, /register          (public auth pages)
-     * - /api/auth/*               (Auth.js route handlers)
-     * - /_next/*, /favicon.ico, …  (static assets)
-     */
-    "/((?!login|register|api/auth|_next/static|_next/image|favicon.ico).*)",
-  ],
+  matcher: ["/desk/:path*"],
 };

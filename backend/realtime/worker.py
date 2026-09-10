@@ -306,6 +306,7 @@ class MexcMonitoringWorker:
     """Reconnect-safe MEXC public-stream worker for all active watchlist pairs."""
 
     intervals = ("Min5", "Min15", "Min60", "Hour4")
+    heartbeat_interval_seconds = 30.0
 
     def __init__(self) -> None:
         self._stop = asyncio.Event()
@@ -328,9 +329,7 @@ class MexcMonitoringWorker:
     async def run(self) -> None:
         await self._load_watchlist()
         self._last_watchlist_refresh_at = time.monotonic()
-        if not self._users_by_symbol:
-            logger.warning("Real-time worker has no watchlist pairs; stopping")
-            return
+        self._touch_heartbeat()
         needs_reconciliation = True
         while not self._stop.is_set():
             try:
@@ -338,7 +337,11 @@ class MexcMonitoringWorker:
                 # symbols. Do not open an empty socket; remain fail-closed while
                 # periodically checking whether eligible membership returns.
                 if not self._users_by_symbol:
-                    await self._wait_to_reconnect(self._seconds_until_watchlist_refresh())
+                    logger.info("Real-time worker has no supported MEXC watchlist pairs; remaining idle")
+                    self._touch_heartbeat()
+                    await self._wait_to_reconnect(
+                        min(self.heartbeat_interval_seconds, self._seconds_until_watchlist_refresh())
+                    )
                     if await self._refresh_watchlist_if_due():
                         needs_reconciliation = True
                     continue

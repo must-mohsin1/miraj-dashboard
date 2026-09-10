@@ -1,7 +1,7 @@
 """Authentication routes — register, login, and a protected health-check."""
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import (
@@ -65,6 +65,12 @@ async def login(
         select(User).where(User.username == body.username)
     )
     user = result.scalar_one_or_none()
+    if user is None:
+        normalized_email = body.username.strip().lower()
+        result = await session.execute(
+            select(User).where(func.lower(User.email) == normalized_email)
+        )
+        user = result.scalar_one_or_none()
     if user is None or not verify_password(body.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

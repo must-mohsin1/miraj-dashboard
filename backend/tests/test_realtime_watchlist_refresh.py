@@ -57,6 +57,75 @@ def test_catalogue_outage_removes_previous_membership_fail_closed():
     asyncio.run(scenario())
 
 
+def test_empty_watchlist_keeps_worker_alive_and_refreshes_membership():
+    async def scenario() -> None:
+        worker = MexcMonitoringWorker()
+        worker._watchlist_refresh_seconds = 0.0
+        load_calls = 0
+        heartbeat_calls = 0
+        waits: list[float] = []
+
+        async def load_empty_watchlist() -> None:
+            nonlocal load_calls
+            load_calls += 1
+            worker._users_by_symbol = defaultdict(set)
+
+        async def wait_for_idle_refresh(seconds: float) -> None:
+            waits.append(seconds)
+            worker._stop.set()
+
+        def touch_heartbeat() -> None:
+            nonlocal heartbeat_calls
+            heartbeat_calls += 1
+
+        worker._load_watchlist = load_empty_watchlist  # type: ignore[method-assign]
+        worker._wait_to_reconnect = wait_for_idle_refresh  # type: ignore[method-assign]
+        worker._touch_heartbeat = touch_heartbeat  # type: ignore[method-assign]
+
+        await worker.run()
+
+        assert load_calls == 2
+        assert heartbeat_calls >= 1
+        assert waits
+
+    asyncio.run(scenario())
+
+
+def test_idle_worker_begins_streaming_when_a_supported_pair_appears_on_refresh():
+    async def scenario() -> None:
+        worker = MexcMonitoringWorker()
+        worker._watchlist_refresh_seconds = 0.0
+        load_calls = 0
+        hydrated: list[dict[str, set[int]]] = []
+        streamed: list[dict[str, set[int]]] = []
+
+        async def load_watchlist() -> None:
+            nonlocal load_calls
+            load_calls += 1
+            worker._users_by_symbol = defaultdict(set, {"BTCUSDT": {1}}) if load_calls == 2 else defaultdict(set)
+
+        async def hydrate_history() -> None:
+            hydrated.append(dict(worker._users_by_symbol))
+
+        async def stream_once() -> bool:
+            streamed.append(dict(worker._users_by_symbol))
+            worker._stop.set()
+            return False
+
+        worker._load_watchlist = load_watchlist  # type: ignore[method-assign]
+        worker._hydrate_history = hydrate_history  # type: ignore[method-assign]
+        worker._stream_once = stream_once  # type: ignore[method-assign]
+        worker._touch_heartbeat = lambda: None  # type: ignore[method-assign]
+
+        await worker.run()
+
+        assert load_calls == 2
+        assert hydrated == [{"BTCUSDT": {1}}]
+        assert streamed == [{"BTCUSDT": {1}}]
+
+    asyncio.run(scenario())
+
+
 def test_stream_requests_reconnect_only_when_due_refresh_changes_membership():
     class Socket:
         async def send(self, _payload: str) -> None:
