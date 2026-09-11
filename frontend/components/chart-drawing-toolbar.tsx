@@ -1,6 +1,6 @@
 "use client";
 
-export type ChartDrawingTool = "cursor" | "horizontal" | "trend" | "fib";
+export type ChartDrawingTool = "cursor" | "horizontal" | "trend" | "fib" | "text";
 
 interface ChartDrawingToolbarProps {
   activeTool: ChartDrawingTool;
@@ -14,6 +14,7 @@ const TOOLS: Array<{ tool: ChartDrawingTool; label: string; title: string }> = [
   { tool: "horizontal", label: "H Line", title: "Horizontal line (one click)" },
   { tool: "trend", label: "Trend", title: "Trend line (two clicks)" },
   { tool: "fib", label: "Fib", title: "Fibonacci retracement (two clicks)" },
+  { tool: "text", label: "Text", title: "Text label (one click)" },
 ];
 
 export function ChartDrawingToolbar({

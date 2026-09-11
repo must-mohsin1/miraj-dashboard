@@ -17,6 +17,16 @@ import type {
   Timeframe,
 } from "@/lib/types";
 
+export interface LiveCandle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  closed: boolean;
+}
+
 interface LiveCandlestickChartProps {
   symbol: string;
   candles: Candle[];
@@ -53,7 +63,10 @@ export function LiveCandlestickChart({
   const [tfCandles, setTfCandles] = useState<Candle[] | null>(null);
   const [tfError, setTfError] = useState<string | null>(null);
   const [tfLoading, setTfLoading] = useState(false);
+  const [liveCandle, setLiveCandle] = useState<LiveCandle | null>(null);
+  const [candleStreamConnected, setCandleStreamConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+  const candleWsRef = useRef<WebSocket | null>(null);
 
   const symbols = useMemo(() => [symbol], [symbol]);
 
@@ -126,6 +139,63 @@ export function LiveCandlestickChart({
       }
     };
   }, [symbols]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    const normalized = symbol.trim().toUpperCase().replace(/[\\/-]/g, "");
+    const streamSymbol = normalized.endsWith("USDT") ? normalized.toLowerCase() : null;
+    const interval = timeframe === "1w" ? "1w" : timeframe;
+
+    setLiveCandle(null);
+    setCandleStreamConnected(false);
+    if (!streamSymbol || typeof WebSocket === "undefined") return;
+
+    const connect = () => {
+      if (cancelled) return;
+      const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${streamSymbol}@kline_${interval}`);
+      candleWsRef.current = ws;
+      ws.onopen = () => {
+        if (!cancelled) setCandleStreamConnected(true);
+      };
+      ws.onmessage = (event) => {
+        if (cancelled) return;
+        try {
+          const payload = JSON.parse(event.data);
+          const kline = payload?.k;
+          if (!kline) return;
+          setLiveCandle({
+            time: Math.floor(Number(kline.t) / 1000),
+            open: Number(kline.o),
+            high: Number(kline.h),
+            low: Number(kline.l),
+            close: Number(kline.c),
+            volume: Number(kline.v),
+            closed: Boolean(kline.x),
+          });
+        } catch {
+          // Ignore malformed public frames; the reconnect path remains active.
+        }
+      };
+      ws.onerror = () => {
+        if (!cancelled) setCandleStreamConnected(false);
+        ws.close();
+      };
+      ws.onclose = () => {
+        if (cancelled) return;
+        setCandleStreamConnected(false);
+        reconnectTimer = setTimeout(connect, 2000);
+      };
+    };
+
+    connect();
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      candleWsRef.current?.close();
+      candleWsRef.current = null;
+    };
+  }, [symbol, timeframe]);
 
   useEffect(() => {
     let cancelled = false;
@@ -215,6 +285,16 @@ export function LiveCandlestickChart({
             price={liveTick}
             connected={isConnected}
           />
+          {candleStreamConnected && (
+            <span className="inline-flex items-center gap-1 border border-[#2A2620] bg-[#1D1A16] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#6CA98F]">
+              Candle stream
+            </span>
+          )}
+          {!candleStreamConnected && symbol.toUpperCase().replace(/[\\/-]/g, "").endsWith("USDT") && (
+            <span className="inline-flex items-center gap-1 border border-[#4A3028] bg-[#211815] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C96A55]">
+              Candle reconnecting
+            </span>
+          )}
           {isConnected && (
             <span className="inline-flex items-center gap-1 border border-[#2A2620] bg-[#1D1A16] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#6CA98F]">
               <span className="relative flex h-2 w-2" aria-hidden>
@@ -253,7 +333,9 @@ export function LiveCandlestickChart({
           orderBlocks={timeframe === "1d" ? orderBlocks : null}
           fvgs={timeframe === "1d" ? fvgs : null}
           symbol={symbol}
+          drawingScope={timeframe}
           tradeLevels={tradeLevels}
+          liveCandle={liveCandle}
           livePrices={livePrices}
           indicators={indicators}
           indicatorData={indicatorData}

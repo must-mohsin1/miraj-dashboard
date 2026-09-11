@@ -92,9 +92,20 @@ const MACD_HIST_DOWN = "rgba(201, 106, 85, 0.6)";
 
 const SUB_PANE_HEIGHT = 150;
 
+type LiveCandleInput = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  closed: boolean;
+};
+
 type DrawingPoint = { time: Time; value: number };
 type ChartDrawing =
   | { kind: "horizontal"; price: number }
+  | { kind: "text"; price: number; text: string }
   | { kind: "trend"; start: DrawingPoint; end: DrawingPoint }
   | { kind: "fib"; start: DrawingPoint; end: DrawingPoint };
 
@@ -127,6 +138,23 @@ function renderDrawing(
           lineVisible: true,
           axisLabelVisible: true,
           title: "H Line",
+        }),
+      },
+    ];
+  }
+
+  if (drawing.kind === "text") {
+    return [
+      {
+        kind: "priceLine",
+        line: candleSeries.createPriceLine({
+          price: drawing.price,
+          color: "#C2A36B",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          lineVisible: true,
+          axisLabelVisible: true,
+          title: drawing.text.slice(0, 24),
         }),
       },
     ];
@@ -216,12 +244,16 @@ interface CandlestickChartProps {
   fvgs?: FairValueGap[] | null;
   /** Optional symbol label. */
   symbol?: string;
+  /** Scope used to persist chart drawings locally per symbol/timeframe. */
+  drawingScope?: string;
   /** Optional trade levels. */
   tradeLevels?: {
     entry?: number | null;
     stopLoss?: number | null;
     targets?: number[];
   } | null;
+  /** Latest exchange-native candle update. */
+  liveCandle?: LiveCandleInput | null;
   /** Live prices keyed by symbol. */
   livePrices?: LivePrices | null;
   /** Per-indicator visibility (from IndicatorTogglePanel). */
@@ -238,7 +270,9 @@ export function CandlestickChart({
   orderBlocks = null,
   fvgs = null,
   symbol = "",
+  drawingScope = "default",
   tradeLevels = null,
+  liveCandle = null,
   livePrices = null,
   indicators,
   indicatorData = null,
@@ -246,6 +280,7 @@ export function CandlestickChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastCandleRef = useRef<CandlestickData | null>(null);
   const drawingArtifactsRef = useRef<DrawingArtifact[]>([]);
@@ -254,6 +289,35 @@ export function CandlestickChart({
   const activeToolRef = useRef<ChartDrawingTool>("cursor");
   const [activeTool, setActiveTool] = useState<ChartDrawingTool>("cursor");
   const [drawings, setDrawings] = useState<ChartDrawing[]>([]);
+  const drawingsLoadedRef = useRef(false);
+  const drawingStorageKey = `miraj-chart-drawings:${symbol}:${drawingScope}`;
+
+  useEffect(() => {
+    drawingsLoadedRef.current = false;
+    drawingsRef.current = [];
+    try {
+      const raw = window.localStorage.getItem(drawingStorageKey);
+      const saved = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(saved)) {
+        drawingsRef.current = saved;
+        setDrawings(saved);
+      } else {
+        setDrawings([]);
+      }
+    } catch {
+      setDrawings([]);
+    }
+    drawingsLoadedRef.current = true;
+  }, [drawingStorageKey]);
+
+  useEffect(() => {
+    if (!drawingsLoadedRef.current) return;
+    try {
+      window.localStorage.setItem(drawingStorageKey, JSON.stringify(drawings));
+    } catch {
+      // Storage can be unavailable in private/restricted browser contexts.
+    }
+  }, [drawings, drawingStorageKey]);
 
   const isMobile = useMediaQuery("(max-width: 768px)");
 
@@ -462,6 +526,12 @@ export function CandlestickChart({
         finishDrawing();
         return;
       }
+      if (tool === "text") {
+        const text = window.prompt("Chart label", "Signal level");
+        if (text?.trim()) commitDrawing({ kind: "text", price: point.value, text: text.trim() });
+        finishDrawing();
+        return;
+      }
 
       const start = pendingDrawingRef.current;
       if (!start) {
@@ -611,6 +681,7 @@ export function CandlestickChart({
           volumePaneIdx
         );
         volSeries.setData(volData);
+        volumeSeriesRef.current = volSeries;
         volSeries.priceScale().applyOptions({
           visible: false,
           scaleMargins: { top: 0.7, bottom: 0 },
@@ -857,6 +928,7 @@ export function CandlestickChart({
       priceLinesRef.current = [];
       drawingArtifactsRef.current = [];
       candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
       lastCandleRef.current = null;
       chart.remove();
       chartRef.current = null;
@@ -869,6 +941,7 @@ export function CandlestickChart({
     orderBlocks,
     fvgs,
     tradeLevels,
+    drawings,
     symbol,
     indicatorData,
     vis,
@@ -876,9 +949,40 @@ export function CandlestickChart({
     isMobile,
   ]);
 
+  // ── Exchange-native candle updates ───────────────────────────────────
+  useEffect(() => {
+    if (!liveCandle) return;
+    const series = candleSeriesRef.current;
+    const last = lastCandleRef.current;
+    if (!series || !last) return;
+
+    const updated: CandlestickData = {
+      time: liveCandle.time as UTCTimestamp,
+      open: liveCandle.open,
+      high: liveCandle.high,
+      low: liveCandle.low,
+      close: liveCandle.close,
+    };
+
+    // Binance sends the same candle start time until k.x closes it; once a
+    // new start time arrives, lightweight-charts appends the next candle.
+    if ((updated.time as number) < (last.time as number)) return;
+    try {
+      series.update(updated);
+      volumeSeriesRef.current?.update({
+        time: liveCandle.time as UTCTimestamp,
+        value: liveCandle.volume,
+        color: liveCandle.close >= liveCandle.open ? COLORS.volBullish : COLORS.volBearish,
+      });
+      lastCandleRef.current = updated;
+    } catch (err) {
+      console.debug("[chart] candle stream update failed:", err);
+    }
+  }, [liveCandle]);
+
   // ── Live price updates ───────────────────────────────────────────────
   useEffect(() => {
-    if (!livePrices) return;
+    if (!livePrices || liveCandle) return;
     const sym = symbol.trim().toUpperCase();
     if (!sym) return;
     const tick = livePrices[sym];
@@ -904,7 +1008,7 @@ export function CandlestickChart({
       console.debug("[chart] series.update failed:", err);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [livePrices, symbol]);
+  }, [livePrices, liveCandle, symbol]);
 
   if (!candles || candles.length === 0) {
     return (
