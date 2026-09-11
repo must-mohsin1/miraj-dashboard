@@ -239,10 +239,22 @@ export function LiveCandlestickChart({
   }, [symbol, timeframe]);
 
   const displayCandles = useMemo(() => {
-    if (tfCandles && tfCandles.length > 0) return tfCandles;
-    return timeframe === "1d" ? scanCandles : [];
-  }, [tfCandles, timeframe, scanCandles]);
-  const useScanSeries = timeframe === "1d" && (!tfCandles || tfCandles.length === 0);
+    const base = tfCandles && tfCandles.length > 0 ? tfCandles : timeframe === "1d" ? scanCandles : [];
+    if (!liveCandle || base.length === 0) return base;
+    const nextCandle: Candle = {
+      time: liveCandle.time,
+      open: liveCandle.open,
+      high: liveCandle.high,
+      low: liveCandle.low,
+      close: liveCandle.close,
+      volume: liveCandle.volume,
+    };
+    const last = base[base.length - 1];
+    if (Number(last.time) === liveCandle.time) return [...base.slice(0, -1), nextCandle];
+    if (Number(last.time) < liveCandle.time) return [...base, nextCandle];
+    return base;
+  }, [tfCandles, timeframe, scanCandles, liveCandle]);
+  const useScanSeries = timeframe === "1d" && !liveCandle && (!tfCandles || tfCandles.length === 0);
   const displayEmas = useMemo(
     () => (useScanSeries && scanEmas ? scanEmas : buildEmaOverlay(displayCandles)),
     [useScanSeries, scanEmas, displayCandles]

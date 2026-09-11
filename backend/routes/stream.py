@@ -27,6 +27,13 @@ from sqlalchemy import select
 from backend.auth import decode_access_token
 from backend.database import get_session_factory
 from backend.models import User, WatchlistPair
+from backend.realtime.chart_stream import (
+    binance_stream_url,
+    mexc_subscription,
+    parse_binance_message,
+    parse_mexc_message,
+    sse_event,
+)
 from backend.services.exchange_service import _translate_ccxt_error
 
 logger = logging.getLogger(__name__)
@@ -271,6 +278,81 @@ async def _price_stream(
 
 
 # ── Route ─────────────────────────────────────────────────────────────────
+
+
+async def _candle_stream(
+    request: Request,
+    symbol: str,
+    timeframe: str,
+    venue: str,
+) -> AsyncGenerator[str, None]:
+    """Hydrate one snapshot, then stream normalized public candles with reconnects."""
+    disconnected = False
+    normalized = symbol.strip().upper()
+    while not disconnected:
+        try:
+            import asyncio as _asyncio
+            from backend.routes.charts import _fetch_ccxt_ohlcv
+
+            try:
+                snapshot = await _asyncio.to_thread(_fetch_ccxt_ohlcv, normalized, timeframe, 200)
+            except Exception as exc:
+                logger.warning("candle snapshot failed for %s@%s: %s", normalized, timeframe, exc)
+                snapshot = []
+            yield sse_event("snapshot", {"symbol": normalized, "timeframe": timeframe, "candles": snapshot})
+
+            import websockets
+            if venue == "mexc":
+                socket_url = "wss://contract.mexc.com/edge"
+                subscribe_payload = mexc_subscription(normalized, timeframe)
+                parser = parse_mexc_message
+            else:
+                socket_url = binance_stream_url(normalized, timeframe)
+                subscribe_payload = None
+                parser = parse_binance_message
+
+            async with websockets.connect(socket_url, ping_interval=20, ping_timeout=20) as socket:
+                if subscribe_payload is not None:
+                    await socket.send(json.dumps(subscribe_payload))
+                yield sse_event("status", {"connected": True, "venue": venue})
+                while not await request.is_disconnected():
+                    raw = await _asyncio.wait_for(socket.recv(), timeout=45)
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8", errors="replace")
+                    try:
+                        message = json.loads(raw)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    candle = parser(message, timeframe)
+                    if candle is not None:
+                        yield sse_event("candle", candle.as_dict())
+                disconnected = True
+        except asyncio.CancelledError:
+            disconnected = True
+        except Exception as exc:
+            logger.info("candle stream reconnect for %s@%s via %s: %s", normalized, timeframe, venue, exc)
+            if await request.is_disconnected():
+                disconnected = True
+            else:
+                yield sse_event("status", {"connected": False, "retrying": True, "venue": venue})
+                await asyncio.sleep(2)
+
+
+@router.get("/stream/candles")
+async def stream_candles(
+    request: Request,
+    symbol: str = Query(..., min_length=1),
+    timeframe: str = Query("1d", pattern="^(1m|5m|15m|1h|4h|1d|1w)$"),
+    venue: str = Query("binance", pattern="^(binance|mexc)$"),
+    token: Optional[str] = Query(None),
+) -> StreamingResponse:
+    """Authenticated normalized OHLCV stream for interactive charts."""
+    await _get_user_from_query_or_header(request, token)
+    return StreamingResponse(
+        _candle_stream(request, symbol, timeframe, venue),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/stream/prices")
