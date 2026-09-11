@@ -104,11 +104,39 @@ type LiveCandleInput = {
 
 type DrawingPoint = { time: Time; value: number };
 type ChartDrawing =
-  | { kind: "horizontal"; price: number }
-  | { kind: "text"; price: number; text: string }
-  | { kind: "trend"; start: DrawingPoint; end: DrawingPoint }
-  | { kind: "fib"; start: DrawingPoint; end: DrawingPoint };
+  | { id: string; kind: "horizontal"; price: number }
+  | { id: string; kind: "text"; price: number; text: string }
+  | { id: string; kind: "trend"; start: DrawingPoint; end: DrawingPoint }
+  | { id: string; kind: "fib"; start: DrawingPoint; end: DrawingPoint };
 
+type ApiDrawing = {
+  id: string;
+  type: string;
+  points?: Array<{ time?: Time; value?: number }>;
+  metadata?: { text?: string };
+};
+
+function newDrawingId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function fromApiDrawing(item: ApiDrawing): ChartDrawing | null {
+  const points = item.points ?? [];
+  if (item.type === "horizontal" && typeof points[0]?.value === "number") {
+    return { id: item.id, kind: "horizontal", price: points[0].value };
+  }
+  if (item.type === "text" && typeof points[0]?.value === "number") {
+    return { id: item.id, kind: "text", price: points[0].value, text: item.metadata?.text ?? "Label" };
+  }
+  if ((item.type === "trend" || item.type === "fib") && points.length >= 2) {
+    const [start, end] = points;
+    if (start.time == null || end.time == null || start.value == null || end.value == null) return null;
+    return { id: item.id, kind: item.type, start: { time: start.time, value: start.value }, end: { time: end.time, value: end.value } };
+  }
+  return null;
+}
 type DrawingArtifact =
   | { kind: "priceLine"; line: IPriceLine }
   | { kind: "series"; series: ISeriesApi<"Line"> };
@@ -251,6 +279,7 @@ interface CandlestickChartProps {
     entry?: number | null;
     stopLoss?: number | null;
     targets?: number[];
+    direction?: string | null;
   } | null;
   /** Latest exchange-native candle update. */
   liveCandle?: LiveCandleInput | null;
@@ -290,25 +319,91 @@ export function CandlestickChart({
   const [activeTool, setActiveTool] = useState<ChartDrawingTool>("cursor");
   const [drawings, setDrawings] = useState<ChartDrawing[]>([]);
   const drawingsLoadedRef = useRef(false);
+  const drawingsServerReadyRef = useRef(false);
+  const drawingsServerTokenRef = useRef<string | null>(null);
   const drawingStorageKey = `miraj-chart-drawings:${symbol}:${drawingScope}`;
 
+  const persistDrawing = (drawing: ChartDrawing) => {
+    const token = drawingsServerTokenRef.current;
+    if (!drawingsServerReadyRef.current) return;
+    const points = drawing.kind === "horizontal" || drawing.kind === "text"
+      ? [{ value: drawing.price }]
+      : [drawing.start, drawing.end];
+    const metadata = drawing.kind === "text" ? { text: drawing.text } : {};
+    void fetch(`/api/v1/drawings?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(drawingScope)}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ id: drawing.id, type: drawing.kind, points, style: {}, metadata }),
+    }).catch(() => undefined);
+  };
+
+  const clearServerDrawings = () => {
+    const token = drawingsServerTokenRef.current;
+    if (!drawingsServerReadyRef.current) return;
+    void fetch(`/api/v1/drawings?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(drawingScope)}`, {
+      method: "DELETE",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }).catch(() => undefined);
+  };
+
   useEffect(() => {
+    let cancelled = false;
     drawingsLoadedRef.current = false;
-    drawingsRef.current = [];
-    try {
-      const raw = window.localStorage.getItem(drawingStorageKey);
-      const saved = raw ? JSON.parse(raw) : [];
-      if (Array.isArray(saved)) {
-        drawingsRef.current = saved;
-        setDrawings(saved);
-      } else {
-        setDrawings([]);
+    drawingsServerReadyRef.current = false;
+    drawingsServerTokenRef.current = null;
+
+    const load = async () => {
+      let localDrawings: ChartDrawing[] = [];
+      try {
+        const raw = window.localStorage.getItem(drawingStorageKey);
+        const saved = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(saved)) {
+          localDrawings = saved.map((item) => ({ ...item, id: item.id ?? newDrawingId() })).filter((item) => item.kind);
+        }
+      } catch {
+        localDrawings = [];
       }
-    } catch {
-      setDrawings([]);
-    }
-    drawingsLoadedRef.current = true;
-  }, [drawingStorageKey]);
+      if (!cancelled) {
+        drawingsRef.current = localDrawings;
+        setDrawings(localDrawings);
+      }
+
+      try {
+        const sessionResponse = await fetch("/api/auth/session");
+        const sessionData = await sessionResponse.json();
+        const token = sessionData?.user?.accessToken;
+        const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+        const response = await fetch(
+          `/api/v1/drawings?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(drawingScope)}`,
+          { headers, cache: "no-store" },
+        );
+        if (!response.ok) return;
+        const data = await response.json();
+        const serverDrawings = Array.isArray(data?.drawings)
+          ? data.drawings.map(fromApiDrawing).filter(Boolean) as ChartDrawing[]
+          : [];
+        if (!cancelled) {
+          drawingsServerReadyRef.current = true;
+          drawingsServerTokenRef.current = token ?? null;
+          drawingsRef.current = serverDrawings;
+          setDrawings(serverDrawings);
+          window.localStorage.setItem(drawingStorageKey, JSON.stringify(serverDrawings));
+        }
+      } catch {
+        // Local drawings remain available when the backend/session is unavailable.
+      } finally {
+        if (!cancelled) drawingsLoadedRef.current = true;
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [drawingStorageKey, drawingScope, symbol]);
 
   useEffect(() => {
     if (!drawingsLoadedRef.current) return;
@@ -363,6 +458,7 @@ export function CandlestickChart({
     pendingDrawingRef.current = null;
     activeToolRef.current = "cursor";
     setDrawings([]);
+    clearServerDrawings();
     setActiveTool("cursor");
   };
 
@@ -503,6 +599,7 @@ export function CandlestickChart({
       const nextDrawings = [...drawingsRef.current, drawing];
       drawingsRef.current = nextDrawings;
       setDrawings(nextDrawings);
+      persistDrawing(drawing);
       drawingArtifactsRef.current.push(...renderDrawing(chart, candleSeries, drawing));
     };
 
@@ -522,13 +619,13 @@ export function CandlestickChart({
       const point: DrawingPoint = { time: eventTime, value: Number(price) };
 
       if (tool === "horizontal") {
-        commitDrawing({ kind: "horizontal", price: point.value });
+        commitDrawing({ id: newDrawingId(), kind: "horizontal", price: point.value });
         finishDrawing();
         return;
       }
       if (tool === "text") {
         const text = window.prompt("Chart label", "Signal level");
-        if (text?.trim()) commitDrawing({ kind: "text", price: point.value, text: text.trim() });
+        if (text?.trim()) commitDrawing({ id: newDrawingId(), kind: "text", price: point.value, text: text.trim() });
         finishDrawing();
         return;
       }
@@ -543,7 +640,7 @@ export function CandlestickChart({
         return;
       }
 
-      commitDrawing({ kind: tool, start, end: point });
+      commitDrawing({ id: newDrawingId(), kind: tool, start, end: point });
       finishDrawing();
     };
     chart.subscribeClick(handleChartClick);
@@ -865,6 +962,8 @@ export function CandlestickChart({
 
     // ── Trade levels ─────────────────────────────────────────────────
     if (tradeLevels) {
+      const directionLabel = (tradeLevels.direction ?? "").toUpperCase();
+      const prefix = directionLabel === "SHORT" ? "SHORT" : directionLabel === "LONG" ? "LONG" : "SIGNAL";
       if (tradeLevels.entry != null) {
         priceLinesRef.current.push(
           candleSeries.createPriceLine({
@@ -874,7 +973,7 @@ export function CandlestickChart({
             lineStyle: LineStyle.Solid,
             lineVisible: true,
             axisLabelVisible: true,
-            title: "Entry",
+            title: `${prefix} TRIGGER`,
           })
         );
       }
@@ -887,7 +986,7 @@ export function CandlestickChart({
             lineStyle: LineStyle.Solid,
             lineVisible: true,
             axisLabelVisible: true,
-            title: "Stop",
+            title: `${prefix} INVALIDATION`,
           })
         );
       }
@@ -902,7 +1001,7 @@ export function CandlestickChart({
               lineStyle: LineStyle.Dotted,
               lineVisible: true,
               axisLabelVisible: true,
-              title: `T${i + 1}`,
+              title: `${prefix} TP${i + 1}`,
             })
           );
         });

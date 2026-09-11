@@ -40,6 +40,7 @@ interface LiveCandlestickChartProps {
     entry?: number | null;
     stopLoss?: number | null;
     targets?: number[];
+    direction?: string | null;
   } | null;
   token: string | null | undefined;
 }

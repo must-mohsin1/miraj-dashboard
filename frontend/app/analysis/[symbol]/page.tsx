@@ -239,6 +239,7 @@ export default async function AnalysisDetailPage({ params }: PageProps) {
                     entry: flat?.entry ?? null,
                     stopLoss: flat?.stop_loss ?? null,
                     targets: tradeTargets,
+                    direction: direction ?? null,
                   }
                 : null
             }

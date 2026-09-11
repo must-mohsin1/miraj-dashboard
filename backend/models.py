@@ -39,6 +39,31 @@ class User(Base):
     order_history = relationship("OrderHistory", back_populates="user", cascade="all, delete-orphan")
     journal_entries = relationship("TradeJournalEntry", back_populates="user", cascade="all, delete-orphan")
     monthly_profit_goals = relationship("MonthlyProfitGoal", back_populates="user", cascade="all, delete-orphan")
+    chart_drawings = relationship("ChartDrawing", back_populates="user", cascade="all, delete-orphan")
+
+
+class ChartDrawing(Base):
+    """User-owned drawing scoped to one symbol and timeframe."""
+
+    __tablename__ = "chart_drawings"
+    __table_args__ = (
+        UniqueConstraint("user_id", "symbol", "timeframe", "drawing_id", name="uq_chart_drawing_scope_id"),
+        Index("ix_chart_drawings_user_scope", "user_id", "symbol", "timeframe"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    symbol = Column(String(40), nullable=False)
+    timeframe = Column(String(8), nullable=False)
+    drawing_id = Column(String(64), nullable=False)
+    drawing_type = Column(String(16), nullable=False)
+    points = Column(JSON, nullable=False, default=list)
+    style = Column(JSON, nullable=False, default=dict)
+    drawing_metadata = Column("metadata", JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="chart_drawings")
 
 
 class CollectorReport(Base):

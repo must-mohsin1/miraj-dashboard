@@ -23,9 +23,12 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import get_current_user
-from backend.models import User
+from backend.database import get_session
+from backend.models import ChartDrawing, User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["charts"])
@@ -60,15 +63,18 @@ _YF_TF: dict[str, tuple[str, str]] = {
 
 
 class DrawingItem(BaseModel):
-    """Persisted chart drawing item.
-
-    The backend currently has no drawing persistence.  This model documents
-    the forward-compatible shape for future drawing storage while allowing the
-    frontend contract to receive a graceful empty state today.
-    """
+    """Persisted chart drawing item."""
 
     id: str
     type: str
+    points: list[dict[str, Any]] = Field(default_factory=list)
+    style: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DrawingUpsert(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    type: str = Field(min_length=1, max_length=16)
     points: list[dict[str, Any]] = Field(default_factory=list)
     style: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -291,21 +297,113 @@ async def get_drawings(
     symbol: str = Query(..., min_length=1, description="Trading pair, e.g. BTC-USD"),
     timeframe: Timeframe = Query("1d", description="1m|5m|15m|1h|4h|1d|1w"),
     current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ) -> DrawingsResponse:
-    """Return saved chart drawings for a symbol/timeframe.
-
-    Drawing persistence is not implemented yet, but the chart UI calls this
-    route. Returning an authenticated empty contract prevents a 404 and gives
-    the frontend a graceful empty state until persistence is added.
-    """
-    _ = current_user
+    """Return only the signed-in user's drawings for this chart scope."""
     symbol_norm = symbol.strip().upper()
-    return DrawingsResponse(
-        symbol=symbol_norm,
-        timeframe=timeframe,
-        drawings=[],
-        total=0,
+    result = await session.execute(
+        select(ChartDrawing)
+        .where(
+            ChartDrawing.user_id == current_user.id,
+            ChartDrawing.symbol == symbol_norm,
+            ChartDrawing.timeframe == timeframe,
+        )
+        .order_by(ChartDrawing.created_at.asc())
     )
+    rows = result.scalars().all()
+    drawings = [
+        DrawingItem(
+            id=row.drawing_id,
+            type=row.drawing_type,
+            points=row.points or [],
+            style=row.style or {},
+            metadata=row.drawing_metadata or {},
+        )
+        for row in rows
+    ]
+    return DrawingsResponse(symbol=symbol_norm, timeframe=timeframe, drawings=drawings, total=len(drawings))
+
+
+@router.put("/drawings", response_model=DrawingItem)
+async def upsert_drawing(
+    payload: DrawingUpsert,
+    symbol: str = Query(..., min_length=1),
+    timeframe: Timeframe = Query("1d"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DrawingItem:
+    """Create or replace one drawing in the current user's chart scope."""
+    symbol_norm = symbol.strip().upper()
+    result = await session.execute(
+        select(ChartDrawing).where(
+            ChartDrawing.user_id == current_user.id,
+            ChartDrawing.symbol == symbol_norm,
+            ChartDrawing.timeframe == timeframe,
+            ChartDrawing.drawing_id == payload.id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        row = ChartDrawing(
+            user_id=current_user.id,
+            symbol=symbol_norm,
+            timeframe=timeframe,
+            drawing_id=payload.id,
+        )
+        session.add(row)
+    row.drawing_type = payload.type
+    row.points = payload.points
+    row.style = payload.style
+    row.drawing_metadata = payload.metadata
+    await session.flush()
+    return DrawingItem(
+        id=row.drawing_id,
+        type=row.drawing_type,
+        points=row.points or [],
+        style=row.style or {},
+        metadata=row.drawing_metadata or {},
+    )
+
+
+@router.delete("/drawings", response_model=dict[str, Any])
+async def clear_drawings(
+    symbol: str = Query(..., min_length=1),
+    timeframe: Timeframe = Query("1d"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Delete all drawings in one user/symbol/timeframe scope."""
+    symbol_norm = symbol.strip().upper()
+    result = await session.execute(
+        sa_delete(ChartDrawing).where(
+            ChartDrawing.user_id == current_user.id,
+            ChartDrawing.symbol == symbol_norm,
+            ChartDrawing.timeframe == timeframe,
+        )
+    )
+    return {"deleted": int(result.rowcount or 0), "symbol": symbol_norm, "timeframe": timeframe}
+
+
+@router.delete("/drawings/{drawing_id}", response_model=dict[str, Any])
+async def delete_drawing(
+    drawing_id: str,
+    symbol: str = Query(..., min_length=1),
+    timeframe: Timeframe = Query("1d"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Delete one drawing only when it belongs to the signed-in user/scope."""
+    result = await session.execute(
+        sa_delete(ChartDrawing).where(
+            ChartDrawing.user_id == current_user.id,
+            ChartDrawing.symbol == symbol.strip().upper(),
+            ChartDrawing.timeframe == timeframe,
+            ChartDrawing.drawing_id == drawing_id,
+        )
+    )
+    if not result.rowcount:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Drawing not found")
+    return {"deleted": 1, "id": drawing_id}
 
 
 @router.get("/charts/{symbol}/candles")
