@@ -66,8 +66,11 @@ export function LiveCandlestickChart({
   const [tfLoading, setTfLoading] = useState(false);
   const [liveCandle, setLiveCandle] = useState<LiveCandle | null>(null);
   const [candleStreamConnected, setCandleStreamConnected] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">("default");
+  const alertedLevelsRef = useRef<Set<string>>(new Set());
   const esRef = useRef<EventSource | null>(null);
   const candleWsRef = useRef<WebSocket | null>(null);
+  const candleEsRef = useRef<EventSource | null>(null);
 
   const symbols = useMemo(() => [symbol], [symbol]);
 
@@ -150,10 +153,29 @@ export function LiveCandlestickChart({
 
     setLiveCandle(null);
     setCandleStreamConnected(false);
-    if (!streamSymbol || typeof WebSocket === "undefined") return;
+    if (!streamSymbol || typeof EventSource === "undefined") return;
 
-    const connect = () => {
-      if (cancelled) return;
+    const applyCandle = (raw: string) => {
+      try {
+        const payload = JSON.parse(raw);
+        const candle = payload?.symbol ? payload : payload?.candle;
+        if (!candle) return;
+        setLiveCandle({
+          time: Number(candle.time),
+          open: Number(candle.open),
+          high: Number(candle.high),
+          low: Number(candle.low),
+          close: Number(candle.close),
+          volume: Number(candle.volume),
+          closed: Boolean(candle.closed),
+        });
+      } catch {
+        // Ignore malformed frames; the stream's reconnect path remains active.
+      }
+    };
+
+    const connectDirect = () => {
+      if (cancelled || typeof WebSocket === "undefined") return;
       const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${streamSymbol}@kline_${interval}`);
       candleWsRef.current = ws;
       ws.onopen = () => {
@@ -165,17 +187,18 @@ export function LiveCandlestickChart({
           const payload = JSON.parse(event.data);
           const kline = payload?.k;
           if (!kline) return;
-          setLiveCandle({
+          applyCandle(JSON.stringify({
+            symbol: kline.s,
             time: Math.floor(Number(kline.t) / 1000),
-            open: Number(kline.o),
-            high: Number(kline.h),
-            low: Number(kline.l),
-            close: Number(kline.c),
-            volume: Number(kline.v),
-            closed: Boolean(kline.x),
-          });
+            open: kline.o,
+            high: kline.h,
+            low: kline.l,
+            close: kline.c,
+            volume: kline.v,
+            closed: kline.x,
+          }));
         } catch {
-          // Ignore malformed public frames; the reconnect path remains active.
+          // Ignore malformed public frames.
         }
       };
       ws.onerror = () => {
@@ -185,18 +208,92 @@ export function LiveCandlestickChart({
       ws.onclose = () => {
         if (cancelled) return;
         setCandleStreamConnected(false);
-        reconnectTimer = setTimeout(connect, 2000);
+        reconnectTimer = setTimeout(connectDirect, 2000);
       };
     };
 
-    connect();
+    const connectBackend = async () => {
+      try {
+        const session = await fetch("/api/auth/session").then((response) => response.json());
+        const token = session?.user?.accessToken as string | undefined;
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
+        const source = new EventSource(
+          `/api/v1/stream/candles?symbol=${encodeURIComponent(normalized)}&timeframe=${encodeURIComponent(timeframe)}&venue=binance${tokenParam}`,
+        );
+        candleEsRef.current = source;
+        source.onopen = () => {
+          if (!cancelled) setCandleStreamConnected(true);
+        };
+        source.addEventListener("candle", (event) => {
+          if (!cancelled) applyCandle((event as MessageEvent).data);
+        });
+        source.addEventListener("status", (event) => {
+          if (!cancelled) {
+            const data = JSON.parse((event as MessageEvent).data);
+            setCandleStreamConnected(Boolean(data.connected));
+          }
+        });
+        source.onerror = () => {
+          source.close();
+          candleEsRef.current = null;
+          if (!cancelled) {
+            setCandleStreamConnected(false);
+            connectDirect();
+          }
+        };
+      } catch {
+        connectDirect();
+      }
+    };
+
+    void connectBackend();
     return () => {
       cancelled = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      candleEsRef.current?.close();
+      candleEsRef.current = null;
       candleWsRef.current?.close();
       candleWsRef.current = null;
     };
   }, [symbol, timeframe]);
+
+  useEffect(() => {
+    setNotificationPermission(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+    alertedLevelsRef.current.clear();
+  }, [symbol, timeframe, tradeLevels?.entry, tradeLevels?.stopLoss, tradeLevels?.direction, tradeLevels?.targets?.join(",")]);
+
+  const enableBrowserAlerts = async () => {
+    if (typeof Notification === "undefined") return;
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+  };
+
+  useEffect(() => {
+    if (!liveCandle?.closed || !tradeLevels || notificationPermission !== "granted") return;
+    const direction = (tradeLevels.direction ?? "").toUpperCase();
+    const isShort = direction === "SHORT";
+    const close = liveCandle.close;
+    const levels: Array<{ key: string; label: string; hit: boolean; price: number | null | undefined }> = [
+      { key: "trigger", label: `${direction || "SIGNAL"} TRIGGER`, price: tradeLevels.entry, hit: isShort ? close <= (tradeLevels.entry ?? Infinity) : close >= (tradeLevels.entry ?? -Infinity) },
+      { key: "invalidation", label: `${direction || "SIGNAL"} INVALIDATION`, price: tradeLevels.stopLoss, hit: isShort ? close >= (tradeLevels.stopLoss ?? -Infinity) : close <= (tradeLevels.stopLoss ?? Infinity) },
+      ...(tradeLevels.targets ?? []).map((price, index) => ({
+        key: `tp${index + 1}`,
+        label: `${direction || "SIGNAL"} TP${index + 1}`,
+        price,
+        hit: isShort ? close <= price : close >= price,
+      })),
+    ];
+    for (const level of levels) {
+      if (level.price == null || !level.hit) continue;
+      const key = `${symbol}:${timeframe}:${level.key}:${level.price}`;
+      if (alertedLevelsRef.current.has(key)) continue;
+      alertedLevelsRef.current.add(key);
+      new Notification(`${symbol} ${level.label}`, {
+        body: `Closed candle reached ${level.price}. Verify the setup manually.`,
+        tag: key,
+      });
+    }
+  }, [liveCandle, tradeLevels, notificationPermission, symbol, timeframe]);
 
   useEffect(() => {
     let cancelled = false;
@@ -213,16 +310,10 @@ export function LiveCandlestickChart({
           `/api/v1/charts/${encodeURIComponent(symbol)}/candles?timeframe=${timeframe}&limit=300`,
           { headers, cache: "no-store" }
         );
-        if (!res.ok) {
-          throw new Error(`Candle fetch failed (${res.status})`);
-        }
+        if (!res.ok) throw new Error(`Candle fetch failed (${res.status})`);
         const payload = (await res.json()) as CandlesResponse;
-        if (payload.timeframe !== timeframe) {
-          throw new Error("Candle response timeframe mismatch");
-        }
-        if (!cancelled) {
-          setTfCandles(payload.candles ?? []);
-        }
+        if (payload.timeframe !== timeframe) throw new Error("Candle response timeframe mismatch");
+        if (!cancelled) setTfCandles(payload.candles ?? []);
       } catch {
         if (!cancelled) {
           setTfCandles(null);
@@ -307,6 +398,20 @@ export function LiveCandlestickChart({
             <span className="inline-flex items-center gap-1 border border-[#4A3028] bg-[#211815] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C96A55]">
               Candle reconnecting
             </span>
+          )}
+          {notificationPermission === "granted" && (
+            <span className="inline-flex items-center border border-[#2A2620] bg-[#1D1A16] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#6CA98F]">
+              Alerts on
+            </span>
+          )}
+          {notificationPermission === "default" && (
+            <button
+              type="button"
+              onClick={() => void enableBrowserAlerts()}
+              className="border border-[#2A2620] bg-[#1D1A16] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C2A36B] hover:border-[#C2A36B]"
+            >
+              Enable alerts
+            </button>
           )}
           {isConnected && (
             <span className="inline-flex items-center gap-1 border border-[#2A2620] bg-[#1D1A16] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#6CA98F]">
