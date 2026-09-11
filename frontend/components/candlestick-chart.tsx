@@ -510,16 +510,16 @@ export function CandlestickChart({
       const tool = activeToolRef.current;
       if (
         tool === "cursor" ||
-        param.paneIndex !== 0 ||
-        param.time == null ||
+        (param.paneIndex != null && param.paneIndex !== 0) ||
         param.point == null
       ) {
         return;
       }
 
       const price = candleSeries.coordinateToPrice(param.point.y);
-      if (price == null) return;
-      const point: DrawingPoint = { time: param.time, value: Number(price) };
+      const eventTime = param.time ?? chart.timeScale().coordinateToTime(param.point.x);
+      if (price == null || eventTime == null) return;
+      const point: DrawingPoint = { time: eventTime, value: Number(price) };
 
       if (tool === "horizontal") {
         commitDrawing({ kind: "horizontal", price: point.value });
