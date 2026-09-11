@@ -66,9 +66,12 @@ export function LiveCandlestickChart({
   const [tfLoading, setTfLoading] = useState(false);
   const [liveCandle, setLiveCandle] = useState<LiveCandle | null>(null);
   const [candleStreamConnected, setCandleStreamConnected] = useState(false);
+  const [lastCandleUpdateAt, setLastCandleUpdateAt] = useState<number | null>(null);
+  const [feedStale, setFeedStale] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">("default");
   const [alertHistory, setAlertHistory] = useState<Array<{ event_key: string; event_type: string; direction?: string | null; price: number; candle_time: number }>>([]);
   const alertedLevelsRef = useRef<Set<string>>(new Set());
+  const staleAlertedRef = useRef(false);
   const esRef = useRef<EventSource | null>(null);
   const candleWsRef = useRef<WebSocket | null>(null);
   const candleEsRef = useRef<EventSource | null>(null);
@@ -153,6 +156,9 @@ export function LiveCandlestickChart({
     const interval = timeframe === "1w" ? "1w" : timeframe;
 
     setLiveCandle(null);
+    setLastCandleUpdateAt(null);
+    setFeedStale(false);
+    staleAlertedRef.current = false;
     setCandleStreamConnected(false);
     if (!streamSymbol || typeof EventSource === "undefined") return;
 
@@ -170,6 +176,9 @@ export function LiveCandlestickChart({
           volume: Number(candle.volume),
           closed: Boolean(candle.closed),
         });
+        setLastCandleUpdateAt(Date.now());
+        setFeedStale(false);
+        staleAlertedRef.current = false;
       } catch {
         // Ignore malformed frames; the stream's reconnect path remains active.
       }
@@ -257,6 +266,24 @@ export function LiveCandlestickChart({
       candleWsRef.current = null;
     };
   }, [symbol, timeframe]);
+
+  useEffect(() => {
+    const checkFreshness = () => {
+      const stale = lastCandleUpdateAt != null && Date.now() - lastCandleUpdateAt > 45_000;
+      setFeedStale(stale);
+      if (stale && !staleAlertedRef.current && notificationPermission === "granted") {
+        staleAlertedRef.current = true;
+        new Notification(`${symbol} candle feed stale`, {
+          body: `No candle update received for more than 45 seconds. Verify the stream before relying on levels.`,
+          tag: `${symbol}:${timeframe}:feed-stale`,
+        });
+      }
+      if (!stale) staleAlertedRef.current = false;
+    };
+    checkFreshness();
+    const timer = window.setInterval(checkFreshness, 5000);
+    return () => window.clearInterval(timer);
+  }, [lastCandleUpdateAt, notificationPermission, symbol, timeframe, candleStreamConnected]);
 
   useEffect(() => {
     setNotificationPermission(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
@@ -473,6 +500,11 @@ export function LiveCandlestickChart({
           {!candleStreamConnected && symbol.toUpperCase().replace(/[\\/-]/g, "").endsWith("USDT") && (
             <span className="inline-flex items-center gap-1 border border-[#4A3028] bg-[#211815] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C96A55]">
               Candle reconnecting
+            </span>
+          )}
+          {feedStale && (
+            <span className="inline-flex items-center border border-[#6B3B2E] bg-[#211815] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C96A55]">
+              Candle feed stale
             </span>
           )}
           {notificationPermission === "granted" && (
