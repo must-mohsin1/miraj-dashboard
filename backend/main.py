@@ -30,6 +30,7 @@ from backend.routes import (
     analytics_router,
     auth_router,
     charts_router,
+    chart_alerts_router,
     collector_reports_router,
     dca_validation_router,
     decision_desk_router,
@@ -186,6 +187,7 @@ app.include_router(scan_router)
 app.include_router(scan_diff_router)
 app.include_router(portfolio_router)
 app.include_router(charts_router)
+app.include_router(chart_alerts_router)
 app.include_router(collector_reports_router)
 app.include_router(journal_router)
 app.include_router(trading_router)

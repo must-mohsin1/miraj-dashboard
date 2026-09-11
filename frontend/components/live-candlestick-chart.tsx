@@ -67,6 +67,7 @@ export function LiveCandlestickChart({
   const [liveCandle, setLiveCandle] = useState<LiveCandle | null>(null);
   const [candleStreamConnected, setCandleStreamConnected] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">("default");
+  const [alertHistory, setAlertHistory] = useState<Array<{ event_key: string; event_type: string; direction?: string | null; price: number; candle_time: number }>>([]);
   const alertedLevelsRef = useRef<Set<string>>(new Set());
   const esRef = useRef<EventSource | null>(null);
   const candleWsRef = useRef<WebSocket | null>(null);
@@ -266,6 +267,20 @@ export function LiveCandlestickChart({
     if (typeof Notification === "undefined") return;
     const permission = await Notification.requestPermission();
     setNotificationPermission(permission);
+    try {
+      const session = await fetch("/api/auth/session").then((response) => response.json());
+      const token = session?.user?.accessToken as string | undefined;
+      await fetch(`/api/v1/chart-alerts/preferences?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ enabled: permission === "granted" }),
+      });
+    } catch {
+      // Browser permission remains usable if the preference API is unavailable.
+    }
   };
 
   useEffect(() => {
@@ -288,12 +303,73 @@ export function LiveCandlestickChart({
       const key = `${symbol}:${timeframe}:${level.key}:${level.price}`;
       if (alertedLevelsRef.current.has(key)) continue;
       alertedLevelsRef.current.add(key);
-      new Notification(`${symbol} ${level.label}`, {
-        body: `Closed candle reached ${level.price}. Verify the setup manually.`,
-        tag: key,
-      });
+      const notify = async () => {
+        let shouldNotify = true;
+        try {
+          const session = await fetch("/api/auth/session").then((response) => response.json());
+          const token = session?.user?.accessToken as string | undefined;
+          const response = await fetch("/api/v1/chart-alerts/events", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({
+              event_key: key,
+              symbol,
+              timeframe,
+              event_type: level.key,
+              direction: direction || null,
+              price: level.price,
+              candle_time: liveCandle.time,
+            }),
+          });
+          if (response.ok) {
+            const result = await response.json();
+            shouldNotify = result.created !== false;
+            if (result.created !== false) {
+              setAlertHistory((previous) => [
+                { event_key: key, event_type: level.label, direction, price: level.price as number, candle_time: liveCandle.time },
+                ...previous.filter((item) => item.event_key !== key),
+              ].slice(0, 5));
+            }
+          }
+        } catch {
+          // Preserve browser-only alerts if the history API is unavailable.
+        }
+        if (shouldNotify) {
+          new Notification(`${symbol} ${level.label}`, {
+            body: `Closed candle reached ${level.price}. Verify the setup manually.`,
+            tag: key,
+          });
+        }
+      };
+      void notify();
     }
   }, [liveCandle, tradeLevels, notificationPermission, symbol, timeframe]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAlertHistory = async () => {
+      try {
+        const session = await fetch("/api/auth/session").then((response) => response.json());
+        const token = session?.user?.accessToken as string | undefined;
+        const response = await fetch(
+          `/api/v1/chart-alerts/history?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=5`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: "no-store" },
+        );
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (!cancelled && Array.isArray(payload.events)) setAlertHistory(payload.events);
+      } catch {
+        // History is advisory; the chart remains usable when unavailable.
+      }
+    };
+    void loadAlertHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, timeframe]);
 
   useEffect(() => {
     let cancelled = false;
@@ -458,6 +534,18 @@ export function LiveCandlestickChart({
           indicators={indicators}
           indicatorData={indicatorData}
         />
+      )}
+      {alertHistory.length > 0 && (
+        <div className="mt-2 border border-[#2A2620] bg-[#161411] p-2" aria-label="Recent chart alerts">
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-[#8E8778]">Recent alerts</div>
+          <div className="flex flex-wrap gap-2 text-[10px] text-[#C2A36B]">
+            {alertHistory.map((event) => (
+              <span key={event.event_key} className="border border-[#2A2620] px-2 py-1">
+                {event.event_type} {event.price}
+              </span>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

@@ -40,6 +40,8 @@ class User(Base):
     journal_entries = relationship("TradeJournalEntry", back_populates="user", cascade="all, delete-orphan")
     monthly_profit_goals = relationship("MonthlyProfitGoal", back_populates="user", cascade="all, delete-orphan")
     chart_drawings = relationship("ChartDrawing", back_populates="user", cascade="all, delete-orphan")
+    chart_alert_preferences = relationship("ChartAlertPreference", back_populates="user", cascade="all, delete-orphan")
+    chart_alert_events = relationship("ChartAlertEvent", back_populates="user", cascade="all, delete-orphan")
 
 
 class ChartDrawing(Base):
@@ -64,6 +66,48 @@ class ChartDrawing(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="chart_drawings")
+
+
+class ChartAlertPreference(Base):
+    """Per-user opt-in preference for closed-candle chart alerts."""
+
+    __tablename__ = "chart_alert_preferences"
+    __table_args__ = (
+        UniqueConstraint("user_id", "symbol", "timeframe", name="uq_chart_alert_preference_scope"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    symbol = Column(String(40), nullable=False)
+    timeframe = Column(String(8), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="chart_alert_preferences")
+
+
+class ChartAlertEvent(Base):
+    """Deduplicated closed-candle chart signal event."""
+
+    __tablename__ = "chart_alert_events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "event_key", name="uq_chart_alert_event_user_key"),
+        Index("ix_chart_alert_events_user_scope", "user_id", "symbol", "timeframe", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_key = Column(String(160), nullable=False)
+    symbol = Column(String(40), nullable=False)
+    timeframe = Column(String(8), nullable=False)
+    event_type = Column(String(32), nullable=False)
+    direction = Column(String(10), nullable=True)
+    price = Column(Float, nullable=False)
+    candle_time = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="chart_alert_events")
 
 
 class CollectorReport(Base):
