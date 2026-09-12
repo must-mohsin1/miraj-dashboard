@@ -305,6 +305,22 @@ export function LiveCandlestickChart({
         },
         body: JSON.stringify({ enabled: permission === "granted" }),
       });
+      if (tradeLevels?.direction && permission === "granted") {
+        await fetch(`/api/v1/chart-alerts/setup?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            direction: tradeLevels.direction.toUpperCase(),
+            entry: tradeLevels.entry ?? null,
+            stop_loss: tradeLevels.stopLoss ?? null,
+            targets: tradeLevels.targets ?? [],
+            enabled: true,
+          }),
+        });
+      }
     } catch {
       // Browser permission remains usable if the preference API is unavailable.
     }

@@ -7,12 +7,12 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import get_current_user
 from backend.database import get_session
-from backend.models import ChartAlertEvent, ChartAlertPreference, User
+from backend.models import ChartAlertEvent, ChartAlertPreference, PriceAlert, User
 
 router = APIRouter(prefix="/api/v1/chart-alerts", tags=["chart_alerts"])
 Timeframe = Literal["1m", "5m", "15m", "1h", "4h", "1d", "1w"]
@@ -27,6 +27,21 @@ class PreferenceResponse(BaseModel):
     timeframe: Timeframe
     enabled: bool
     updated_at: datetime | None = None
+
+
+class SetupPayload(BaseModel):
+    direction: Literal["LONG", "SHORT"]
+    entry: float | None = Field(default=None, gt=0)
+    stop_loss: float | None = Field(default=None, gt=0)
+    targets: list[float] = Field(default_factory=list, max_length=5)
+    enabled: bool = True
+
+
+class SetupResponse(BaseModel):
+    symbol: str
+    timeframe: Timeframe
+    enabled: bool
+    server_alert_count: int
 
 
 class EventPayload(BaseModel):
@@ -117,6 +132,57 @@ async def set_preference(
         enabled=bool(row.enabled),
         updated_at=row.updated_at,
     )
+
+
+@router.put("/setup", response_model=SetupResponse)
+async def sync_server_setup(
+    payload: SetupPayload,
+    symbol: str = Query(..., min_length=1),
+    timeframe: Timeframe = Query("1d"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SetupResponse:
+    """Synchronize chart levels into the existing server-side price-alert worker."""
+    symbol_norm = symbol.strip().upper()
+    prefix = f"chart:{symbol_norm}:{timeframe}:"
+    await session.execute(
+        sa_delete(PriceAlert).where(
+            PriceAlert.user_id == current_user.id,
+            PriceAlert.symbol == symbol_norm,
+            PriceAlert.message.like(f"{prefix}%"),
+        )
+    )
+    count = 0
+    if payload.enabled:
+        crossing = "below" if payload.direction == "SHORT" else "above"
+        inverse = "above" if payload.direction == "SHORT" else "below"
+        levels: list[tuple[str, float | None, str, str]] = [
+            ("trigger", payload.entry, crossing, "price"),
+            ("invalidation", payload.stop_loss, inverse, "stop"),
+        ]
+        levels.extend((f"tp{index + 1}", price, crossing, "target") for index, price in enumerate(payload.targets))
+        for label, price, direction, alert_type in levels:
+            if price is None:
+                continue
+            session.add(
+                PriceAlert(
+                    user_id=current_user.id,
+                    symbol=symbol_norm,
+                    alert_type=alert_type,
+                    direction=direction,
+                    price_level=price,
+                    message=f"{prefix}{payload.direction}:{label}",
+                    status="active",
+                )
+            )
+            count += 1
+    preference = await _get_preference(session, current_user.id, symbol_norm, timeframe)
+    if preference is None:
+        session.add(ChartAlertPreference(user_id=current_user.id, symbol=symbol_norm, timeframe=timeframe, enabled=payload.enabled))
+    else:
+        preference.enabled = payload.enabled
+    await session.flush()
+    return SetupResponse(symbol=symbol_norm, timeframe=timeframe, enabled=payload.enabled, server_alert_count=count)
 
 
 @router.post("/events", response_model=EventResponse)
