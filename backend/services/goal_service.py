@@ -55,6 +55,11 @@ def _as_naive_utc(ts: datetime) -> datetime:
     return ts.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _positive_equity_snapshots(snapshots: Sequence[FuturesAccountSnapshot]) -> list[FuturesAccountSnapshot]:
+    """Exclude zero/negative equity placeholders from goal opening endpoints."""
+    return [snapshot for snapshot in snapshots if snapshot.equity is not None and float(snapshot.equity) > 0]
+
+
 async def compute_month_progress(
     session: AsyncSession,
     user_id: int,
@@ -64,12 +69,13 @@ async def compute_month_progress(
     end_utc: datetime,
     base_equity: Optional[float] = None,
 ) -> dict[str, Any]:
+    effective_base_equity = base_equity if base_equity is not None and float(base_equity) > 0 else None
     coverage = await _external_coverage(session, user_id, exchange)
     if not coverage["ok"]:
         return {
             "available": False,
             "reason": coverage["reason"],
-            "opening_equity": base_equity,
+            "opening_equity": effective_base_equity,
             "ending_equity": None,
             "net_external_flows": None,
             "net_profit": None,
@@ -77,15 +83,15 @@ async def compute_month_progress(
         }
 
     snapshots = await _load_equity_snapshots(session, user_id, exchange)
-    in_month = [
+    in_month = _positive_equity_snapshots([
         s for s in snapshots
         if s.source_ts is not None and start_utc <= _as_naive_utc(s.source_ts) < end_utc
-    ]
+    ])
     if not in_month:
         return {
             "available": False,
             "reason": "opening_equity_missing",
-            "opening_equity": base_equity,
+            "opening_equity": effective_base_equity,
             "ending_equity": None,
             "net_external_flows": None,
             "net_profit": None,
@@ -97,7 +103,7 @@ async def compute_month_progress(
         return {
             "available": False,
             "reason": "insufficient_equity_snapshots",
-            "opening_equity": base_equity,
+            "opening_equity": effective_base_equity,
             "ending_equity": None,
             "net_external_flows": None,
             "net_profit": None,
@@ -106,7 +112,7 @@ async def compute_month_progress(
 
     opening, ending = endpoints
     snapshot_opening_eq = float(opening.equity or 0.0)
-    opening_eq = float(base_equity) if base_equity is not None else float(opening.equity or 0.0)
+    opening_eq = float(effective_base_equity) if effective_base_equity is not None else float(opening.equity or 0.0)
     ending_eq = float(ending.equity or 0.0)
     if abs(snapshot_opening_eq) <= 1e-8 or abs(opening_eq) <= 1e-8:
         return {
@@ -211,6 +217,7 @@ async def compute_period_analytics(
     tz_name: str = DEFAULT_TZ,
 ) -> dict[str, Any]:
     """Return day/week/month account-profit buckets for one open goal month."""
+    effective_base_equity = base_equity if base_equity is not None and float(base_equity) > 0 else None
     coverage = await _external_coverage(session, user_id, exchange)
     if not coverage["ok"]:
         return {
@@ -224,11 +231,11 @@ async def compute_period_analytics(
         }
 
     snapshots = await _load_equity_snapshots(session, user_id, exchange)
-    in_month = [
+    in_month = _positive_equity_snapshots([
         snapshot for snapshot in snapshots
         if snapshot.source_ts is not None
         and start_utc <= _as_naive_utc(snapshot.source_ts) < end_utc
-    ]
+    ])
     if not in_month:
         return {
             "available": False,
@@ -255,7 +262,7 @@ async def compute_period_analytics(
     opening, ending = endpoints
     snapshot_opening_equity = float(opening.equity or 0.0)
     opening_equity = (
-        float(base_equity) if base_equity is not None else snapshot_opening_equity
+        float(effective_base_equity) if effective_base_equity is not None else snapshot_opening_equity
     )
     if abs(snapshot_opening_equity) <= 1e-8 or abs(opening_equity) <= 1e-8:
         return {
@@ -293,7 +300,7 @@ async def compute_period_analytics(
         "snapshots": selected_snapshots,
         "flows": flows,
         "tz": tz,
-        "base_equity": base_equity,
+        "base_equity": effective_base_equity,
     }
     return {
         "available": True,

@@ -451,3 +451,33 @@ async def test_close_fails_closed_when_capital_history_is_incomplete(session: As
     assert closed == []
     assert goal.status == "open"
     assert goal.net_profit is None
+
+
+async def test_zero_equity_placeholder_does_not_break_current_month_progress(session: AsyncSession):
+    user = await _user(session)
+    for stream in ("deposits", "withdrawals", "futures_transfers"):
+        session.add(_sync(user.id, stream))
+    session.add_all([
+        FuturesAccountSnapshot(
+            user_id=user.id, exchange="mexc", settlement_asset="USDT", equity=0.0,
+            source_ts=datetime(2026, 9, 1, 0, 0), synced_at=datetime(2026, 9, 1, 0, 0),
+        ),
+        FuturesAccountSnapshot(
+            user_id=user.id, exchange="mexc", settlement_asset="USDT", equity=100.0,
+            source_ts=datetime(2026, 9, 2, 0, 0), synced_at=datetime(2026, 9, 2, 0, 0),
+        ),
+        FuturesAccountSnapshot(
+            user_id=user.id, exchange="mexc", settlement_asset="USDT", equity=110.0,
+            source_ts=datetime(2026, 9, 3, 0, 0), synced_at=datetime(2026, 9, 3, 0, 0),
+        ),
+    ])
+    await session.flush()
+    progress = await compute_month_progress(
+        session, user.id, "mexc",
+        start_utc=datetime(2026, 9, 1), end_utc=datetime(2026, 10, 1),
+        base_equity=0.0,
+    )
+    assert progress["available"] is True
+    assert progress["opening_equity"] == pytest.approx(100.0)
+    assert progress["ending_equity"] == pytest.approx(110.0)
+    assert progress["net_profit"] == pytest.approx(10.0)
